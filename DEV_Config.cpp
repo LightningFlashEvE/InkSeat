@@ -53,8 +53,7 @@ void GPIO_Config(void)
     digitalWrite(12, LOW);
     digitalWrite(13, LOW);
     
-    // 注意：墨水屏引脚已更改，避免与外部Flash冲突
-    // 新引脚：SCK=2, MOSI=3, CS=4, RST=6, DC=7, BUSY=8
+    // 墨水屏引脚：SCK=7, MOSI=10, CS=6, RST=3, DC=5, BUSY=4
 }
 
 void GPIO_Mode(UWORD GPIO_Pin, UWORD Mode)

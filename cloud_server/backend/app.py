@@ -305,6 +305,75 @@ def me():
 
 # ==================== API: 设备管理 ====================
 
+@app.route('/api/devices/preflight', methods=['POST'])
+@login_required
+def device_preflight():
+    """添加设备前预检测：防止用户填错设备码。
+
+    如果设备码从未查询过服务器，则拒绝添加。
+    """
+    try:
+        data = request.get_json() or {}
+        raw_id = (data.get('deviceId') or '').strip().upper()
+
+        if not raw_id:
+            return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
+
+        clean_id = raw_id.replace('-', '').replace(':', '')
+
+        import re
+        if not re.match(r'^[0-9A-F]{6}$|^[0-9A-F]{12}$', clean_id):
+            return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
+
+        if devices_collection is None:
+            return jsonify({'success': False, 'error': 'Database not connected'}), 500
+
+        existing = devices_collection.find_one({'deviceId': clean_id})
+        already_added = existing is not None
+
+        has_seen_device = False
+        last_seen_time = None
+        recently_active = False
+
+        if device_status_collection is not None:
+            status = device_status_collection.find_one({'deviceId': clean_id})
+            if status:
+                has_seen_device = True
+                last_seen_time = status.get('lastSeen', 0)
+                recently_active = (time.time() * 1000 - last_seen_time) < 13 * 60 * 60 * 1000
+
+        result = {
+            'success': True,
+            'deviceId': clean_id,
+            'alreadyAdded': already_added,
+            'deviceExists': has_seen_device,
+            'recentlyActive': recently_active,
+            'lastSeen': last_seen_time,
+        }
+
+        if already_added:
+            result['message'] = f'设备 {clean_id} 已存在于您名下'
+            result['canProceed'] = True
+        elif has_seen_device:
+            if recently_active:
+                result['message'] = '设备码有效！该设备最近有活动记录'
+                result['canProceed'] = True
+            else:
+                result['message'] = '该设备码历史上有活动记录，但最近未查询'
+                result['canProceed'] = True
+                result['warning'] = '设备码存在但最近不活跃，请确认是否正确'
+        else:
+            result['message'] = '未在服务器中找到该设备码的记录'
+            result['canProceed'] = False
+            result['error'] = f'设备码 {clean_id} 从未查询过本服务器，请检查设备码是否正确（或确认设备已先唤醒并配网）'
+
+        return jsonify(result)
+    except Exception as e:
+        print(f'❌ Error in preflight check: {e}')
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/devices/list', methods=['GET'])
 @login_required
 def get_devices_list():

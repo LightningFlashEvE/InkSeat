@@ -27,15 +27,15 @@
 //#include "epd7in5_HD.h"
 // 更改引脚以避免与外部Flash冲突（外部Flash使用GPIO14/15/16/17）
 
-#define PIN_SPI_SCK  2   // SPI时钟（原GPIO13）
-#define PIN_SPI_DIN  3   // SPI数据（原GPIO14，避免与外部Flash CS冲突）
-#define PIN_SPI_CS   4   // SPI片选（原GPIO15，避免与外部Flash CLK冲突）
-#define PIN_SPI_BUSY 8   // 忙信号（原GPIO25）
-#define PIN_SPI_RST  6   // 复位（原GPIO26）
-#define PIN_SPI_DC   7   // 数据/命令（原GPIO27）
+#define PIN_SPI_SCK  7   // SPI时钟
+#define PIN_SPI_DIN  10  // SPI数据
+#define PIN_SPI_CS   6   // SPI片选
+#define PIN_SPI_BUSY 4   // 忙信号
+#define PIN_SPI_RST  3   // 复位
+#define PIN_SPI_DC   5   // 数据/命令
 
-#define PIN_SPI_CS_M    4   // 主片选（更新）
-#define PIN_SPI_CS_S    2   // 从片选（保持不变）
+#define PIN_SPI_CS_M    6   // 主片选
+#define PIN_SPI_CS_S    6   // 从片选
 // ESP32-C3没有GPIO33，只有GPIO0-21，所以注释掉电源控制引脚
 // #define PIN_SPI_PWR     33  // 电源控制（ESP32-C3不支持）
 

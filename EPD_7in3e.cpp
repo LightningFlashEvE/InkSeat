@@ -77,10 +77,24 @@ parameter:
 static void EPD_7IN3E_ReadBusyH(void)
 {
     Debug("e-Paper busy H\r\n");
+    // #region agent log
+    AGENT_DebugBusyWait("pre-fix", "H1", "EPD_7in3e.cpp:79", "busy_wait_start", 0);
+    // #endregion
+    unsigned long busyStart = millis();
+    bool longWaitLogged = false;
     while(!DEV_Digital_Read(EPD_BUSY_PIN)) {      // 低电平：忙碌，高电平：空闲
+        if (!longWaitLogged && (millis() - busyStart) >= 2000) {
+            // #region agent log
+            AGENT_DebugBusyWait("pre-fix", "H1", "EPD_7in3e.cpp:84", "busy_wait_over_2s", millis() - busyStart);
+            // #endregion
+            longWaitLogged = true;
+        }
         DEV_Delay_ms(1);
     }
     Debug("e-Paper busy H release\r\n");
+    // #region agent log
+    AGENT_DebugBusyWait("pre-fix", "H1", "EPD_7in3e.cpp:90", "busy_wait_release", millis() - busyStart);
+    // #endregion
 }
 
 /******************************************************************************
@@ -115,7 +129,13 @@ parameter:
 ******************************************************************************/
 void EPD_7IN3E_Init(void)
 {
+    // #region agent log
+    AGENT_DebugPins("pre-fix", "H2", "EPD_7in3e.cpp:117", "epd_init_entry");
+    // #endregion
     EPD_7IN3E_Reset();
+    // #region agent log
+    AGENT_DebugPins("pre-fix", "H2", "EPD_7in3e.cpp:120", "epd_init_after_reset");
+    // #endregion
     EPD_7IN3E_ReadBusyH();
     DEV_Delay_ms(30);
 
@@ -182,6 +202,9 @@ void EPD_7IN3E_Init(void)
 
     EPD_7IN3E_SendCommand(0x04);     // 上电
     EPD_7IN3E_ReadBusyH();          // 等待电子纸IC释放空闲信号
+    // #region agent log
+    AGENT_DebugPins("pre-fix", "H4", "EPD_7in3e.cpp:188", "epd_init_power_on_complete");
+    // #endregion
 
 }
 
@@ -307,6 +330,9 @@ void EPD_7IN3E_DisplayPart(const UBYTE *Image, UWORD xstart, UWORD ystart, UWORD
 	UWORD Width, Height;
 	Width = (EPD_7IN3E_WIDTH % 2 == 0)? (EPD_7IN3E_WIDTH / 2 ): (EPD_7IN3E_WIDTH / 2 + 1);
 	Height = EPD_7IN3E_HEIGHT;
+	// #region agent log
+	AGENT_DebugPins("pre-fix", "H4", "EPD_7in3e.cpp:313", "display_part_entry");
+	// #endregion
 	
 	EPD_7IN3E_SendCommand(0x10);
 	for(i=0; i<Height; i++) {

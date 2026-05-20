@@ -30,6 +30,7 @@
 WebServer server(80);
 extern Preferences preferences;  // 在Loader_esp32wf.ino中定义
 extern bool wifiConfigured;
+bool apModeStarted = false;
 String savedSSID = "";
 String savedPassword = "";
 
@@ -142,30 +143,66 @@ String getDeviceIdForAP() {
 /**
  * 启动AP热点模式
  */
-void startAPMode() {
+bool startAPMode() {
     Serial.println("📡 启动AP热点模式...");
-    
-    // 先初始化WiFi（如果还没初始化）
-    WiFi.mode(WIFI_AP_STA);  // 先设置为AP+STA模式，确保WiFi已初始化
-    delay(100);  // 等待 WiFi 初始化完成
-    
+
+    // 先把旧的 STA/AP 运行态清掉，避免残留状态导致 softAP 静默失败
+    WiFi.persistent(false);
+    WiFi.disconnect(false, true);
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_OFF);
+    delay(150);
+
+    if (!WiFi.mode(WIFI_AP_STA)) {
+        Serial.println("⚠️  无法切换到 WIFI_AP_STA，继续尝试启动AP");
+    }
+    delay(200);
+
     // 获取设备码（在 WiFi 初始化后读取）
     String deviceCode = getDeviceIdForAP();
-    
+
+    if (deviceCode.length() == 0 || deviceCode == "000000" || deviceCode == "000000000000") {
+        Serial.println("⚠️  设备码读取异常，回退为固定AP名称后缀 CONFIG");
+        deviceCode = "CONFIG";
+    }
+
     // 然后切换到纯AP模式
-    WiFi.mode(WIFI_AP);
+    if (!WiFi.mode(WIFI_AP)) {
+        Serial.println("⚠️  无法切换到 WIFI_AP，继续尝试 softAP");
+    }
+    delay(200);
     String apSSID = "EPD-" + deviceCode;
-    
+
     Serial.printf("   AP名称: %s\n", apSSID.c_str());
     Serial.println("   AP密码: 无密码");
-    
-    // 不设置密码（传入 NULL 或空字符串）
-    WiFi.softAP(apSSID.c_str(), NULL);
-    
+
+    bool apStarted = WiFi.softAP(apSSID.c_str());
+    if (!apStarted) {
+        Serial.println("⚠️  首次启动AP失败，重置WiFi后重试一次...");
+        WiFi.softAPdisconnect(true);
+        WiFi.mode(WIFI_OFF);
+        delay(200);
+        WiFi.mode(WIFI_AP);
+        delay(200);
+        apStarted = WiFi.softAP(apSSID.c_str());
+    }
+
+    if (!apStarted) {
+        apModeStarted = false;
+        Serial.println("❌ AP热点启动失败");
+        Serial.println("   请检查供电、电源稳定性、天线以及串口中的 WiFi 初始化错误日志");
+        return false;
+    }
+
+    delay(200);
     IPAddress IP = WiFi.softAPIP();
+    apModeStarted = true;
     Serial.print("   AP IP地址: ");
     Serial.println(IP);
+    Serial.printf("   当前WiFi模式: %d\n", static_cast<int>(WiFi.getMode()));
+    Serial.printf("   AP信道: %d\n", WiFi.channel());
     Serial.println("   请连接到此热点，然后访问: http://192.168.4.1");
+    return true;
 }
 
 /**
@@ -323,6 +360,7 @@ bool connectWiFi() {
     }
     
     if (WiFi.status() == WL_CONNECTED) {
+        apModeStarted = false;
         Serial.println("");
         Serial.println("✅ WiFi连接成功");
         Serial.print("   IP地址: ");
@@ -354,8 +392,11 @@ bool initWiFiConfig() {
     }
     
     // 进入AP配网模式
-    startAPMode();
-    initConfigServer();
+    if (startAPMode()) {
+        initConfigServer();
+    } else {
+        Serial.println("❌ AP配网模式未能启动，当前不会广播配置热点");
+    }
     wifiConfigured = false;
     return false;
 }
@@ -364,7 +405,7 @@ bool initWiFiConfig() {
  * AP模式循环处理（需要在loop中调用）
  */
 void handleAPMode() {
-    if (!wifiConfigured) {
+    if (!wifiConfigured && apModeStarted) {
         server.handleClient();
     }
 }

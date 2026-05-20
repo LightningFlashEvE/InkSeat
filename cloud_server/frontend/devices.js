@@ -98,6 +98,7 @@ async function addDevice() {
         return;
     }
     
+    
     try {
         const response = await fetch(`${API_BASE}/api/devices/add`, {
             method: 'POST',
@@ -120,6 +121,16 @@ async function addDevice() {
             deviceNameInput.value = '';
             // 重新加载设备列表
             await loadDevices();
+            // 提示用户核对设备码
+            if (!confirm(`✅ 设备已添加\n\n设备码：${deviceId}\n\n请对照设备屏幕显示的设备码，确认是否一致？\n\n点击"确定"表示一致，点击"取消"删除此设备。`)) {
+                log('检测到设备码不一致，正在删除...', 'warning');
+                await fetch(`${API_BASE}/api/devices/${deviceId}`, {
+                    method: 'DELETE',
+                    headers: { ...authHeaders() }
+                });
+                log('设备已删除，请重新核对后添加', 'error');
+                await loadDevices();
+            }
         } else {
             log(result.error || '添加设备失败', 'error');
         }

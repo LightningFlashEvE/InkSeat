@@ -70,14 +70,7 @@ void setup()
 {
     // Serial port initialization
     Serial.begin(115200);
-    delay(10);
-    
-    // 初始化官方Demo的硬件接口
-    #include "DEV_Config.h"
-    DEV_Module_Init();
-    
-    // SPI initialization
-    EPD_initSPI();
+    delay(50);
     
     // 打印启动信息
     Serial.println();
@@ -86,6 +79,7 @@ void setup()
     Serial.println("  Version 3.0.0");
     Serial.println("========================================");
     Serial.printf("  剩余内存: %d 字节\n", ESP.getFreeHeap());
+    Serial.println("  显示硬件初始化: 按需延后");
     Serial.println("========================================\n");
 
     // 读取唤醒原因
@@ -94,6 +88,7 @@ void setup()
 
     // 先读一次"是否已配网"（不改变现有逻辑，仅用于门控）
     bool alreadyConfigured = checkWiFiConfigured();
+    Serial.printf("📦 本地WiFi配置: %s\n", alreadyConfigured ? "已存在" : "不存在");
 
     // 1) 长按 GPIO0 进入"清除WiFi + AP配网"
     //    - 适用于：从 deep-sleep 按键唤醒后继续按住不放
@@ -101,19 +96,29 @@ void setup()
     if (isWakeKeyHeldLow(WIFI_RECONFIG_HOLD_MS)) {
         Serial.println("🧹 检测到长按GPIO0：清除WiFi配置并进入AP配网模式");
         clearWiFiConfig();       // 清除NVS WiFi信息
-        startAPMode();           // 启动AP
-        initConfigServer();      // 启动Web配网服务器
+        if (startAPMode()) {     // 启动AP
+            initConfigServer();  // 启动Web配网服务器
+        }
         wifiConfigured = false;
-        Serial.println("⏳ 等待配网中...（AP模式）");
+        if (apModeStarted) {
+            Serial.println("⏳ 等待配网中...（AP模式）");
+        }
         return;  // AP模式下不进入Deep-sleep
     }
 
-    // 2) 只保留"GPIO0唤醒/定时唤醒"作为正常工作触发
-    //    - 如果是复位/上电等"非正常唤醒"，且已经配过网：直接回睡，不再触发联网更新
-    //    - 如果未配网：允许继续走配网流程（否则永远没法配网）
+    // 2) 复位/上电等"非正常唤醒"，且已配网：连接WiFi查询云端
+    //    - 如果云端 claimed=true：直接回睡
+    //    - 如果云端 claimed=false：显示设备码，等待配网绑定
     if (!isNormalWakeCause(cause) && alreadyConfigured) {
-        Serial.println("🛑 非按键/非定时唤醒（复位/上电等），且已配网：直接回到Deep-sleep");
-        enterDeepSleep();  // 配置唤醒源并入睡（GPIO0+定时器）
+        Serial.println("🔄 非按键/非定时唤醒（复位），但已配网，连接WiFi查询云端...");
+        Serial.println("ℹ️ 检测到本地已有WiFi配置，本次启动优先尝试联网，不会直接广播AP热点");
+        if (initWiFiConfig()) {
+            // WiFi连接成功，查询云端 claimed 状态
+            HTTP_UPDATE__setup();
+            HTTP_UPDATE__loop();
+        } else {
+            // WiFi连接失败，进入AP配网模式
+        }
         return;
     }
     
@@ -125,14 +130,18 @@ void setup()
     if (!wifiConnected) {
         // AP配网模式
         Serial.println();
-        Serial.println("📱 设备已进入AP配网模式");
-        Serial.println("   请按以下步骤操作：");
-        Serial.println("   1. 连接WiFi热点（名称见上方）");
-        Serial.println("   2. 访问 http://192.168.4.1");
-        Serial.println("   3. 输入WiFi名称和密码");
-        Serial.println("   4. 点击连接，设备将自动重启");
-        Serial.println();
-        Serial.println("⏳ 等待配网中...（AP模式）");
+        if (apModeStarted) {
+            Serial.println("📱 设备已进入AP配网模式");
+            Serial.println("   请按以下步骤操作：");
+            Serial.println("   1. 连接WiFi热点（名称见上方）");
+            Serial.println("   2. 访问 http://192.168.4.1");
+            Serial.println("   3. 输入WiFi名称和密码");
+            Serial.println("   4. 点击连接，设备将自动重启");
+            Serial.println();
+            Serial.println("⏳ 等待配网中...（AP模式）");
+        } else {
+            Serial.println("❌ 当前未能进入AP配网模式，请查看前面的AP启动日志");
+        }
         // 注意：AP配网模式下不进入Deep-sleep，保持Web服务器运行
         return;
     }

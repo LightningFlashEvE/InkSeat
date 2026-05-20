@@ -1,0 +1,7 @@
+cloud_server/.env
+cloud_server/backend/data/
+cloud_server/backend/__pycache__/
+.cursor/
+.sisyphus/
+cloud_server/mongo_backup_esp32.tar.gz
+nul

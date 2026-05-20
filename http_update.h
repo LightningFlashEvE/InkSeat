@@ -35,7 +35,7 @@
 
 /* 云端API配置 */
 #define CLOUD_API_HOST "8.135.238.216"
-#define CLOUD_API_PORT 5000
+#define CLOUD_API_PORT 8080  // 经 Nginx 代理访问后端
 #define CLOUD_API_TIMEOUT_MS 10000  // HTTP请求超时时间（10秒）
 #define CLOUD_DOWNLOAD_TIMEOUT_MS 60000  // 下载超时时间（60秒）
 
@@ -78,7 +78,7 @@ extern Preferences preferences;  // NVS持久化存储（在Loader_esp32wf.ino�
 
 String deviceId;
 bool deviceClaimed = false;
-int localImageVersion = 0;
+int64_t localImageVersion = 0;
 
 /* Flash临时文件 */
 File flashTempFile;
@@ -98,8 +98,25 @@ static bool g_updateNeeded = false;           // 本次唤醒是否需要更新
 static bool g_updateAttempted = false;        // 本次唤醒是否已尝试更新（避免重复下载）
 static bool g_shouldEnterDeepSleep = false;   // 本次唤醒是否应立即回睡
 static bool g_deepSleepRequested = false;     // 防止重复执行 deep-sleep 进入流程
-static int g_targetImageVersion = 0;          // 需要更新到的版本
+static bool g_displayHardwareReady = false;   // 墨水屏底层是否已完成初始化
+static int64_t g_targetImageVersion = 0;      // 需要更新到的版本（毫秒时间戳）
 static String g_targetImageUrl = "";          // 需要下载的 URL
+
+/* ============================================================================
+ *                            辅助函数：显示硬件初始化
+ * ============================================================================ */
+
+void ensureDisplayHardwareReady() {
+    if (g_displayHardwareReady) {
+        return;
+    }
+
+    Serial.println("🛠️ 初始化显示硬件...");
+    DEV_Module_Init();
+    EPD_initSPI();
+    g_displayHardwareReady = true;
+    Serial.println("✅ 显示硬件初始化完成");
+}
 
 /* ============================================================================
  *                            辅助函数：设备ID
@@ -158,30 +175,30 @@ void saveClaimedStatus(bool claimed) {
 }
 
 /**
- * 读取本地图片版本号
+ * 读取本地图片版本号（毫秒时间戳）
  */
-int loadImageVersion() {
+int64_t loadImageVersion() {
     if (!preferences.begin(PREF_NAMESPACE, true)) {
         preferences.end();
         return 0;
     }
-    int version = preferences.getInt(PREF_KEY_IMG_VER, 0);
+    int64_t version = preferences.getLong64(PREF_KEY_IMG_VER, 0);
     preferences.end();
-    Serial.printf("📖 读取本地图片版本: %d\n", version);
+    Serial.printf("📖 读取本地图片版本: %lld\n", version);
     return version;
 }
 
 /**
- * 保存本地图片版本号
+ * 保存本地图片版本号（毫秒时间戳）
  */
-void saveImageVersion(int version) {
+void saveImageVersion(int64_t version) {
     if (!preferences.begin(PREF_NAMESPACE, false)) {
         Serial.println("⚠️  NVS命名空间打开失败，无法保存图片版本");
         return;
     }
-    preferences.putInt(PREF_KEY_IMG_VER, version);
+    preferences.putLong64(PREF_KEY_IMG_VER, version);
     preferences.end();
-    Serial.printf("💾 保存本地图片版本: %d\n", version);
+    Serial.printf("💾 保存本地图片版本: %lld\n", version);
 }
 
 /* ============================================================================
@@ -257,13 +274,20 @@ void displayDeviceCode() {
     Serial.println("📱 开始显示设备码...");
     Serial.print("⭐ 设备码: ");
     Serial.println(deviceId);
+    // #region agent log
+    AGENT_DebugPins("pre-fix", "H3", "http_update.h:260", "display_device_code_entry");
+    // #endregion
     
     // 默认使用 7.3" E6 屏
     if (EPD_dispIndex < 0 || EPD_dispIndex >= (sizeof(EPD_dispMass) / sizeof(EPD_dispMass[0]))) {
         EPD_dispIndex = 0;
     }
     
+    ensureDisplayHardwareReady();
     EPD_dispInit();
+    // #region agent log
+    AGENT_DebugPins("pre-fix", "H2", "http_update.h:270", "display_device_code_after_disp_init");
+    // #endregion
     
     int width = 800;
     int height = 480;
@@ -341,7 +365,7 @@ void displayDeviceCode() {
 struct DeviceStatusResponse {
     bool success;
     bool claimed;
-    int imageVersion;
+    int64_t imageVersion;
     String imageUrl;
     String error;
 };
@@ -384,7 +408,10 @@ DeviceStatusResponse queryDeviceStatus() {
             result.success = true;
             result.claimed = respDoc["claimed"].as<bool>();
             
-            if (respDoc["imageVersion"].is<int>()) {
+            if (respDoc["imageVersion"].is<long long>()) {
+                result.imageVersion = respDoc["imageVersion"].as<long long>();
+            } else if (respDoc["imageVersion"].is<int>()) {
+                // 兼容旧版本（int 类型）
                 result.imageVersion = respDoc["imageVersion"].as<int>();
             }
             
@@ -584,6 +611,7 @@ void displayDownloadedImage() {
     if (EPD_dispIndex < 0 || EPD_dispIndex >= (sizeof(EPD_dispMass) / sizeof(EPD_dispMass[0]))) {
         EPD_dispIndex = 0;
     }
+    ensureDisplayHardwareReady();
     EPD_dispInit();
     
     // 调用显示函数（从Flash读取）
@@ -794,7 +822,7 @@ void prepareUpdateDecisionOnce() {
     }
     
     // 8. 检查是否需要更新图片
-    Serial.printf("\n📊 图片版本检查: 云端=%d, 本地=%d\n", 
+    Serial.printf("\n📊 图片版本检查: 云端=%lld, 本地=%lld\n", 
                   status.imageVersion, localImageVersion);
     
     if (status.imageVersion > localImageVersion) {
@@ -837,6 +865,7 @@ void HTTP_UPDATE__setup() {
     g_updateAttempted = false;
     g_shouldEnterDeepSleep = false;
     g_deepSleepRequested = false;
+    g_displayHardwareReady = false;
     g_targetImageVersion = 0;
     g_targetImageUrl = "";
 
