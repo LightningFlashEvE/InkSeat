@@ -112,14 +112,16 @@ docker compose logs -f backend   # 查看后端日志
 | GPIO | 用途 |
 |---|---|
 | GPIO0 | Deep-sleep 唤醒按键（低电平） |
-| GPIO2/3/4 | SPI SCK/MOSI/CS（墨水屏） |
-| GPIO6/7/8 | EPD RST/DC/BUSY |
-| GPIO12/13 | 系统初始化输出低电平 |
-| GPIO14-17 | Flash SPI（系统保留，绝对不可占用） |
+| GPIO1/4/5/6/7/10 | 墨水屏 SPI/控制信号（MOSI/RST/BUSY/DC/CS/SCK） |
+| GPIO2/8/9 | Strapping pins，新硬件设计中避免接上电时会拉电平的外设 |
+| GPIO12-17 | 模组内部 Flash 相关/未引出资源，固件不得初始化为用户 IO |
 | GPIO20/21 | UART0 RX/TX（系统保留） |
 
 ### SPIFFS 文件长度校验
 下载完成后和显示前各做一次校验，期望值 `EPD_EXPECTED_CHARS = 384000`。长度不匹配时删除临时文件并跳过刷新，不得强行传给 EPD 驱动（会导致 BUSY 卡死）。
+
+### 墨水屏 BUSY 超时
+墨水屏 `BUSY` 等待不得无限阻塞。初始化/上电/断电阶段默认 10 秒超时，显示刷新阶段默认 180 秒超时；超时后退出当前显示流程，保证 AP 配网服务器和主状态机不会因屏幕异常永久卡死。
 
 ## 7. 反模式（禁止做法）
 
@@ -135,15 +137,15 @@ docker compose logs -f backend   # 查看后端日志
 ### 一次性状态机（唤醒周期）
 ```
 唤醒
-  -> 检测长按 3s -> 是：进入 AP 配网，不睡眠
+  -> 检测长按 3s -> 是：进入 AP 配网，屏幕显示设备码，不睡眠
   -> 判断唤醒原因 -> 非正常唤醒且已配网：连接WiFi查询云端
      -> 云端 claimed=true：直接 Deep-sleep
      -> 云端 claimed=false：显示设备码 -> Deep-sleep
-  -> 判断唤醒原因 -> 正常唤醒（按键/定时）且未配网：进入 AP 配网
+  -> 判断唤醒原因 -> 正常唤醒（按键/定时）且未配网：进入 AP 配网并显示设备码
   -> WiFi 连接
   -> prepareUpdateDecisionOnce()（只执行一次）
      -> POST /api/device/status -> 版本比较 -> 设置 g_updateNeeded
-  -> HTTP_UPDATE__loop()
+     -> HTTP_UPDATE__loop()
      -> 若 g_updateNeeded：流式下载到 SPIFFS -> 刷新 EPD -> 保存版本
      -> enterDeepSleep()
 ```
@@ -156,6 +158,9 @@ GPIO0 同时作为唤醒键和长按配网入口。检测逻辑：从函数入�
 
 ### 设备码生成
 基于 MAC 地址，`DEVICE_ID_MODE=2`（默认后 6 位，如 `B6DA20`）。AP 热点名称：`EPD-XXXXXX`。读取 MAC 前必须先初始化 WiFi（`WIFI_AP_STA` 模式），否则返回全零。
+
+### 未配网开机显示
+当设备没有本地 WiFi 配置时，进入 AP 配网模式后会立即在墨水屏上显示设备码，便于用户在网页绑定设备时核对。该显示动作只在 `setup()` 中执行一次，不放入 `loop()`，避免 AP 模式下重复刷新墨水屏。
 
 ## 9. 常见陷阱
 

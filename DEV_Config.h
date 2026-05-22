@@ -40,12 +40,12 @@
 #define UDOUBLE uint32_t
 
 // GPIO配置（与epd.h保持一致）
-#define EPD_SCK_PIN  7   // SPI时钟
-#define EPD_MOSI_PIN 10  // SPI数据
-#define EPD_CS_PIN   6   // SPI片选
-#define EPD_RST_PIN  3   // 复位
-#define EPD_DC_PIN   5   // 数据/命令
-#define EPD_BUSY_PIN 4   // 忙信号
+#define EPD_SCK_PIN  10  // SPI时钟
+#define EPD_MOSI_PIN 1   // SPI数据
+#define EPD_CS_PIN   7   // SPI片选
+#define EPD_RST_PIN  4   // 复位
+#define EPD_DC_PIN   6   // 数据/命令
+#define EPD_BUSY_PIN 5   // 忙信号
 
 // 根据实际使用的硬件启用或禁用，以及对应的引脚
 #define D_9PIN  0
@@ -70,35 +70,5 @@ void DEV_SPI_WriteByte(UBYTE data);
 UBYTE DEV_SPI_ReadByte();
 void DEV_SPI_Write_nByte(UBYTE *pData, UDOUBLE len);
 void DEV_Module_Exit(void);
-
-static inline void AGENT_DebugPins(const char* runId, const char* hypothesisId,
-                                   const char* location, const char* message)
-{
-    Serial.printf(
-        "{\"sessionId\":\"04c51b\",\"runId\":\"%s\",\"hypothesisId\":\"%s\","
-        "\"location\":\"%s\",\"message\":\"%s\","
-        "\"data\":{\"busy\":%d,\"rst\":%d,\"dc\":%d,\"cs\":%d,\"sck\":%d,"
-        "\"mosi\":%d,\"heap\":%d},\"timestamp\":%lu}\n",
-        runId, hypothesisId, location, message,
-        digitalRead(EPD_BUSY_PIN), digitalRead(EPD_RST_PIN),
-        digitalRead(EPD_DC_PIN), digitalRead(EPD_CS_PIN),
-        digitalRead(EPD_SCK_PIN), digitalRead(EPD_MOSI_PIN),
-        ESP.getFreeHeap(), millis());
-}
-
-static inline void AGENT_DebugBusyWait(const char* runId, const char* hypothesisId,
-                                       const char* location, const char* message,
-                                       unsigned long elapsedMs)
-{
-    Serial.printf(
-        "{\"sessionId\":\"04c51b\",\"runId\":\"%s\",\"hypothesisId\":\"%s\","
-        "\"location\":\"%s\",\"message\":\"%s\","
-        "\"data\":{\"elapsedMs\":%lu,\"busy\":%d,\"rst\":%d,\"dc\":%d,"
-        "\"cs\":%d,\"heap\":%d},\"timestamp\":%lu}\n",
-        runId, hypothesisId, location, message,
-        elapsedMs, digitalRead(EPD_BUSY_PIN), digitalRead(EPD_RST_PIN),
-        digitalRead(EPD_DC_PIN), digitalRead(EPD_CS_PIN),
-        ESP.getFreeHeap(), millis());
-}
 
 #endif

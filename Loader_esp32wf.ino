@@ -65,6 +65,15 @@ static bool isWakeKeyHeldLow(uint32_t holdMs) {
   return true;  // 全程按住
 }
 
+static void showProvisioningCodeOnScreen() {
+  if (!apModeStarted) {
+    return;
+  }
+
+  Serial.println("🖥️ 当前处于AP配网模式，同步在屏幕上显示设备码...");
+  displayDeviceCode();
+}
+
 /* Entry point ----------------------------------------------------------------*/
 void setup() 
 {
@@ -98,6 +107,7 @@ void setup()
         clearWiFiConfig();       // 清除NVS WiFi信息
         if (startAPMode()) {     // 启动AP
             initConfigServer();  // 启动Web配网服务器
+            showProvisioningCodeOnScreen();
         }
         wifiConfigured = false;
         if (apModeStarted) {
@@ -131,6 +141,7 @@ void setup()
         // AP配网模式
         Serial.println();
         if (apModeStarted) {
+            showProvisioningCodeOnScreen();
             Serial.println("📱 设备已进入AP配网模式");
             Serial.println("   请按以下步骤操作：");
             Serial.println("   1. 连接WiFi热点（名称见上方）");

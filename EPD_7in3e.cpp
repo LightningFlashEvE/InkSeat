@@ -30,6 +30,20 @@
 ******************************************************************************/
 #include "EPD_7in3e.h"
 
+static const uint32_t EPD_BUSY_INIT_TIMEOUT_MS = 10000;
+static const uint32_t EPD_BUSY_REFRESH_TIMEOUT_MS = 180000;
+static bool g_epdBusyTimeout = false;
+
+void EPD_7IN3E_ClearBusyTimeout(void)
+{
+    g_epdBusyTimeout = false;
+}
+
+bool EPD_7IN3E_LastBusyTimeout(void)
+{
+    return g_epdBusyTimeout;
+}
+
 /******************************************************************************
 function :  软件复位
 parameter:
@@ -74,27 +88,20 @@ static void EPD_7IN3E_SendData(UBYTE Data)
 function :  等待busy_pin变为高电平
 parameter:
 ******************************************************************************/
-static void EPD_7IN3E_ReadBusyH(void)
+static bool EPD_7IN3E_ReadBusyH(uint32_t timeoutMs)
 {
     Debug("e-Paper busy H\r\n");
-    // #region agent log
-    AGENT_DebugBusyWait("pre-fix", "H1", "EPD_7in3e.cpp:79", "busy_wait_start", 0);
-    // #endregion
-    unsigned long busyStart = millis();
-    bool longWaitLogged = false;
+    uint32_t start = millis();
     while(!DEV_Digital_Read(EPD_BUSY_PIN)) {      // 低电平：忙碌，高电平：空闲
-        if (!longWaitLogged && (millis() - busyStart) >= 2000) {
-            // #region agent log
-            AGENT_DebugBusyWait("pre-fix", "H1", "EPD_7in3e.cpp:84", "busy_wait_over_2s", millis() - busyStart);
-            // #endregion
-            longWaitLogged = true;
+        if ((millis() - start) >= timeoutMs) {
+            g_epdBusyTimeout = true;
+            Serial.printf("❌ EPD BUSY等待超时: %lu ms\n", (unsigned long)timeoutMs);
+            return false;
         }
         DEV_Delay_ms(1);
     }
     Debug("e-Paper busy H release\r\n");
-    // #region agent log
-    AGENT_DebugBusyWait("pre-fix", "H1", "EPD_7in3e.cpp:90", "busy_wait_release", millis() - busyStart);
-    // #endregion
+    return true;
 }
 
 /******************************************************************************
@@ -105,7 +112,9 @@ static void EPD_7IN3E_TurnOnDisplay(void)
 {
     
     EPD_7IN3E_SendCommand(0x04); // 上电
-    EPD_7IN3E_ReadBusyH();
+    if (!EPD_7IN3E_ReadBusyH(EPD_BUSY_INIT_TIMEOUT_MS)) {
+        return;
+    }
 
     // 第二项设置
     EPD_7IN3E_SendCommand(0x06);
@@ -116,11 +125,13 @@ static void EPD_7IN3E_TurnOnDisplay(void)
 
     EPD_7IN3E_SendCommand(0x12); // 显示刷新
     EPD_7IN3E_SendData(0x00);
-    EPD_7IN3E_ReadBusyH();
+    if (!EPD_7IN3E_ReadBusyH(EPD_BUSY_REFRESH_TIMEOUT_MS)) {
+        return;
+    }
     
     EPD_7IN3E_SendCommand(0x02); // 断电
     EPD_7IN3E_SendData(0X00);
-    EPD_7IN3E_ReadBusyH();
+    EPD_7IN3E_ReadBusyH(EPD_BUSY_INIT_TIMEOUT_MS);
 }
 
 /******************************************************************************
@@ -129,14 +140,10 @@ parameter:
 ******************************************************************************/
 void EPD_7IN3E_Init(void)
 {
-    // #region agent log
-    AGENT_DebugPins("pre-fix", "H2", "EPD_7in3e.cpp:117", "epd_init_entry");
-    // #endregion
     EPD_7IN3E_Reset();
-    // #region agent log
-    AGENT_DebugPins("pre-fix", "H2", "EPD_7in3e.cpp:120", "epd_init_after_reset");
-    // #endregion
-    EPD_7IN3E_ReadBusyH();
+    if (!EPD_7IN3E_ReadBusyH(EPD_BUSY_INIT_TIMEOUT_MS)) {
+        return;
+    }
     DEV_Delay_ms(30);
 
     EPD_7IN3E_SendCommand(0xAA);    // 命令头
@@ -201,10 +208,7 @@ void EPD_7IN3E_Init(void)
     EPD_7IN3E_SendData(0x2F);
 
     EPD_7IN3E_SendCommand(0x04);     // 上电
-    EPD_7IN3E_ReadBusyH();          // 等待电子纸IC释放空闲信号
-    // #region agent log
-    AGENT_DebugPins("pre-fix", "H4", "EPD_7in3e.cpp:188", "epd_init_power_on_complete");
-    // #endregion
+    EPD_7IN3E_ReadBusyH(EPD_BUSY_INIT_TIMEOUT_MS);          // 等待电子纸IC释放空闲信号
 
 }
 
@@ -330,9 +334,6 @@ void EPD_7IN3E_DisplayPart(const UBYTE *Image, UWORD xstart, UWORD ystart, UWORD
 	UWORD Width, Height;
 	Width = (EPD_7IN3E_WIDTH % 2 == 0)? (EPD_7IN3E_WIDTH / 2 ): (EPD_7IN3E_WIDTH / 2 + 1);
 	Height = EPD_7IN3E_HEIGHT;
-	// #region agent log
-	AGENT_DebugPins("pre-fix", "H4", "EPD_7in3e.cpp:313", "display_part_entry");
-	// #endregion
 	
 	EPD_7IN3E_SendCommand(0x10);
 	for(i=0; i<Height; i++) {
@@ -356,7 +357,7 @@ void EPD_7IN3E_Sleep(void)
 {
     EPD_7IN3E_SendCommand(0X02); // 深度睡眠
     EPD_7IN3E_SendData(0x00);
-    EPD_7IN3E_ReadBusyH();
+    EPD_7IN3E_ReadBusyH(EPD_BUSY_INIT_TIMEOUT_MS);
 
     EPD_7IN3E_SendCommand(0x07); // 深度睡眠
     EPD_7IN3E_SendData(0XA5);

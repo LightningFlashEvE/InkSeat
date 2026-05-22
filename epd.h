@@ -23,19 +23,21 @@
   *           
   ******************************************************************************
   */
+#include "DEV_Config.h"
+
 /* SPI pin definition --------------------------------------------------------*/
 //#include "epd7in5_HD.h"
-// 更改引脚以避免与外部Flash冲突（外部Flash使用GPIO14/15/16/17）
+// 统一使用 DEV_Config.h 中的新板墨水屏引脚定义
 
-#define PIN_SPI_SCK  7   // SPI时钟
-#define PIN_SPI_DIN  10  // SPI数据
-#define PIN_SPI_CS   6   // SPI片选
-#define PIN_SPI_BUSY 4   // 忙信号
-#define PIN_SPI_RST  3   // 复位
-#define PIN_SPI_DC   5   // 数据/命令
+#define PIN_SPI_SCK  EPD_SCK_PIN
+#define PIN_SPI_DIN  EPD_MOSI_PIN
+#define PIN_SPI_CS   EPD_CS_PIN
+#define PIN_SPI_BUSY EPD_BUSY_PIN
+#define PIN_SPI_RST  EPD_RST_PIN
+#define PIN_SPI_DC   EPD_DC_PIN
 
-#define PIN_SPI_CS_M    6   // 主片选
-#define PIN_SPI_CS_S    6   // 从片选
+#define PIN_SPI_CS_M EPD_CS_PIN
+#define PIN_SPI_CS_S EPD_CS_PIN
 // ESP32-C3没有GPIO33，只有GPIO0-21，所以注释掉电源控制引脚
 // #define PIN_SPI_PWR     33  // 电源控制（ESP32-C3不支持）
 

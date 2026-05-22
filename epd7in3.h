@@ -27,8 +27,37 @@ int Buff__getWord(int index);
 extern UBYTE globalImageBuffer[];
 // GLOBAL_IMAGE_BUFFER_SIZE 已在 mqtt_config.h 中定义，这里不再重复定义
 
+static const uint32_t EPD7IN3_BUSY_INIT_TIMEOUT_MS = 10000;
+static const uint32_t EPD7IN3_BUSY_REFRESH_TIMEOUT_MS = 180000;
+static bool g_epd7in3BusyTimeout = false;
+
+static void EPD_7in3E_ClearBusyTimeout()
+{
+    g_epd7in3BusyTimeout = false;
+}
+
+static bool EPD_7in3E_LastBusyTimeout()
+{
+    return g_epd7in3BusyTimeout;
+}
+
+static bool EPD_7in3E_WaitBusy(uint32_t timeoutMs, const char *phase)
+{
+    uint32_t start = millis();
+    while (!DEV_Digital_Read(EPD_BUSY_PIN)) {
+        if ((millis() - start) >= timeoutMs) {
+            g_epd7in3BusyTimeout = true;
+            Serial.printf("❌ EPD BUSY等待超时（%s）: %lu ms\n",
+                          phase, (unsigned long)timeoutMs);
+            return false;
+        }
+        delay(1);
+    }
+    return true;
+}
+
 // 适配函数：调用官方Demo的初始化
-int EPD_7in3E_init() 
+int EPD_7in3E_init()
 {
     Serial.print("\r\nEPD7in3E6 (使用官方Demo驱动)");
     EPD_7IN3E_Init();  // 调用官方Demo的初始化函数
@@ -109,7 +138,16 @@ void EPD_load_7in3E_from_buff()
     
     // 优化：减少日志输出
     // Serial.println("   初始化EPD（如果未初始化）...");
+    EPD_7in3E_ClearBusyTimeout();
+    EPD_7IN3E_ClearBusyTimeout();
     EPD_7IN3E_Init();
+    if (EPD_7IN3E_LastBusyTimeout()) {
+        g_epd7in3BusyTimeout = true;
+        Serial.println("❌ EPD初始化失败，跳过本次图片刷新");
+        file.close();
+        free(rowBuffer);
+        return;
+    }
     
     // 发送显示命令（0x10）- 开始写入图像数据
     // 优化：减少日志输出
@@ -203,8 +241,8 @@ void EPD_load_7in3E_from_buff()
     
     // 等待BUSY（优化：减少日志输出）
     // Serial.println("   等待BUSY（上电）...");
-    while (!DEV_Digital_Read(EPD_BUSY_PIN)) {
-        delay(1);
+    if (!EPD_7in3E_WaitBusy(EPD7IN3_BUSY_INIT_TIMEOUT_MS, "上电")) {
+        return;
     }
     
     // 2. 发送命令0x06（设置显示模式）并发送数据
@@ -244,8 +282,8 @@ void EPD_load_7in3E_from_buff()
     
     // 等待BUSY（显示刷新）（优化：减少日志输出）
     // Serial.println("   等待BUSY（显示刷新）...");
-    while (!DEV_Digital_Read(EPD_BUSY_PIN)) {
-        delay(1);
+    if (!EPD_7in3E_WaitBusy(EPD7IN3_BUSY_REFRESH_TIMEOUT_MS, "显示刷新")) {
+        return;
     }
     
     // 4. 发送命令0x02（断电）
@@ -261,10 +299,10 @@ void EPD_load_7in3E_from_buff()
     
     // 等待BUSY（断电）（优化：减少日志输出）
     // Serial.println("   等待BUSY（断电）...");
-    while (!DEV_Digital_Read(EPD_BUSY_PIN)) {
-        delay(1);
+    if (EPD_7in3E_WaitBusy(EPD7IN3_BUSY_INIT_TIMEOUT_MS, "断电")) {
+        Serial.println("✅ 显示完成");
+    } else {
+        Serial.println("❌ 显示流程未正常完成");
     }
-    
-    Serial.println("✅ 显示完成");
 }
 

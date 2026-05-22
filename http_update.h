@@ -19,6 +19,7 @@
 #include <HTTPClient.h>
 #include <SPIFFS.h>
 #include <FS.h>
+#include "esp_mac.h"
 #include "esp_wifi.h"
 #include "esp_sleep.h"
 #include "esp_err.h"
@@ -126,8 +127,29 @@ void ensureDisplayHardwareReady() {
  * 获取设备ID（基于MAC地址）
  */
 inline String getDeviceIdFromMac() {
-    uint8_t mac[6];
-    WiFi.macAddress(mac);
+    uint8_t mac[6] = {0};
+
+    esp_err_t ret = esp_read_mac(mac, ESP_MAC_EFUSE_FACTORY);
+    if (ret != ESP_OK) {
+        Serial.println("⚠️  displayDeviceCode: esp_read_mac 失败，回退到 WiFi.macAddress()");
+        WiFi.macAddress(mac);
+    }
+
+    if (mac[3] == 0 && mac[4] == 0 && mac[5] == 0) {
+        ret = esp_wifi_get_mac(WIFI_IF_STA, mac);
+        if (ret != ESP_OK || (mac[3] == 0 && mac[4] == 0 && mac[5] == 0)) {
+            ret = esp_wifi_get_mac(WIFI_IF_AP, mac);
+            if (ret == ESP_OK) {
+                Serial.println("✅ displayDeviceCode: 使用 WIFI_IF_AP MAC");
+            }
+        } else {
+            Serial.println("✅ displayDeviceCode: 使用 WIFI_IF_STA MAC");
+        }
+    }
+
+    Serial.printf("🔍 displayDeviceCode MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
     char buf[32];
     
     #if DEVICE_ID_MODE == 1
@@ -271,12 +293,14 @@ void clearFlashTempFile() {
  * 在屏幕上显示设备码（使用大号数字）
  */
 void displayDeviceCode() {
+    if (deviceId.length() == 0) {
+        deviceId = getDeviceIdFromMac();
+        Serial.printf("ℹ️  设备码未预先生成，现按当前MAC计算: %s\n", deviceId.c_str());
+    }
+
     Serial.println("📱 开始显示设备码...");
     Serial.print("⭐ 设备码: ");
     Serial.println(deviceId);
-    // #region agent log
-    AGENT_DebugPins("pre-fix", "H3", "http_update.h:260", "display_device_code_entry");
-    // #endregion
     
     // 默认使用 7.3" E6 屏
     if (EPD_dispIndex < 0 || EPD_dispIndex >= (sizeof(EPD_dispMass) / sizeof(EPD_dispMass[0]))) {
@@ -284,15 +308,15 @@ void displayDeviceCode() {
     }
     
     ensureDisplayHardwareReady();
+    EPD_7IN3E_ClearBusyTimeout();
     EPD_dispInit();
-    // #region agent log
-    AGENT_DebugPins("pre-fix", "H2", "http_update.h:270", "display_device_code_after_disp_init");
-    // #endregion
-    
+    if (EPD_7IN3E_LastBusyTimeout()) {
+        Serial.println("❌ 设备码显示初始化失败，请检查BUSY线、屏幕供电和排线");
+        return;
+    }
+
     int width = 800;
     int height = 480;
-    
-    EPD_7IN3E_Init();
     
     String code = deviceId;
     int paintWidth = GLOBAL_IMAGE_BUFFER_WIDTH;
@@ -350,9 +374,14 @@ void displayDeviceCode() {
     UWORD xstart = (width - paintWidth) / 2;
     UWORD ystart = (height - paintHeight) / 2;
     
+    EPD_7IN3E_ClearBusyTimeout();
     EPD_7IN3E_DisplayPart(imageBuffer, xstart, ystart, paintWidth, paintHeight);
-    
-    Serial.println("✅ 设备码已显示在屏幕上");
+
+    if (EPD_7IN3E_LastBusyTimeout()) {
+        Serial.println("❌ 设备码显示未正常完成，请检查BUSY线、屏幕供电和排线");
+    } else {
+        Serial.println("✅ 设备码已显示在屏幕上");
+    }
 }
 
 /* ============================================================================
@@ -617,7 +646,11 @@ void displayDownloadedImage() {
     // 调用显示函数（从Flash读取）
     if (EPD_dispLoad != nullptr) {
         EPD_dispLoad();
-        Serial.println("✅ 图片显示完成");
+        if (EPD_7in3E_LastBusyTimeout()) {
+            Serial.println("❌ 图片显示未正常完成，请检查BUSY线、屏幕供电和排线");
+        } else {
+            Serial.println("✅ 图片显示完成");
+        }
     } else {
         Serial.println("❌ EPD_dispLoad未设置");
     }
