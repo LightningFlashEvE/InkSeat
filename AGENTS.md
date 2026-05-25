@@ -154,7 +154,7 @@ docker compose logs -f backend   # 查看后端日志
 ### 流式下载到 SPIFFS
 图片数据（384KB）不能全部放入 RAM，必须用 512 字节缓冲区流式写入 SPIFFS，再从 SPIFFS 读取传给 EPD 驱动。
 
-本地 `imgVer` 只能在 EPD 刷新成功后写入。下载成功但 BUSY 超时、文件异常、`EPD_dispLoad` 未设置或显示失败时，不得保存新版本号；这样下次唤醒仍会重试同一云端版本。
+本地 `imgVer` 只能在 EPD 刷新成功后写入。下载成功但 BUSY 超时、文件异常、`EPD_dispLoad` 未设置或显示失败时，不得保存新版本号；这样下次唤醒仍会重试同一云端版本。`imageVersion` 在设备端只作为云端图片同步标记，不作为必须递增的大小比较依据；当云端 `imageVersion > 0` 且与本地 `imgVer` 不一致时必须按云端当前图片同步。
 
 ### 长按检测（GPIO0 复用）
 GPIO0 同时作为唤醒键和长按配网入口。检测逻辑：从函数入口开始就必须是低电平，中途松开则返回 false。
@@ -173,7 +173,7 @@ GPIO0 同时作为唤醒键和长按配网入口。检测逻辑：从函数入�
 - **NVS `nvs_open failed: NOT_FOUND`**：首次使用正常，命名空间自动创建。持续出现则全擦重烧。
 - **SPIFFS 挂载失败**：首次使用正常，自动格式化。持续失败：工具 -> Erase Flash -> All Flash Contents。
 - **设备唤醒后立刻再次唤醒**：GPIO0 缺少上拉电阻或按键未松开。建议硬件加 10k 上拉到 3.3V。
-- **图片版本不更新**：检查 `/api/device/status` 返回的 `imageVersion` 是否大于 NVS 中的 `imgVer`。
+- **图片版本不更新**：检查 `/api/device/status` 返回的 `imageVersion` 是否与 NVS 中的 `imgVer` 不一致；只要不一致就应按云端当前图片重新同步。
 - **下载失败（内容长度异常）**：云端图片必须恰好 384000 字节（800x480，4bit 编码，无多余换行符）。
 
 ## 10. 依赖清单

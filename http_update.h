@@ -871,19 +871,25 @@ void prepareUpdateDecisionOnce() {
     }
     
     // 8. 检查是否需要更新图片
-    Serial.printf("\n📊 图片版本检查: 云端=%lld, 本地=%lld\n", 
+    Serial.printf("\n📊 图片同步标记检查: 云端=%lld, 本地=%lld\n",
                   status.imageVersion, localImageVersion);
     
-    if (status.imageVersion > localImageVersion) {
+    bool cloudHasImage = status.imageVersion > 0;
+    bool imageVersionMismatch = cloudHasImage && (status.imageVersion != localImageVersion);
+
+    if (imageVersionMismatch) {
         if (status.imageUrl.length() == 0) {
-            Serial.println("⚠️  云端版本更新但未返回 imageUrl，本次跳过下载，直接Deep-sleep");
+            Serial.println("⚠️  云端图片标记不一致但未返回 imageUrl，本次跳过下载，直接Deep-sleep");
             g_shouldEnterDeepSleep = true;
         } else {
-            Serial.println("✅ 发现新版本：标记为需要更新（下载/刷新将在 loop 中执行）");
+            Serial.println("✅ 云端图片标记与本地不一致，按云端数据同步（下载/刷新将在 loop 中执行）");
             g_updateNeeded = true;
             g_targetImageVersion = status.imageVersion;
             g_targetImageUrl = status.imageUrl;
         }
+    } else if (!cloudHasImage) {
+        Serial.println("ℹ️  云端暂无已发布图片，无需更新");
+        g_shouldEnterDeepSleep = true;
     } else {
         Serial.println("✅ 图片已是最新版本，无需更新");
         g_shouldEnterDeepSleep = true;

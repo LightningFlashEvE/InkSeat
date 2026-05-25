@@ -20,7 +20,7 @@
 2. 云端将最新 EPD 数据持久化保存：`cloud_server/backend/data/epd/<deviceId>/latest.txt`，并递增 `devices.imageVersion`
 3. 设备在按键/定时唤醒后执行一次性流程：
    - `POST /api/device/status` 上报 `deviceId/ip/rssi/uptime_ms/freeHeap`，并获取 `claimed/imageVersion/imageUrl`
-   - 若 `imageVersion > NVS(imgVer)`：`GET imageUrl` 流式下载到 SPIFFS 临时文件 → 刷新墨水屏 → 刷新成功后写入 NVS 新版本 → Deep-sleep
+   - 若云端图片同步标记 `imageVersion > 0` 且 `imageVersion != NVS(imgVer)`：`GET imageUrl` 流式下载到 SPIFFS 临时文件 → 刷新墨水屏 → 刷新成功后写入 NVS 新版本 → Deep-sleep
    - 若版本一致：直接 Deep-sleep
    - 若未绑定：显示设备码/配对码提示 → Deep-sleep
 
@@ -346,9 +346,10 @@ spiffs,   data, spiffs,  0x250000, 0x1B0000,
 
 ### 设备不更新图片
 
-- 确认 `/api/device/status` 返回的 `imageVersion` 是否 **大于** 设备本地 `imgVer`
+- 确认 `/api/device/status` 返回的 `imageVersion` 是否与设备本地 `imgVer` **不一致**
 - 确认发布后后端日志是否出现版本递增（例如 `2 -> 3`）
 - 设备端会把图片版本保存在 NVS：`namespace=device key=imgVer`
+- `imageVersion` 在设备端只作为云端图片同步标记，不作为必须递增的大小比较依据。如果云端重建、清库或数据库恢复导致云端标记与本地 `imgVer` 不一致，设备会按云端当前图片重新同步，并在刷新成功后把本地 `imgVer` 写回云端标记。
 
 ### SPIFFS挂载失败
 
