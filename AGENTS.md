@@ -55,7 +55,7 @@ Loader_esp32wf/
 | Deep-sleep 间隔 | `http_update.h` | `DEEP_SLEEP_INTERVAL_HOURS`（默认 12h） |
 | 设备码模式 | `http_update.h` | `DEVICE_ID_MODE`（默认 2=后6位） |
 | 长按配网阈值 | `Loader_esp32wf.ino` | `WIFI_RECONFIG_HOLD_MS`（默认 3000ms） |
-| MongoDB 连接 | `docker-compose.yml` | `MONGODB_URI` 环境变量 |
+| MongoDB 容器/数据 | `docker-compose.yml` / `.env` | `mongodb` 服务、`MONGO_INITDB_ROOT_*`、`mongodb/data` |
 
 ## 3. 快速定位
 
@@ -91,7 +91,8 @@ docker compose up -d --force-recreate
 docker compose logs -f backend   # 查看后端日志
 ```
 
-注意：使用 `docker compose`（无连字符），新版 Docker 标准命令。服务端口：前端 `3000:80`，后端 `5000:5000`。
+注意：使用 `docker compose`（无连字符），新版 Docker 标准命令。生产模板服务端口：前端 `8080:80`，后端仅 Docker 内网 `5000`，MongoDB 仅 Docker 内网 `27017`。
+`cloud_server/mongodb/` 和 `cloud_server/backend/data/` 是服务器运行数据目录，首次部署会自动生成，不提交 Git；更新代码时不得删除或覆盖。
 
 ## 5. 代码规范
 
@@ -185,7 +186,7 @@ GPIO0 同时作为唤醒键和长按配网入口。检测逻辑：从函数入�
 | WiFi / HTTPClient / SPIFFS / Preferences / WebServer | 随 ESP32 Arduino 包内置 |
 
 ### 云端
-`flask==3.0.0`、`flask-cors==4.0.0`、`pymongo`（不固定版本）、`python-dotenv==1.0.0`、`gunicorn==21.2.0`、`numpy==1.26.4`、`Pillow==10.3.0`、`opencv-python-headless==4.8.1.78`。注意：`paho-mqtt` 已移除，当前架构不使用 MQTT。
+`flask==3.0.0`、`flask-cors==4.0.0`、`pymongo`（不固定版本）、`python-dotenv==1.0.0`、`gunicorn==21.2.0`、`numpy==1.26.4`、`Pillow==10.3.0`、`opencv-python-headless==4.8.1.78`。Docker 部署同时启动 `mongo:8.2.6` 容器。注意：`paho-mqtt` 已移除，当前架构不使用 MQTT。
 
 ## 11. 参考资料
 

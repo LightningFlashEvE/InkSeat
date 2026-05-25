@@ -16,6 +16,7 @@ import secrets
 from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
@@ -113,52 +114,71 @@ def load_device_image(device_id: str) -> str:
         print(f'❌ 加载图片失败: {e}')
     return None
 
-def connect_mongodb():
+def redact_uri_secret(uri: str) -> str:
+    """Hide password-like credentials before printing a URI to logs."""
+    try:
+        parsed = urlsplit(uri)
+        if parsed.password is None:
+            return uri
+        username = parsed.username or ''
+        host = parsed.hostname or ''
+        port = f':{parsed.port}' if parsed.port else ''
+        netloc = f'{username}:***@{host}{port}'
+        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    except Exception:
+        return '<redacted-uri>'
+
+def connect_mongodb(max_retries: int = 10, retry_delay_seconds: int = 2):
     """连接 MongoDB"""
     global mongo_client, db, users_collection, devices_collection, device_status_collection
     global pages_collection, page_lists_collection, pairing_codes_collection
-    try:
-        mongo_client = MongoClient(Config.MONGODB_URI, serverSelectionTimeoutMS=5000)
-        # 测试连接
-        mongo_client.server_info()
-        db = mongo_client[Config.MONGODB_DB]
-        users_collection = db['users']
-        devices_collection = db['devices']
-        device_status_collection = db['device_status']
-        pages_collection = db['pages']
-        page_lists_collection = db['page_lists']
-        pairing_codes_collection = db['pairing_codes']
-        
-        # 创建索引
-        users_collection.create_index('username', unique=True)
-        users_collection.create_index('token', unique=True, sparse=True)
+    for attempt in range(1, max_retries + 1):
+        try:
+            mongo_client = MongoClient(Config.MONGODB_URI, serverSelectionTimeoutMS=5000)
+            # 测试连接
+            mongo_client.server_info()
+            db = mongo_client[Config.MONGODB_DB]
+            users_collection = db['users']
+            devices_collection = db['devices']
+            device_status_collection = db['device_status']
+            pages_collection = db['pages']
+            page_lists_collection = db['page_lists']
+            pairing_codes_collection = db['pairing_codes']
 
-        devices_collection.create_index('deviceId', unique=True)
-        devices_collection.create_index('owner')
-        devices_collection.create_index('claimed')
+            # 创建索引
+            users_collection.create_index('username', unique=True)
+            users_collection.create_index('token', unique=True, sparse=True)
 
-        device_status_collection.create_index('deviceId', unique=True)
-        device_status_collection.create_index('lastSeen')
+            devices_collection.create_index('deviceId', unique=True)
+            devices_collection.create_index('owner')
+            devices_collection.create_index('claimed')
 
-        pages_collection.create_index('deviceId')
-        pages_collection.create_index([('deviceId', 1), ('name', 1)])
-        # 列表页按 updatedAt 排序：需要索引避免全表扫描（数据大时会非常慢）
-        pages_collection.create_index([('deviceId', 1), ('updatedAt', -1)])
+            device_status_collection.create_index('deviceId', unique=True)
+            device_status_collection.create_index('lastSeen')
 
-        page_lists_collection.create_index('deviceId')
-        page_lists_collection.create_index([('deviceId', 1), ('isActive', 1)])
-        page_lists_collection.create_index([('deviceId', 1), ('updatedAt', -1)])
-        
-        pairing_codes_collection.create_index('deviceId', unique=True)
-        pairing_codes_collection.create_index('expiresAt', expireAfterSeconds=0)
-        
-        print(f'✅ Connected to MongoDB: {Config.MONGODB_URI}')
-        print(f'📊 Database: {Config.MONGODB_DB}')
-        return True
-    except Exception as e:
-        print(f'❌ MongoDB connection error: {e}')
-        print('⚠️  Server will continue with in-memory storage')
-        return False
+            pages_collection.create_index('deviceId')
+            pages_collection.create_index([('deviceId', 1), ('name', 1)])
+            # 列表页按 updatedAt 排序：需要索引避免全表扫描（数据大时会非常慢）
+            pages_collection.create_index([('deviceId', 1), ('updatedAt', -1)])
+
+            page_lists_collection.create_index('deviceId')
+            page_lists_collection.create_index([('deviceId', 1), ('isActive', 1)])
+            page_lists_collection.create_index([('deviceId', 1), ('updatedAt', -1)])
+
+            pairing_codes_collection.create_index('deviceId', unique=True)
+            pairing_codes_collection.create_index('expiresAt', expireAfterSeconds=0)
+
+            print(f'✅ Connected to MongoDB: {redact_uri_secret(Config.MONGODB_URI)}')
+            print(f'📊 Database: {Config.MONGODB_DB}')
+            return True
+        except Exception as e:
+            if attempt < max_retries:
+                print(f'⚠️  MongoDB connection attempt {attempt}/{max_retries} failed: {e}')
+                time.sleep(retry_delay_seconds)
+                continue
+            print(f'❌ MongoDB connection error after {max_retries} attempts: {e}')
+            print('⚠️  Server will continue without MongoDB-backed features')
+            return False
 
 # ==================== 用户认证工具函数 ====================
 
@@ -1491,7 +1511,7 @@ def init_app():
     """初始化应用"""
     print('\n🚀 Starting ESP32 E-Paper Cloud Server...')
     print('📡 Architecture: Deep-sleep + HTTP Pull (No MQTT)')
-    print(f'💾 MongoDB: {Config.MONGODB_URI}/{Config.MONGODB_DB}')
+    print(f'💾 MongoDB: {redact_uri_secret(Config.MONGODB_URI)} / db={Config.MONGODB_DB}')
     print(f'📁 Image Storage: {DATA_DIR}\n')
     
     connect_mongodb()

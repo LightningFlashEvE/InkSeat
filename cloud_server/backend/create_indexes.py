@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 import os
 
 # 从环境变量或config读取配置
-MONGODB_URI = os.environ.get('MONGODB_URI', 'mongodb://mongo_miXkxe:mongo_NQf5WW@8.135.238.216:27017/esp32_epd?authSource=admin')
+MONGODB_URI = os.environ.get('MONGODB_URI', 'mongodb://esp32_epd_root:change_this_mongo_password@mongodb:27017/esp32_epd?authSource=admin')
 MONGODB_DB = os.environ.get('MONGODB_DB', 'esp32_epd')
 
 def create_indexes():

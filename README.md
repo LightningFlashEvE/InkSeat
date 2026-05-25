@@ -108,19 +108,19 @@
 #### 要求
 - Linux服务器 (Ubuntu 20.04+ 推荐)
 - 公网IP或域名
-- Python 3.8+
-- MongoDB（用于设备管理）
+- Docker 和 Docker Compose Plugin
+- 对外放行 `8080/tcp`
 
-#### 安装MongoDB
+#### MongoDB 数据目录
 
-```bash
-# Ubuntu/Debian
-sudo apt install mongodb
+MongoDB 由 `cloud_server/docker-compose.yml` 中的 `mongodb` 服务启动。首次执行 `docker compose up -d` 时，Docker 会自动创建：
 
-# 启动服务
-sudo systemctl start mongodb
-sudo systemctl enable mongodb
+```text
+cloud_server/mongodb/data      # MongoDB 数据库文件
+cloud_server/mongodb/restore   # 预留恢复目录
 ```
+
+这两个目录是服务器运行数据，不是源码，不提交 Git。更新服务器代码时不要删除或覆盖 `cloud_server/mongodb/`。
 
 ### 2. 部署云端服务
 
@@ -151,12 +151,13 @@ cd backend
 pip3 install -r requirements.txt
 
 # 3. 配置环境变量（无 MQTT）
-# 编辑 docker-compose.yml 或设置环境变量：
-export MONGODB_URI="mongodb://<user>:<pass>@<host>:27017/esp32_epd?authSource=admin"
+# 复制 cloud_server/.env.example 为 .env，并至少修改 MongoDB 密码、SECRET_KEY、公网地址：
+export MONGO_INITDB_ROOT_USERNAME="esp32_epd_root"
+export MONGO_INITDB_ROOT_PASSWORD="change_this_mongo_password"
 export MONGODB_DB="esp32_epd"
 # 用于 status 返回 imageUrl（建议填公网域名或公网IP）
 export FLASK_HOST="<public-ip-or-domain>"
-export FLASK_PORT="5000"
+export FLASK_PORT="8080"
 
 # 4. 初始化数据库索引
 python3 create_indexes.py
@@ -169,8 +170,7 @@ python3 app.py
 
 ```bash
 # 开放端口
-sudo ufw allow 80/tcp      # Web服务（Nginx）
-sudo ufw allow 5000/tcp    # Flask后端（如果直接访问）
+sudo ufw allow 8080/tcp    # Web/API统一入口（Nginx）
 sudo ufw enable
 ```
 
