@@ -192,11 +192,17 @@ function renderDevices() {
         const isSleeping = status.sleeping === true;  // 明确检查是否为true
         // 在线/睡眠窗口由后端统一计算，前端只负责展示，避免与后端时间窗口不一致。
         const isOnline = status.online === true;
-        const hasTelemetry = !!(status.ip || status.rssi || status.uptime_ms || status.freeHeap);
+        const hasTelemetry = !!(status.lastSeen || status.ip || status.remoteIp || status.rssi !== undefined || status.uptime_ms !== undefined || status.freeHeap !== undefined);
+        const ipText = status.ip || (status.remoteIp ? `${status.remoteIp}（来源）` : '未上报');
         const telemetryHtml = hasTelemetry ? `
                     <div class="device-info-item">
+                        <span class="device-info-label">最后唤醒</span>
+                        <span class="device-info-value">${formatDateTime(status.lastSeen)}</span>
+                    </div>
+
+                    <div class="device-info-item">
                         <span class="device-info-label">IP地址</span>
-                        <span class="device-info-value">${status.ip || '-'}</span>
+                        <span class="device-info-value">${ipText}</span>
                     </div>
 
                     <div class="device-info-item">
@@ -347,9 +353,10 @@ async function pollDeviceStatus() {
                         sleeping: device.sleeping !== undefined ? device.sleeping : false,  // 保存睡眠状态
                         rssi: device.rssi,
                         ip: device.ip,
+                        remoteIp: device.remoteIp,
                         uptime_ms: device.uptime_ms,
                         freeHeap: device.freeHeap,
-                        lastSeen: device.lastSeen || Date.now()
+                        lastSeen: device.lastSeen
                     };
                     
                     // 调试：打印睡眠设备的状态
@@ -371,6 +378,7 @@ async function pollDeviceStatus() {
                         oldStatus.lastSeen !== newStatus.lastSeen ||  // lastSeen变化也可能影响状态
                         oldStatus.rssi !== newStatus.rssi ||
                         oldStatus.ip !== newStatus.ip ||
+                        oldStatus.remoteIp !== newStatus.remoteIp ||
                         oldStatus.uptime_ms !== newStatus.uptime_ms ||
                         oldStatus.freeHeap !== newStatus.freeHeap) {
                         hasChanges = true;
@@ -394,7 +402,7 @@ async function pollDeviceStatus() {
 
 // 工具函数：格式化信号强度
 function getSignalBars(rssi) {
-    if (!rssi) return '-';
+    if (rssi === undefined || rssi === null) return '未上报';
     
     let bars = 0;
     if (rssi > -50) bars = 4;
@@ -417,7 +425,7 @@ function getSignalBars(rssi) {
 
 // 工具函数：格式化运行时间
 function formatUptime(ms) {
-    if (!ms) return '-';
+    if (ms === undefined || ms === null) return '未上报';
     
     const seconds = Math.floor(ms / 1000);
     const minutes = Math.floor(seconds / 60);
@@ -432,7 +440,7 @@ function formatUptime(ms) {
 
 // 工具函数：格式化内存
 function formatMemory(bytes) {
-    if (!bytes) return '-';
+    if (bytes === undefined || bytes === null) return '未上报';
     
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -449,6 +457,11 @@ function formatDate(timestamp) {
         hour: '2-digit',
         minute: '2-digit'
     });
+}
+
+function formatDateTime(timestamp) {
+    if (!timestamp) return '未上报';
+    return formatDate(timestamp);
 }
 
 // 处理回车键

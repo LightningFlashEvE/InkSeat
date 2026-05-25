@@ -545,6 +545,7 @@ def get_devices_status():
                     device_info['sleeping'] = (not device_info['online']) and (current_time - last_seen < sleep_window_ms)
                     device_info['lastSeen'] = last_seen
                     device_info['ip'] = status.get('ip')
+                    device_info['remoteIp'] = status.get('remoteIp')
                     device_info['rssi'] = status.get('rssi')
                     device_info['uptime_ms'] = status.get('uptime_ms')
                     device_info['freeHeap'] = status.get('freeHeap')
@@ -586,6 +587,12 @@ def device_status():
             'updatedAt': datetime.utcnow()
         }
 
+        forwarded_for = request.headers.get('X-Forwarded-For', '')
+        if forwarded_for:
+            telemetry['remoteIp'] = forwarded_for.split(',')[0].strip()
+        elif request.remote_addr:
+            telemetry['remoteIp'] = request.remote_addr
+
         ip = data.get('ip')
         if isinstance(ip, str) and ip.strip():
             telemetry['ip'] = ip.strip()
@@ -594,6 +601,15 @@ def device_status():
             value = data.get(field)
             if isinstance(value, (int, float)):
                 telemetry[field] = int(value)
+
+        print(
+            f"📡 设备 {clean_id} 上报: "
+            f"ip={telemetry.get('ip', '-')}, "
+            f"remoteIp={telemetry.get('remoteIp', '-')}, "
+            f"rssi={telemetry.get('rssi', '-')}, "
+            f"uptime_ms={telemetry.get('uptime_ms', '-')}, "
+            f"freeHeap={telemetry.get('freeHeap', '-')}"
+        )
 
         # 更新设备最后活动时间和调试遥测
         if device_status_collection is not None:
