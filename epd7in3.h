@@ -17,15 +17,15 @@
 #endif
 
 // 这里不直接包含 buff.h，避免在同一个编译单元里重复定义全局变量
-// 只做前向声明，真正的定义仍在 buff.h 中，由其它文件（如 mqtt_config.h）包含
+// 只做前向声明，真正的定义仍在 buff.h 中，由 http_update.h 在主线流程中包含
 extern int  Buff__bufInd;
 extern char Buff__bufArr[];
 int Buff__getByte(int index);
 int Buff__getWord(int index);
 
-// 全局图像缓冲区声明（在mqtt_config.h中定义）
+// 全局图像缓冲区声明（在 http_update.h 中定义）
 extern UBYTE globalImageBuffer[];
-// GLOBAL_IMAGE_BUFFER_SIZE 已在 mqtt_config.h 中定义，这里不再重复定义
+// GLOBAL_IMAGE_BUFFER_SIZE 已在 http_update.h 中定义，这里不再重复定义
 
 static const uint32_t EPD7IN3_BUSY_INIT_TIMEOUT_MS = 10000;
 static const uint32_t EPD7IN3_BUSY_REFRESH_TIMEOUT_MS = 180000;
@@ -77,10 +77,10 @@ void EPD_7in3E_Clear(byte color)
 }
 
 // 适配函数：从Flash加载数据到7.3E6（使用流式处理，避免大内存分配）
-// 这个函数会被EPD_dispLoad调用，用于MQTT模式的数据加载
+// 这个函数会被EPD_dispLoad调用，用于HTTP Pull下载后的图片刷新
 void EPD_load_7in3E_from_buff()
 {
-    // FLASH_TEMP_FILE已在mqtt_config.h中定义为宏
+    // FLASH_TEMP_FILE由 http_update.h 定义；单独包含时上方会提供默认值
     
     // 计算需要的缓冲区大小（4bit格式）
     int packedWidth = (EPD_7IN3E_WIDTH + 1) / 2;  // 400字节/行

@@ -6,6 +6,7 @@
 - 仅在 **GPIO0 按键** 或 **12 小时定时** 唤醒后联网
 - 唤醒后通过 HTTP 查询版本并按需下载图片，刷新墨水屏后立刻回到 Deep-sleep
 - **服务器端上传图片时不要求设备在线**；设备下次唤醒即可拉到最新内容
+- 已保存 WiFi 但本次连接失败时会保留原配置；普通按键/定时唤醒直接回睡，下次再试。需要重新配网时长按 GPIO0。
 
 ## 系统架构（无 MQTT）
 
@@ -86,7 +87,6 @@
 │
 ├── Loader_esp32wf.ino         # ESP32主程序
 ├── http_update.h              # HTTP 拉取更新（Deep-sleep 架构核心）
-├── mqtt_config.h              # 历史遗留（已不再依赖/不再使用）
 ├── wifi_config.h              # WiFi配网功能
 ├── DEV_Config.h/cpp           # 硬件配置（引脚定义）
 ├── epd.h                      # 墨水屏驱动接口
@@ -196,7 +196,7 @@ sudo ufw enable
    - ArduinoJson (by Benoit Blanchon)
 
 4. **说明**：
-   - 设备端已改为 `http_update.h` 的 **HTTP 拉取**模式，不再依赖 PubSubClient/MQTT。
+   - 设备端已改为 `http_update.h` 的 **HTTP 拉取**模式，不再依赖旧的 MQTT 长连接链路。
    - 服务器地址/端口在 `http_update.h` 中通过 `CLOUD_API_HOST/CLOUD_API_PORT` 配置。
 
 5. **分区表配置**：
@@ -427,7 +427,7 @@ spiffs,   data, spiffs,  0x250000, 0x1B0000,
 
 ### 可扩展功能
 
-1. **OTA升级**：通过MQTT推送固件更新
+1. **OTA升级**：可扩展为唤醒后通过 HTTP 检查并拉取固件更新
 2. **定时任务**：支持定时推送图片到设备
 3. **批量控制**：支持同时向多个设备推送图片
 4. **图片历史**：保存用户上传的图片，支持快速重新发送

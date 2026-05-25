@@ -1,0 +1,6 @@
+# GitHub Linguist language stats:
+# keep generated font tables and upstream Waveshare support code from dominating C++ percentage.
+font12.cpp linguist-generated=true
+font24.cpp linguist-generated=true
+EPD_7in3e.* linguist-vendored=true
+GUI_Paint.* linguist-vendored=true

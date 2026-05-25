@@ -17,7 +17,7 @@
 #include "esp_mac.h"
 
 // 配网相关配置
-// 注意：DEVICE_ID_MODE 应该在 mqtt_config.h 中定义，这里使用默认值 2（后6位）
+// 与 http_update.h 保持一致；如果之前未定义，则默认使用后6位设备码
 #ifndef DEVICE_ID_MODE
 #define DEVICE_ID_MODE 2  // 设备码模式：1=前6位，2=后6位，其他=完整12位
 #endif
@@ -83,8 +83,7 @@ void clearWiFiConfig() {
     Serial.println("🗑️  WiFi配置已清除");
 }
 
-// 前向声明：getDeviceIdFromMac() 在 mqtt_config.h 中定义
-// 注意：由于包含顺序，这里需要自己实现获取设备码的逻辑
+// AP 配网阶段需要在 WiFi 配置前生成设备码，因此这里保留独立的 MAC 读取逻辑
 String getDeviceIdForAP() {
     uint8_t mac[6] = {0};
     
@@ -345,11 +344,14 @@ bool connectWiFi() {
         Serial.println("⚠️  未检测到WiFi配置，将进入AP配网模式");
         return false;
     }
-    
+
     Serial.println("📶 使用保存的WiFi配置连接...");
     Serial.printf("   SSID: %s\n", savedSSID.c_str());
-    
+
+    WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
+    WiFi.disconnect(false, true);
+    delay(100);
     WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
     
     int attempts = 0;
@@ -369,28 +371,39 @@ bool connectWiFi() {
     } else {
         Serial.println("");
         Serial.println("❌ WiFi连接失败");
+        Serial.printf("   WiFi状态码: %d\n", WiFi.status());
         return false;
     }
 }
 
 /**
  * WiFi配网初始化
- * 返回值：true=已连接WiFi，false=进入AP配网模式
+ * @param openApOnSavedWiFiFailure 已保存WiFi但连接失败时是否打开AP修复入口
+ * 返回值：true=已连接WiFi，false=未连接；可能已进入AP，也可能按策略回睡
  */
-bool initWiFiConfig() {
+bool initWiFiConfig(bool openApOnSavedWiFiFailure = true) {
     // 检查配网状态
-    if (checkWiFiConfigured()) {
+    bool hasSavedConfig = checkWiFiConfigured();
+    if (hasSavedConfig) {
         // 尝试连接WiFi
         if (connectWiFi()) {
             wifiConfigured = true;
             return true;
         } else {
-            // 连接失败，清除配置，进入AP模式
-            Serial.println("⚠️  WiFi连接失败，清除配置并进入AP配网模式");
-            clearWiFiConfig();
+            // 连接失败不清除配置：可能只是路由器暂时不可用；长按GPIO0才会主动清除配置
+            Serial.println("⚠️  WiFi连接失败，保留原配置");
+            wifiConfigured = false;
+            if (!openApOnSavedWiFiFailure) {
+                Serial.println("   本次唤醒不打开AP，稍后进入Deep-sleep，下次唤醒再重试");
+                apModeStarted = false;
+                return false;
+            }
+            Serial.println("   打开AP修复入口，但不会删除已保存的WiFi配置");
         }
+    } else {
+        Serial.println("⚠️  未检测到WiFi配置，将进入AP配网模式");
     }
-    
+
     // 进入AP配网模式
     if (startAPMode()) {
         initConfigServer();

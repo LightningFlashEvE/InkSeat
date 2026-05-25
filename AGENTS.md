@@ -29,7 +29,6 @@ Loader_esp32wf/
 ├── Loader_esp32wf.ino      # 主程序入口（setup/loop）
 ├── http_update.h           # HTTP 拉取更新核心逻辑（Deep-sleep 架构）
 ├── wifi_config.h           # WiFi 配网（AP 热点 + Web 配网页面）
-├── mqtt_config.h           # 历史遗留，已不再使用，勿修改
 ├── DEV_Config.h/cpp        # 硬件引脚定义与 SPI 初始化
 ├── epd.h                   # 墨水屏驱动接口（型号分发）
 ├── epd7in3.h               # 7.3寸 E6 驱动适配层
@@ -127,7 +126,7 @@ docker compose logs -f backend   # 查看后端日志
 
 - **禁止在 `loop()` 中重复查询云端**。本架构是一次性状态机，`loop()` 只执行已判定的下载任务。
 - **禁止在 Deep-sleep 前不等待 GPIO0 释放**。按键仍为低电平时入睡会立刻再次唤醒（等待 `WAKEUP_RELEASE_WAIT_MS = 2500ms`）。
-- **禁止使用 `mqtt_config.h`**。历史遗留文件，当前架构已完全切换为 HTTP 拉取。
+- **禁止重新引入 MQTT 常驻连接链路**。当前架构已完全切换为 Deep-sleep + HTTP 拉取。
 - **禁止在 `http_update.h` 中定义 `Preferences preferences`**。该对象在 `.ino` 中定义，头文件只能 `extern` 引用。
 - **禁止跳过 SPIFFS 长度校验直接刷新 EPD**。数据不完整会导致 BUSY 卡死。
 - **禁止在 AP 配网模式下调用 `enterDeepSleep()`**。AP 模式需保持 Web 服务器运行。
@@ -142,6 +141,7 @@ docker compose logs -f backend   # 查看后端日志
      -> 云端 claimed=true：直接 Deep-sleep
      -> 云端 claimed=false：显示设备码 -> Deep-sleep
   -> 判断唤醒原因 -> 正常唤醒（按键/定时）且未配网：进入 AP 配网并显示设备码
+  -> 正常唤醒且已有 WiFi 配置但连接失败：保留配置，直接 Deep-sleep，下次唤醒重试
   -> WiFi 连接
   -> prepareUpdateDecisionOnce()（只执行一次）
      -> POST /api/device/status -> 版本比较 -> 设置 g_updateNeeded

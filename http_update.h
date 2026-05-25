@@ -45,7 +45,9 @@
 // 0 = 使用完整MAC地址 (12位，例如: 112233445566)
 // 1 = 仅使用MAC地址前6位 (例如: 112233)
 // 2 = 仅使用MAC地址后6位 (例如: 445566)
+#ifndef DEVICE_ID_MODE
 #define DEVICE_ID_MODE 2
+#endif
 
 /* Deep-sleep 配置 */
 #define WAKEUP_GPIO GPIO_NUM_0  // GPIO0 按键唤醒（按键接地，低电平唤醒）

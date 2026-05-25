@@ -127,7 +127,15 @@ void setup()
             HTTP_UPDATE__setup();
             HTTP_UPDATE__loop();
         } else {
-            // WiFi连接失败，进入AP配网模式
+            // WiFi连接失败时 initWiFiConfig() 会打开AP修复入口（不清除旧配置）
+            if (apModeStarted) {
+                showProvisioningCodeOnScreen();
+                Serial.println("📱 WiFi连接失败，已打开AP修复入口");
+                Serial.println("   如需修改WiFi，请连接热点并访问: http://192.168.4.1");
+                Serial.println("⏳ 等待配网中...（AP模式）");
+            } else {
+                Serial.println("❌ WiFi连接失败，且AP修复入口未能启动");
+            }
         }
         return;
     }
@@ -135,10 +143,11 @@ void setup()
     // WiFi配网初始化
     Serial.println("📶 WiFi配网初始化...");
     
-    bool wifiConnected = initWiFiConfig();
-    
+    bool openApOnSavedWiFiFailure = !alreadyConfigured || !isNormalWakeCause(cause);
+    bool wifiConnected = initWiFiConfig(openApOnSavedWiFiFailure);
+
     if (!wifiConnected) {
-        // AP配网模式
+        // 未连接：可能进入AP配网，也可能因已有配置但临时连接失败而直接回睡
         Serial.println();
         if (apModeStarted) {
             showProvisioningCodeOnScreen();
@@ -151,7 +160,12 @@ void setup()
             Serial.println();
             Serial.println("⏳ 等待配网中...（AP模式）");
         } else {
-            Serial.println("❌ 当前未能进入AP配网模式，请查看前面的AP启动日志");
+            if (alreadyConfigured) {
+                Serial.println("⚠️  已保存WiFi但本次连接失败，保留配置并进入Deep-sleep，下次唤醒再试");
+                enterDeepSleep();
+            } else {
+                Serial.println("❌ 当前未能进入AP配网模式，请查看前面的AP启动日志");
+            }
         }
         // 注意：AP配网模式下不进入Deep-sleep，保持Web服务器运行
         return;
