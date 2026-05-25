@@ -128,13 +128,13 @@ cloud_server/mongodb/restore   # 预留恢复目录
 # 1. 上传代码到服务器
 cd /opt
 sudo git clone <your-repo> esp32-cloud
-cd esp32-cloud/cloud_server
+cd /opt/esp32-cloud/cloud_server
 
 # 2. 使用Docker部署（推荐）
 # 注意：使用 docker compose（无连字符），这是新版本Docker的标准命令
 
 # 首次部署或更新代码后：
-cd /opt/cloud_server  # 或你的项目路径
+cd /opt/esp32-cloud/cloud_server  # 或 <your-project>/cloud_server
 git pull  # 拉取最新代码
 docker compose build --no-cache  # 重新构建镜像
 docker compose up -d --force-recreate  # 强制重新创建容器
@@ -198,7 +198,7 @@ sudo ufw enable
 
 4. **说明**：
    - 设备端已改为 `http_update.h` 的 **HTTP 拉取**模式，不再依赖旧的 MQTT 长连接链路。
-   - 服务器地址/端口在 `http_update.h` 中通过 `CLOUD_API_HOST/CLOUD_API_PORT` 配置。
+   - **必改项**：部署到新服务器时，必须把 `http_update.h` 中的 `CLOUD_API_HOST/CLOUD_API_PORT` 改为新服务器公网 IP/域名和端口；当前固件默认端口为 `8080`。否则 ESP32 会继续请求旧服务器。
 
 5. **分区表配置**：
 
@@ -218,7 +218,7 @@ spiffs,   data, spiffs,  0x250000, 0x1B0000,
 
 ### 5. WiFi配网
 
-设备支持三种WiFi连接方式：
+设备支持两种WiFi配网方式：
 
 #### 方式1：AP配网模式（首次使用或WiFi未配置）
 
@@ -248,10 +248,6 @@ spiffs,   data, spiffs,  0x250000, 0x1B0000,
 - 如果设备从Deep-sleep被按键唤醒，可以在唤醒后继续按住按键3秒
 - 如果设备是定时唤醒或复位唤醒，需要在上电后立即按住GPIO0按键3秒
 
-#### 方式3：代码配置（开发测试）
-
-在 `wifi_config.h` 中可以设置默认WiFi（仅用于开发测试）。
-
 ### 6. 测试系统
 
 1. **查看ESP32串口输出**：
@@ -268,7 +264,8 @@ spiffs,   data, spiffs,  0x250000, 0x1B0000,
 ```
 
 2. **访问Web界面**：
-   - 打开浏览器访问：`http://你的服务器IP` 或 `http://your-domain.com`
+   - 打开浏览器访问：`http://你的服务器IP:8080` 或 `http://your-domain.com:8080`
+   - 如果你额外配置了 80/443 反向代理，才可以省略 `:8080`
    - 首次访问需要注册/登录
 
 3. **添加设备**：
