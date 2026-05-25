@@ -421,10 +421,19 @@ DeviceStatusResponse queryDeviceStatus() {
     http.setTimeout(CLOUD_API_TIMEOUT_MS);
     http.addHeader("Content-Type", "application/json");
     
-    StaticJsonDocument<256> doc;
+    StaticJsonDocument<512> doc;
     doc["deviceId"] = deviceId;
+    doc["ip"] = WiFi.localIP().toString();
+    doc["rssi"] = WiFi.RSSI();
+    doc["uptime_ms"] = (uint32_t)millis();
+    doc["freeHeap"] = ESP.getFreeHeap();
     String requestBody;
     serializeJson(doc, requestBody);
+    Serial.printf("   上报状态: ip=%s, rssi=%d dBm, uptime=%lu ms, freeHeap=%lu\n",
+                  WiFi.localIP().toString().c_str(),
+                  WiFi.RSSI(),
+                  (unsigned long)millis(),
+                  (unsigned long)ESP.getFreeHeap());
     
     int httpCode = http.POST(requestBody);
     

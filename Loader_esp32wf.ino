@@ -26,6 +26,26 @@ bool wifiConfigured = false;  // WiFi配网状态标志
 
 /* ------------------------ 用户自定义：长按进入配网 ------------------------ */
 #define WIFI_RECONFIG_HOLD_MS 3000  // 长按GPIO0进入"清除WiFi并AP配网"的阈值（ms）
+#define WAKE_DEBUG_SERIAL_DELAY_MS 500  // 调试期给串口监视器留一点启动输出时间
+
+RTC_DATA_ATTR uint32_t g_deepSleepBootCount = 0;
+
+static const char* wakeCauseName(esp_sleep_wakeup_cause_t cause) {
+  switch (cause) {
+    case ESP_SLEEP_WAKEUP_TIMER:
+      return "TIMER";
+    case ESP_SLEEP_WAKEUP_GPIO:
+      return "GPIO";
+    case ESP_SLEEP_WAKEUP_EXT0:
+      return "EXT0";
+    case ESP_SLEEP_WAKEUP_EXT1:
+      return "EXT1";
+    case ESP_SLEEP_WAKEUP_UNDEFINED:
+      return "POWERON_OR_RESET";
+    default:
+      return "OTHER";
+  }
+}
 
 /**
  * 判断是否为正常唤醒原因（按键/定时器/GPIO等）
@@ -55,9 +75,11 @@ static bool isWakeKeyHeldLow(uint32_t holdMs) {
     return false;
   }
 
+  Serial.printf("🔎 GPIO0为低电平，开始判断是否持续按住 %lu ms...\n", (unsigned long)holdMs);
   uint32_t start = millis();
   while ((millis() - start) < holdMs) {
     if (gpio_get_level(wakeupPin) != 0) {
+      Serial.println("ℹ️ GPIO0已松开：按键唤醒成立，但不是长按配网");
       return false;  // 中途松开
     }
     delay(10);
@@ -74,12 +96,34 @@ static void showProvisioningCodeOnScreen() {
   displayDeviceCode();
 }
 
+static void printWakeDebug(esp_sleep_wakeup_cause_t cause) {
+  pinMode((int)WAKEUP_GPIO, INPUT_PULLUP);
+  gpio_pullup_en(WAKEUP_GPIO);
+  gpio_pulldown_dis(WAKEUP_GPIO);
+  int wakePinLevel = gpio_get_level(WAKEUP_GPIO);
+
+  Serial.println("---------- WAKE DEBUG ----------");
+  Serial.printf("原因: %s (%d)\n", wakeCauseName(cause), (int)cause);
+  Serial.printf("GPIO0当前电平: %d (%s)\n", wakePinLevel, wakePinLevel == 0 ? "LOW/按下" : "HIGH/释放");
+  Serial.printf("Deep-sleep启动计数: %lu\n", (unsigned long)g_deepSleepBootCount);
+
+  if (cause == ESP_SLEEP_WAKEUP_GPIO || cause == ESP_SLEEP_WAKEUP_EXT0 || cause == ESP_SLEEP_WAKEUP_EXT1) {
+    Serial.println("✅ 检测到按键/外部信号唤醒，准备连接WiFi并检查云端更新");
+  } else if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+    Serial.println("✅ 检测到定时唤醒，准备连接WiFi并检查云端更新");
+  } else {
+    Serial.println("ℹ️ 本次为上电/复位启动");
+  }
+  Serial.println("--------------------------------");
+  Serial.flush();
+}
+
 /* Entry point ----------------------------------------------------------------*/
 void setup() 
 {
     // Serial port initialization
     Serial.begin(115200);
-    delay(50);
+    delay(WAKE_DEBUG_SERIAL_DELAY_MS);
     
     // 打印启动信息
     Serial.println();
@@ -93,7 +137,11 @@ void setup()
 
     // 读取唤醒原因
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    Serial.printf("⏰ wakeup cause = %d\n", (int)cause);
+    if (isNormalWakeCause(cause)) {
+        g_deepSleepBootCount++;
+    }
+    printWakeDebug(cause);
+    Serial.printf("⏰ wakeup cause = %s (%d)\n", wakeCauseName(cause), (int)cause);
 
     // 先读一次"是否已配网"（不改变现有逻辑，仅用于门控）
     bool alreadyConfigured = checkWiFiConfigured();

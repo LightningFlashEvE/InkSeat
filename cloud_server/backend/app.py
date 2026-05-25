@@ -524,6 +524,10 @@ def get_devices_status():
                     sleep_window_ms = 13 * 60 * 60 * 1000
                     device_info['sleeping'] = (not device_info['online']) and (current_time - last_seen < sleep_window_ms)
                     device_info['lastSeen'] = last_seen
+                    device_info['ip'] = status.get('ip')
+                    device_info['rssi'] = status.get('rssi')
+                    device_info['uptime_ms'] = status.get('uptime_ms')
+                    device_info['freeHeap'] = status.get('freeHeap')
             
             devices.append(device_info)
         
@@ -557,14 +561,25 @@ def device_status():
         if not re.match(r'^[0-9A-F]{6}$|^[0-9A-F]{12}$', clean_id):
             return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
         
-        # 更新设备最后活动时间
+        telemetry = {
+            'lastSeen': int(time.time() * 1000),
+            'updatedAt': datetime.utcnow()
+        }
+
+        ip = data.get('ip')
+        if isinstance(ip, str) and ip.strip():
+            telemetry['ip'] = ip.strip()
+
+        for field in ('rssi', 'uptime_ms', 'freeHeap'):
+            value = data.get(field)
+            if isinstance(value, (int, float)):
+                telemetry[field] = int(value)
+
+        # 更新设备最后活动时间和调试遥测
         if device_status_collection is not None:
             device_status_collection.update_one(
                 {'deviceId': clean_id},
-                {'$set': {
-                    'lastSeen': int(time.time() * 1000),
-                    'updatedAt': datetime.utcnow()
-                }},
+                {'$set': telemetry},
                 upsert=True
             )
         

@@ -19,7 +19,7 @@
 1. 用户在 Web 页面处理图片并点击 **“发布”**（上传到云端）
 2. 云端将最新 EPD 数据持久化保存：`cloud_server/backend/data/epd/<deviceId>/latest.txt`，并递增 `devices.imageVersion`
 3. 设备在按键/定时唤醒后执行一次性流程：
-   - `POST /api/device/status` 获取 `claimed/imageVersion/imageUrl`
+   - `POST /api/device/status` 上报 `deviceId/ip/rssi/uptime_ms/freeHeap`，并获取 `claimed/imageVersion/imageUrl`
    - 若 `imageVersion > NVS(imgVer)`：`GET imageUrl` 流式下载到 SPIFFS 临时文件 → 刷新墨水屏 → 写入 NVS 新版本 → Deep-sleep
    - 若版本一致：直接 Deep-sleep
    - 若未绑定：显示设备码/配对码提示 → Deep-sleep
@@ -58,6 +58,7 @@
 - **建议硬件**：GPIO0 通过 **10k 上拉到 3.3V**，按键按下接地
 - 仅使用内部上拉也可工作，但抗干扰不如外部上拉稳定
 - **长按功能**：长按GPIO0 **3秒**可清除WiFi配置并进入AP配网模式（用于重新配网）
+- 调试期串口启动后会打印 `WAKE DEBUG`，包含唤醒原因、GPIO0当前电平和 Deep-sleep 唤醒计数。
 
 ### 系统保留引脚（ESP32-C3-WROOM-02U-N4）
 
@@ -409,6 +410,7 @@ spiffs,   data, spiffs,  0x250000, 0x1B0000,
 - 唤醒后执行一次性 HTTP 拉取流程，完成后立即回到 Deep-sleep
 - 墨水屏断电仍保持画面，因此无需常供电刷新
 - 墨水屏 `BUSY` 等待带超时保护：初始化/上电/断电阶段默认 10 秒，显示刷新阶段默认 180 秒。超时会打印错误并退出当前显示流程，避免新板调试时因屏幕异常永久卡死。
+- 每次设备查询 `/api/device/status` 时会同步上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`，后端在设备列表中返回这些字段供前端显示。
 
 ## 扩展功能
 
