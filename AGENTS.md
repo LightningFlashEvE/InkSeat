@@ -146,12 +146,14 @@ docker compose logs -f backend   # 查看后端日志
   -> prepareUpdateDecisionOnce()（只执行一次）
      -> POST /api/device/status（上报 ip/rssi/uptime_ms/freeHeap）-> 版本比较 -> 设置 g_updateNeeded
      -> HTTP_UPDATE__loop()
-     -> 若 g_updateNeeded：流式下载到 SPIFFS -> 刷新 EPD -> 保存版本
+     -> 若 g_updateNeeded：流式下载到 SPIFFS -> 刷新 EPD -> 刷新成功后保存版本
      -> enterDeepSleep()
 ```
 
 ### 流式下载到 SPIFFS
 图片数据（384KB）不能全部放入 RAM，必须用 512 字节缓冲区流式写入 SPIFFS，再从 SPIFFS 读取传给 EPD 驱动。
+
+本地 `imgVer` 只能在 EPD 刷新成功后写入。下载成功但 BUSY 超时、文件异常、`EPD_dispLoad` 未设置或显示失败时，不得保存新版本号；这样下次唤醒仍会重试同一云端版本。
 
 ### 长按检测（GPIO0 复用）
 GPIO0 同时作为唤醒键和长按配网入口。检测逻辑：从函数入口开始就必须是低电平，中途松开则返回 false。

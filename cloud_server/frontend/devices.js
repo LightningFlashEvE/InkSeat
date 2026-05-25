@@ -190,9 +190,30 @@ function renderDevices() {
     devices.forEach(device => {
         const status = deviceStatus[device.id] || {};
         const isSleeping = status.sleeping === true;  // 明确检查是否为true
-        // 如果设备处于睡眠状态，直接使用后端返回的online状态（后端已正确处理）
-        // 否则检查lastSeen时间
-        const isOnline = isSleeping ? (status.online === true) : (status.online === true && (Date.now() - (status.lastSeen || 0) < 60000));
+        // 在线/睡眠窗口由后端统一计算，前端只负责展示，避免与后端时间窗口不一致。
+        const isOnline = status.online === true;
+        const hasTelemetry = !!(status.ip || status.rssi || status.uptime_ms || status.freeHeap);
+        const telemetryHtml = hasTelemetry ? `
+                    <div class="device-info-item">
+                        <span class="device-info-label">IP地址</span>
+                        <span class="device-info-value">${status.ip || '-'}</span>
+                    </div>
+
+                    <div class="device-info-item">
+                        <span class="device-info-label">WiFi信号</span>
+                        <span class="device-info-value">${getSignalBars(status.rssi)}</span>
+                    </div>
+
+                    <div class="device-info-item">
+                        <span class="device-info-label">运行时间</span>
+                        <span class="device-info-value">${formatUptime(status.uptime_ms)}</span>
+                    </div>
+
+                    <div class="device-info-item">
+                        <span class="device-info-label">剩余内存</span>
+                        <span class="device-info-value">${formatMemory(status.freeHeap)}</span>
+                    </div>
+                ` : '';
         
         // 调试日志（如需开启，可在此添加受控开关；不要保留硬编码设备ID）
         
@@ -237,35 +258,20 @@ function renderDevices() {
                         <span class="device-info-label">状态</span>
                         <span class="device-info-value" style="color: #ffc107;">💤 Deep-sleep 模式</span>
                     </div>
-                    <div class="device-info-item">
-                        <span class="device-info-label">说明</span>
-                        <span class="device-info-value" style="color: #666; font-size: 0.85em;">按键或定时唤醒后自动更新</span>
-                    </div>
+                    ${telemetryHtml}
                 ` : isOnline ? `
-                    <div class="device-info-item">
-                        <span class="device-info-label">IP地址</span>
-                        <span class="device-info-value">${status.ip || '-'}</span>
-                    </div>
-                    
-                    <div class="device-info-item">
-                        <span class="device-info-label">WiFi信号</span>
-                        <span class="device-info-value">${getSignalBars(status.rssi)}</span>
-                    </div>
-                    
-                    <div class="device-info-item">
-                        <span class="device-info-label">运行时间</span>
-                        <span class="device-info-value">${formatUptime(status.uptime_ms)}</span>
-                    </div>
-                    
-                    <div class="device-info-item">
-                        <span class="device-info-label">剩余内存</span>
-                        <span class="device-info-value">${formatMemory(status.freeHeap)}</span>
-                    </div>
+                    ${telemetryHtml || `
+                        <div class="device-info-item">
+                            <span class="device-info-label">状态</span>
+                            <span class="device-info-value">等待设备上报信息</span>
+                        </div>
+                    `}
                 ` : `
                     <div class="device-info-item">
                         <span class="device-info-label">状态</span>
                         <span class="device-info-value" style="color: #dc3545;">设备离线</span>
                     </div>
+                    ${telemetryHtml}
                 `}
                 
                 <div class="device-info-item">

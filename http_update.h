@@ -460,7 +460,7 @@ DeviceStatusResponse queryDeviceStatus() {
             }
             
             Serial.printf("   绑定状态: %s\n", result.claimed ? "已绑定" : "未绑定");
-            Serial.printf("   图片版本: %d\n", result.imageVersion);
+            Serial.printf("   图片版本: %lld\n", result.imageVersion);
             if (result.imageUrl.length() > 0) {
                 Serial.printf("   图片URL: %s\n", result.imageUrl.c_str());
             }
@@ -621,12 +621,12 @@ bool downloadImageToFlash(const String& imageUrl) {
 /**
  * 显示下载的图片（从Flash读取并刷新EPD）
  */
-void displayDownloadedImage() {
+bool displayDownloadedImage() {
     Serial.println("📺 开始显示图片...");
     
     if (!SPIFFS.exists(FLASH_TEMP_FILE)) {
         Serial.println("❌ 临时文件不存在");
-        return;
+        return false;
     }
 
     // 设备端最小防护：显示前再做一次长度检查，避免 EPD 驱动因数据异常 busy 卡死
@@ -635,7 +635,7 @@ void displayDownloadedImage() {
         if (!f) {
             Serial.println("❌ 无法打开临时文件");
             SPIFFS.remove(FLASH_TEMP_FILE);
-            return;
+            return false;
         }
         size_t sz = f.size();
         f.close();
@@ -643,7 +643,7 @@ void displayDownloadedImage() {
             Serial.printf("❌ 临时文件大小异常：期望 %d，实际 %d；跳过刷新并删除临时文件\n",
                           EPD_EXPECTED_CHARS, (int)sz);
             SPIFFS.remove(FLASH_TEMP_FILE);
-            return;
+            return false;
         }
     }
     
@@ -659,15 +659,20 @@ void displayDownloadedImage() {
         EPD_dispLoad();
         if (EPD_7in3E_LastBusyTimeout()) {
             Serial.println("❌ 图片显示未正常完成，请检查BUSY线、屏幕供电和排线");
+            clearFlashTempFile();
+            return false;
         } else {
             Serial.println("✅ 图片显示完成");
         }
     } else {
         Serial.println("❌ EPD_dispLoad未设置");
+        clearFlashTempFile();
+        return false;
     }
     
     // 清除临时文件
     clearFlashTempFile();
+    return true;
 }
 
 /* ============================================================================
@@ -803,7 +808,7 @@ void prepareUpdateDecisionOnce() {
     // 2. 读取本地状态
     deviceClaimed = loadClaimedStatus();
     localImageVersion = loadImageVersion();
-    Serial.printf("📋 本地状态: claimed=%s, imageVersion=%d\n", 
+    Serial.printf("📋 本地状态: claimed=%s, imageVersion=%lld\n",
                   deviceClaimed ? "是" : "否", localImageVersion);
     
     // 3. 初始化Flash存储
@@ -941,10 +946,13 @@ void HTTP_UPDATE__loop() {
             Serial.println("⚠️  更新参数不完整，跳过更新");
         } else {
             if (downloadImageToFlash(g_targetImageUrl)) {
-                displayDownloadedImage();
-                saveImageVersion(g_targetImageVersion);
-                localImageVersion = g_targetImageVersion;
-                Serial.printf("✅ 已更新到版本: %d\n", localImageVersion);
+                if (displayDownloadedImage()) {
+                    saveImageVersion(g_targetImageVersion);
+                    localImageVersion = g_targetImageVersion;
+                    Serial.printf("✅ 已更新到版本: %lld\n", localImageVersion);
+                } else {
+                    Serial.println("❌ 显示失败，保留本地版本号，下次唤醒继续重试该图片");
+                }
             } else {
                 Serial.println("❌ 下载失败，本次不再重试，直接Deep-sleep");
             }

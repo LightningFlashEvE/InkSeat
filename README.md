@@ -20,7 +20,7 @@
 2. 云端将最新 EPD 数据持久化保存：`cloud_server/backend/data/epd/<deviceId>/latest.txt`，并递增 `devices.imageVersion`
 3. 设备在按键/定时唤醒后执行一次性流程：
    - `POST /api/device/status` 上报 `deviceId/ip/rssi/uptime_ms/freeHeap`，并获取 `claimed/imageVersion/imageUrl`
-   - 若 `imageVersion > NVS(imgVer)`：`GET imageUrl` 流式下载到 SPIFFS 临时文件 → 刷新墨水屏 → 写入 NVS 新版本 → Deep-sleep
+   - 若 `imageVersion > NVS(imgVer)`：`GET imageUrl` 流式下载到 SPIFFS 临时文件 → 刷新墨水屏 → 刷新成功后写入 NVS 新版本 → Deep-sleep
    - 若版本一致：直接 Deep-sleep
    - 若未绑定：显示设备码/配对码提示 → Deep-sleep
 
@@ -411,6 +411,7 @@ spiffs,   data, spiffs,  0x250000, 0x1B0000,
 - 墨水屏断电仍保持画面，因此无需常供电刷新
 - 墨水屏 `BUSY` 等待带超时保护：初始化/上电/断电阶段默认 10 秒，显示刷新阶段默认 180 秒。超时会打印错误并退出当前显示流程，避免新板调试时因屏幕异常永久卡死。
 - 每次设备查询 `/api/device/status` 时会同步上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`，后端在设备列表中返回这些字段供前端显示。
+- 只有图片实际刷新完成后才保存本地 `imgVer`；如果下载成功但显示失败，下次唤醒会继续重试同一版本。
 
 ## 扩展功能
 
