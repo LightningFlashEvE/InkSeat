@@ -421,19 +421,47 @@ DeviceStatusResponse queryDeviceStatus() {
     http.setTimeout(CLOUD_API_TIMEOUT_MS);
     http.addHeader("Content-Type", "application/json");
     
-    StaticJsonDocument<512> doc;
+    esp_sleep_wakeup_cause_t wakeupCause = esp_sleep_get_wakeup_cause();
+    const char* wakeType = "other";
+    const char* wakeCauseText = "OTHER";
+    switch (wakeupCause) {
+        case ESP_SLEEP_WAKEUP_TIMER:
+            wakeType = "auto";
+            wakeCauseText = "TIMER";
+            break;
+        case ESP_SLEEP_WAKEUP_GPIO:
+        case ESP_SLEEP_WAKEUP_EXT0:
+        case ESP_SLEEP_WAKEUP_EXT1:
+            wakeType = "manual";
+            wakeCauseText = "GPIO";
+            break;
+        case ESP_SLEEP_WAKEUP_UNDEFINED:
+            wakeType = "reset";
+            wakeCauseText = "POWERON_OR_RESET";
+            break;
+        default:
+            wakeType = "other";
+            wakeCauseText = "OTHER";
+            break;
+    }
+
+    StaticJsonDocument<768> doc;
     doc["deviceId"] = deviceId;
     doc["ip"] = WiFi.localIP().toString();
     doc["rssi"] = WiFi.RSSI();
     doc["uptime_ms"] = (uint32_t)millis();
     doc["freeHeap"] = ESP.getFreeHeap();
+    doc["wakeType"] = wakeType;
+    doc["wakeCause"] = wakeCauseText;
     String requestBody;
     serializeJson(doc, requestBody);
-    Serial.printf("   上报状态: ip=%s, rssi=%d dBm, uptime=%lu ms, freeHeap=%lu\n",
+    Serial.printf("   上报状态: ip=%s, rssi=%d dBm, uptime=%lu ms, freeHeap=%lu, wakeType=%s, wakeCause=%s\n",
                   WiFi.localIP().toString().c_str(),
                   WiFi.RSSI(),
                   (unsigned long)millis(),
-                  (unsigned long)ESP.getFreeHeap());
+                  (unsigned long)ESP.getFreeHeap(),
+                  wakeType,
+                  wakeCauseText);
     
     int httpCode = http.POST(requestBody);
     

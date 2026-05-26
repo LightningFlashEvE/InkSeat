@@ -145,7 +145,7 @@ docker compose logs -f backend   # 查看后端日志
   -> 正常唤醒且已有 WiFi 配置但连接失败：保留配置，直接 Deep-sleep，下次唤醒重试
   -> WiFi 连接
   -> prepareUpdateDecisionOnce()（只执行一次）
-     -> POST /api/device/status（上报 ip/rssi/uptime_ms/freeHeap）-> 版本比较 -> 设置 g_updateNeeded
+     -> POST /api/device/status（上报 ip/rssi/uptime_ms/freeHeap/wakeType/wakeCause）-> 版本比较 -> 设置 g_updateNeeded
      -> HTTP_UPDATE__loop()
      -> 若 g_updateNeeded：流式下载到 SPIFFS -> 刷新 EPD -> 刷新成功后保存版本
      -> enterDeepSleep()
@@ -163,7 +163,7 @@ GPIO0 同时作为唤醒键和长按配网入口。检测逻辑：从函数入�
 基于 MAC 地址，`DEVICE_ID_MODE=2`（默认后 6 位，如 `B6DA20`）。AP 热点名称：`EPD-XXXXXX`。读取 MAC 前必须先初始化 WiFi（`WIFI_AP_STA` 模式），否则返回全零。
 
 ### 设备状态遥测
-固件每次调用 `/api/device/status` 时除 `deviceId` 外，还会上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`。后端保存到 `device_status_collection`，并由 `/api/devices` 返回给前端设备卡片显示。修改字段名时必须同步 `http_update.h`、`cloud_server/backend/app.py` 和 `cloud_server/frontend/devices.js`。
+固件每次调用 `/api/device/status` 时除 `deviceId` 外，还会上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`、`wakeType`、`wakeCause`。后端保存到 `device_status_collection`，并由 `/api/devices` 返回给前端设备卡片显示。`wakeType=manual` 更新 `lastManualWake`，`wakeType=auto` 更新 `lastAutoWake`。修改字段名时必须同步 `http_update.h`、`cloud_server/backend/app.py` 和 `cloud_server/frontend/devices.js`。
 
 ### 未配网开机显示
 当设备没有本地 WiFi 配置时，进入 AP 配网模式后会立即在墨水屏上显示设备码，便于用户在网页绑定设备时核对。该显示动作只在 `setup()` 中执行一次，不放入 `loop()`，避免 AP 模式下重复刷新墨水屏。

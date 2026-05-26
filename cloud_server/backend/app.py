@@ -544,6 +544,10 @@ def get_devices_status():
                     sleep_window_ms = 13 * 60 * 60 * 1000
                     device_info['sleeping'] = (not device_info['online']) and (current_time - last_seen < sleep_window_ms)
                     device_info['lastSeen'] = last_seen
+                    device_info['lastWakeType'] = status.get('lastWakeType')
+                    device_info['lastWakeCause'] = status.get('lastWakeCause')
+                    device_info['lastManualWake'] = status.get('lastManualWake')
+                    device_info['lastAutoWake'] = status.get('lastAutoWake')
                     device_info['ip'] = status.get('ip')
                     device_info['remoteIp'] = status.get('remoteIp')
                     device_info['rssi'] = status.get('rssi')
@@ -586,6 +590,7 @@ def device_status():
             'lastSeen': int(time.time() * 1000),
             'updatedAt': datetime.utcnow()
         }
+        now_ms = telemetry['lastSeen']
 
         forwarded_for = request.headers.get('X-Forwarded-For', '')
         if forwarded_for:
@@ -602,13 +607,26 @@ def device_status():
             if isinstance(value, (int, float)):
                 telemetry[field] = int(value)
 
+        wake_type = (data.get('wakeType') or '').strip().lower()
+        wake_cause = (data.get('wakeCause') or '').strip()
+        if wake_type in ('manual', 'auto', 'reset', 'other'):
+            telemetry['lastWakeType'] = wake_type
+            if wake_type == 'manual':
+                telemetry['lastManualWake'] = now_ms
+            elif wake_type == 'auto':
+                telemetry['lastAutoWake'] = now_ms
+        if wake_cause:
+            telemetry['lastWakeCause'] = wake_cause
+
         print(
             f"📡 设备 {clean_id} 上报: "
             f"ip={telemetry.get('ip', '-')}, "
             f"remoteIp={telemetry.get('remoteIp', '-')}, "
             f"rssi={telemetry.get('rssi', '-')}, "
             f"uptime_ms={telemetry.get('uptime_ms', '-')}, "
-            f"freeHeap={telemetry.get('freeHeap', '-')}"
+            f"freeHeap={telemetry.get('freeHeap', '-')}, "
+            f"wakeType={telemetry.get('lastWakeType', '-')}, "
+            f"wakeCause={telemetry.get('lastWakeCause', '-')}"
         )
 
         # 更新设备最后活动时间和调试遥测

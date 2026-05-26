@@ -192,12 +192,31 @@ function renderDevices() {
         const isSleeping = status.sleeping === true;  // 明确检查是否为true
         // 在线/睡眠窗口由后端统一计算，前端只负责展示，避免与后端时间窗口不一致。
         const isOnline = status.online === true;
-        const hasTelemetry = !!(status.lastSeen || status.ip || status.remoteIp || status.rssi !== undefined || status.uptime_ms !== undefined || status.freeHeap !== undefined);
+        const hasTelemetry = !!(
+            status.lastSeen ||
+            status.lastManualWake ||
+            status.lastAutoWake ||
+            status.ip ||
+            status.remoteIp ||
+            status.rssi !== undefined ||
+            status.uptime_ms !== undefined ||
+            status.freeHeap !== undefined
+        );
         const ipText = status.ip || (status.remoteIp ? `${status.remoteIp}（来源）` : '未上报');
         const telemetryHtml = hasTelemetry ? `
                     <div class="device-info-item">
                         <span class="device-info-label">最后唤醒</span>
-                        <span class="device-info-value">${formatDateTime(status.lastSeen)}</span>
+                        <span class="device-info-value">${formatWakeSummary(status)}</span>
+                    </div>
+
+                    <div class="device-info-item">
+                        <span class="device-info-label">手动唤醒</span>
+                        <span class="device-info-value">${formatDateTime(status.lastManualWake)}</span>
+                    </div>
+
+                    <div class="device-info-item">
+                        <span class="device-info-label">自动唤醒</span>
+                        <span class="device-info-value">${formatDateTime(status.lastAutoWake)}</span>
                     </div>
 
                     <div class="device-info-item">
@@ -354,6 +373,10 @@ async function pollDeviceStatus() {
                         rssi: device.rssi,
                         ip: device.ip,
                         remoteIp: device.remoteIp,
+                        lastWakeType: device.lastWakeType,
+                        lastWakeCause: device.lastWakeCause,
+                        lastManualWake: device.lastManualWake,
+                        lastAutoWake: device.lastAutoWake,
                         uptime_ms: device.uptime_ms,
                         freeHeap: device.freeHeap,
                         lastSeen: device.lastSeen
@@ -379,6 +402,10 @@ async function pollDeviceStatus() {
                         oldStatus.rssi !== newStatus.rssi ||
                         oldStatus.ip !== newStatus.ip ||
                         oldStatus.remoteIp !== newStatus.remoteIp ||
+                        oldStatus.lastWakeType !== newStatus.lastWakeType ||
+                        oldStatus.lastWakeCause !== newStatus.lastWakeCause ||
+                        oldStatus.lastManualWake !== newStatus.lastManualWake ||
+                        oldStatus.lastAutoWake !== newStatus.lastAutoWake ||
                         oldStatus.uptime_ms !== newStatus.uptime_ms ||
                         oldStatus.freeHeap !== newStatus.freeHeap) {
                         hasChanges = true;
@@ -462,6 +489,19 @@ function formatDate(timestamp) {
 function formatDateTime(timestamp) {
     if (!timestamp) return '未上报';
     return formatDate(timestamp);
+}
+
+function formatWakeSummary(status) {
+    if (!status.lastSeen) return '未上报';
+
+    const typeLabels = {
+        manual: '手动',
+        auto: '自动',
+        reset: '上电/复位',
+        other: '其他'
+    };
+    const typeText = typeLabels[status.lastWakeType] || '未知';
+    return `${formatDate(status.lastSeen)}（${typeText}）`;
 }
 
 // 处理回车键
