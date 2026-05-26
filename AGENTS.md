@@ -28,14 +28,15 @@
 Loader_esp32wf/
 ├── Loader_esp32wf.ino      # 主程序入口（setup/loop）
 ├── http_update.h           # HTTP 拉取更新核心逻辑（Deep-sleep 架构）
-├── wifi_config.h           # WiFi 配网（AP 热点 + Web 配网页面）
+├── wifi_config.h           # WiFi 配网（AP 热点 + Captive Portal + Web 配网页面）
 ├── DEV_Config.h/cpp        # 硬件引脚定义与 SPI 初始化
 ├── epd.h                   # 墨水屏驱动接口（型号分发）
 ├── epd7in3.h               # 7.3寸 E6 驱动适配层
 ├── EPD_7in3e.h/cpp         # 墨水屏底层驱动（Waveshare 原版）
 ├── GUI_Paint.h/cpp         # GUI 绘制库（文字/图形）
+├── qrcode.h / qrcode.c     # 内置二维码编码器（AP 配网二维码）
 ├── buff.h                  # 图像缓冲区辅助
-├── fonts.h / font12.cpp / font24.cpp  # 字库
+├── fonts.h / font12.cpp / font24.cpp / font12CN.c / fontNum.c  # ASCII/中文/数字字库
 ├── Debug.h                 # 调试宏
 ├── partitions.csv          # 自定义 Flash 分区表（必须配套烧录）
 ├── README.md               # 用户文档
@@ -54,7 +55,7 @@ Loader_esp32wf/
 | 云端 IP/端口 | `http_update.h` | `CLOUD_API_HOST` / `CLOUD_API_PORT` |
 | Deep-sleep 间隔 | `http_update.h` | `DEEP_SLEEP_INTERVAL_HOURS`（默认 12h） |
 | 设备码模式 | `http_update.h` | `DEVICE_ID_MODE`（默认 2=后6位） |
-| 长按配网阈值 | `Loader_esp32wf.ino` | `WIFI_RECONFIG_HOLD_MS`（默认 3000ms） |
+| 长按配网阈值 | `Loader_esp32wf.ino` | `WIFI_RECONFIG_HOLD_MS`（冷启动默认 3000ms）/ `WIFI_RECONFIG_POST_WAKE_CONFIRM_MS`（GPIO唤醒后默认 1200ms） |
 | MongoDB 容器/数据 | `docker-compose.yml` / `.env` | `mongodb` 服务、`MONGO_INITDB_ROOT_*`、`mongodb/data` |
 
 ## 3. 快速定位
@@ -137,11 +138,11 @@ docker compose logs -f backend   # 查看后端日志
 ### 一次性状态机（唤醒周期）
 ```
 唤醒
-  -> 检测长按 3s -> 是：进入 AP 配网，屏幕显示设备码，不睡眠
+  -> 检测长按 3s -> 是：进入 AP 配网，屏幕显示二维码/热点名/设备码/192.168.4.1，不睡眠
   -> 判断唤醒原因 -> 非正常唤醒且已配网：连接WiFi查询云端
      -> 云端 claimed=true：直接 Deep-sleep
-     -> 云端 claimed=false：显示设备码 -> Deep-sleep
-  -> 判断唤醒原因 -> 正常唤醒（按键/定时）且未配网：进入 AP 配网并显示设备码
+     -> 云端 claimed=false：显示设备码和云端配置网页二维码 -> Deep-sleep
+  -> 判断唤醒原因 -> 正常唤醒（按键/定时）且未配网：进入 AP 配网并显示二维码/热点名/设备码/192.168.4.1
   -> 正常唤醒且已有 WiFi 配置但连接失败：保留配置，直接 Deep-sleep，下次唤醒重试
   -> WiFi 连接
   -> prepareUpdateDecisionOnce()（只执行一次）
@@ -158,15 +159,19 @@ docker compose logs -f backend   # 查看后端日志
 
 ### 长按检测（GPIO0 复用）
 GPIO0 同时作为唤醒键和长按配网入口。检测逻辑：从函数入口开始就必须是低电平，中途松开则返回 false。
+如果本次是 GPIO 唤醒，固件会把“唤醒按下”视为重新配网动作的一部分，因此只要求在启动后继续保持低电平一个较短确认窗口（默认 `1200ms`）；冷启动/复位场景仍使用 `WIFI_RECONFIG_HOLD_MS`（默认 `3000ms`）。
 
 ### 设备码生成
 基于 MAC 地址，`DEVICE_ID_MODE=2`（默认后 6 位，如 `B6DA20`）。AP 热点名称：`EPD-XXXXXX`。读取 MAC 前必须先初始化 WiFi（`WIFI_AP_STA` 模式），否则返回全零。
+
+### AP 配网二维码与 Captive Portal
+AP 配网模式下使用开放热点 `EPD-XXXXXX`。墨水屏显示 WiFi 二维码、热点名、设备码和备用入口 `192.168.4.1`；`wifi_config.h` 同时启动 `DNSServer`，将常见探测路径（`/hotspot-detect.html`、`/generate_204`、`/ncsi.txt` 等）统一返回配网页，以提高 iPhone / Android / Windows 自动弹出配网页的概率。该自动弹出是 best-effort，不能假定 100% 成功，因此屏幕提示中的 `192.168.4.1` 必须始终保留。
 
 ### 设备状态遥测
 固件每次调用 `/api/device/status` 时除 `deviceId` 外，还会上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`、`wakeType`、`wakeCause`。后端保存到 `device_status_collection`，并由 `/api/devices` 返回给前端设备卡片显示。`wakeType=manual` 更新 `lastManualWake`，`wakeType=auto` 更新 `lastAutoWake`。修改字段名时必须同步 `http_update.h`、`cloud_server/backend/app.py` 和 `cloud_server/frontend/devices.js`。
 
 ### 未配网开机显示
-当设备没有本地 WiFi 配置时，进入 AP 配网模式后会立即在墨水屏上显示设备码，便于用户在网页绑定设备时核对。该显示动作只在 `setup()` 中执行一次，不放入 `loop()`，避免 AP 模式下重复刷新墨水屏。
+当设备没有本地 WiFi 配置时，进入 AP 配网模式后会立即在墨水屏上显示 WiFi 二维码、热点名、设备码和 `192.168.4.1`，便于用户直接扫码加入热点或手动打开配网页。该显示动作只在 `setup()` 中执行一次，不放入 `loop()`，避免 AP 模式下重复刷新墨水屏。
 
 ## 9. 常见陷阱
 
@@ -175,6 +180,7 @@ GPIO0 同时作为唤醒键和长按配网入口。检测逻辑：从函数入�
 - **设备唤醒后立刻再次唤醒**：GPIO0 缺少上拉电阻或按键未松开。建议硬件加 10k 上拉到 3.3V。
 - **图片版本不更新**：检查 `/api/device/status` 返回的 `imageVersion` 是否与 NVS 中的 `imgVer` 不一致；只要不一致就应按云端当前图片重新同步。
 - **下载失败（内容长度异常）**：云端图片必须恰好 384000 字节（800x480，4bit 编码，无多余换行符）。
+- **iPhone 未自动弹出配网页**：属于系统 Captive Portal 策略差异，先确认已连接 `EPD-XXXXXX`，再手动打开 `http://192.168.4.1`。
 
 ## 10. 依赖清单
 

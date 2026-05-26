@@ -5,4 +5,6 @@ cloud_server/backend/__pycache__/
 .cursor/
 .sisyphus/
 cloud_server/mongo_backup_esp32.tar.gz
+tools/__pycache__/
+tools/_verify_out/
 nul

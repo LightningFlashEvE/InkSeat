@@ -11,6 +11,7 @@
 
 #include <WiFi.h>
 #include <WebServer.h>
+#include <DNSServer.h>
 #include <Preferences.h>
 #include "esp_wifi.h"
 #include "esp_system.h"
@@ -28,11 +29,15 @@
 
 // 全局变量
 WebServer server(80);
+DNSServer dnsServer;
 extern Preferences preferences;  // 在Loader_esp32wf.ino中定义
 extern bool wifiConfigured;
 bool apModeStarted = false;
 String savedSSID = "";
 String savedPassword = "";
+const byte DNS_PORT = 53;
+String provisioningApSSID = "";
+String provisioningDeviceCode = "";
 
 /**
  * 检查配网状态
@@ -139,6 +144,34 @@ String getDeviceIdForAP() {
     return String(buf);
 }
 
+String escapeWifiQrField(const String& input) {
+    String escaped = "";
+    escaped.reserve(input.length() + 8);
+    for (size_t i = 0; i < input.length(); i++) {
+        char c = input.charAt(i);
+        if (c == '\\' || c == ';' || c == ',' || c == ':') {
+            escaped += '\\';
+        }
+        escaped += c;
+    }
+    return escaped;
+}
+
+String getProvisioningWifiQrPayload() {
+    if (provisioningApSSID.length() == 0) {
+        return "";
+    }
+    return "WIFI:T:nopass;S:" + escapeWifiQrField(provisioningApSSID) + ";;";
+}
+
+String getProvisioningApSSID() {
+    return provisioningApSSID;
+}
+
+String getProvisioningDeviceCode() {
+    return provisioningDeviceCode;
+}
+
 /**
  * 启动AP热点模式
  */
@@ -171,6 +204,8 @@ bool startAPMode() {
     }
     delay(200);
     String apSSID = "EPD-" + deviceCode;
+    provisioningDeviceCode = deviceCode;
+    provisioningApSSID = apSSID;
 
     Serial.printf("   AP名称: %s\n", apSSID.c_str());
     Serial.println("   AP密码: 无密码");
@@ -188,6 +223,8 @@ bool startAPMode() {
 
     if (!apStarted) {
         apModeStarted = false;
+        provisioningDeviceCode = "";
+        provisioningApSSID = "";
         Serial.println("❌ AP热点启动失败");
         Serial.println("   请检查供电、电源稳定性、天线以及串口中的 WiFi 初始化错误日志");
         return false;
@@ -195,11 +232,14 @@ bool startAPMode() {
 
     delay(200);
     IPAddress IP = WiFi.softAPIP();
+    dnsServer.stop();
+    dnsServer.start(DNS_PORT, "*", IP);
     apModeStarted = true;
     Serial.print("   AP IP地址: ");
     Serial.println(IP);
     Serial.printf("   当前WiFi模式: %d\n", static_cast<int>(WiFi.getMode()));
     Serial.printf("   AP信道: %d\n", WiFi.channel());
+    Serial.println("✅ Captive Portal DNS已启动：* -> 192.168.4.1");
     Serial.println("   请连接到此热点，然后访问: http://192.168.4.1");
     return true;
 }
@@ -225,6 +265,7 @@ String getConfigPageHTML() {
     html += ".error { background: #f8d7da; color: #721c24; }";
     html += "</style></head><body>";
     html += "<h1>📶 ESP32 WiFi配网</h1>";
+    html += "<p style='font-size:13px;color:#666;line-height:1.5;'>如果这是iPhone弹出的验证网页，请直接输入家庭WiFi信息。若系统未自动弹出页面，请保持连接当前热点后手动打开 http://192.168.4.1。</p>";
     html += "<form id='wifiForm' onsubmit='return submitConfig(event)'>";
     html += "<div class='form-group'>";
     html += "<label for='ssid'>WiFi名称 (SSID):</label>";
@@ -269,7 +310,29 @@ String getConfigPageHTML() {
  * 处理根路径请求（配网页面）
  */
 void handleRoot() {
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "0");
     server.send(200, "text/html", getConfigPageHTML());
+}
+
+void sendNoCacheHeaders() {
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "0");
+}
+
+void handleCaptivePortal() {
+    sendNoCacheHeaders();
+    server.send(200, "text/html", getConfigPageHTML());
+}
+
+void handleNotFoundCaptivePortal() {
+    if (apModeStarted) {
+        handleCaptivePortal();
+        return;
+    }
+    server.send(404, "text/plain", "Not Found");
 }
 
 /**
@@ -329,11 +392,18 @@ void handleScan() {
  * 初始化Web服务器（AP模式）
  */
 void initConfigServer() {
-    server.on("/", handleRoot);
-    server.on("/config", handleConfig);
-    server.on("/scan", handleScan);
+    server.on("/", HTTP_GET, handleRoot);
+    server.on("/config", HTTP_POST, handleConfig);
+    server.on("/scan", HTTP_GET, handleScan);
+    server.on("/hotspot-detect.html", HTTP_GET, handleCaptivePortal);
+    server.on("/library/test/success.html", HTTP_GET, handleCaptivePortal);
+    server.on("/generate_204", HTTP_GET, handleCaptivePortal);
+    server.on("/gen_204", HTTP_GET, handleCaptivePortal);
+    server.on("/ncsi.txt", HTTP_GET, handleCaptivePortal);
+    server.on("/connecttest.txt", HTTP_GET, handleCaptivePortal);
+    server.onNotFound(handleNotFoundCaptivePortal);
     server.begin();
-    Serial.println("✅ Web配网服务器已启动");
+    Serial.println("✅ Web配网服务器已启动（含Captive Portal）");
 }
 
 /**
@@ -362,7 +432,10 @@ bool connectWiFi() {
     }
     
     if (WiFi.status() == WL_CONNECTED) {
+        dnsServer.stop();
         apModeStarted = false;
+        provisioningApSSID = "";
+        provisioningDeviceCode = "";
         Serial.println("");
         Serial.println("✅ WiFi连接成功");
         Serial.print("   IP地址: ");
@@ -419,6 +492,7 @@ bool initWiFiConfig(bool openApOnSavedWiFiFailure = true) {
  */
 void handleAPMode() {
     if (!wifiConfigured && apModeStarted) {
+        dnsServer.processNextRequest();
         server.handleClient();
     }
 }

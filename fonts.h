@@ -40,9 +40,9 @@
 #define __FONTS_H
 
 
-/* 位图的最大尺寸将基于font24 (17x24) */
-#define MAX_HEIGHT_FONT         41
-#define MAX_WIDTH_FONT          32
+/* 位图最大尺寸：配网粗体字库最大 38×40 */
+#define MAX_HEIGHT_FONT         48
+#define MAX_WIDTH_FONT          48
 #define OFFSET_BITMAP           54
 
 #ifdef __cplusplus
@@ -86,6 +86,10 @@ extern sFONT Font8;
 
 extern cFONT Font12CN;
 extern cFONT Font24CN;
+extern cFONT FontNum;
+extern cFONT Font38CN;
+extern cFONT Font36CN;
+extern cFONT Font20CN;
 // extern const unsigned char Font16_Table[];
 
 #ifdef __cplusplus

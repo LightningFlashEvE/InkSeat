@@ -22,7 +22,7 @@
    - `POST /api/device/status` 上报 `deviceId/ip/rssi/uptime_ms/freeHeap/wakeType/wakeCause`，并获取 `claimed/imageVersion/imageUrl`
    - 若云端图片同步标记 `imageVersion > 0` 且 `imageVersion != NVS(imgVer)`：`GET imageUrl` 流式下载到 SPIFFS 临时文件 → 刷新墨水屏 → 刷新成功后写入 NVS 新版本 → Deep-sleep
    - 若版本一致：直接 Deep-sleep
-   - 若未绑定：显示设备码/配对码提示 → Deep-sleep
+   - 若未绑定：显示设备码和云端配置网页二维码 → Deep-sleep
 
 ## 硬件要求
 
@@ -94,9 +94,12 @@
 ├── epd7in3.h                  # 7.3寸E6驱动适配层
 ├── EPD_7in3e.h/cpp            # 墨水屏驱动
 ├── GUI_Paint.h/cpp            # GUI绘制库
+├── qrcode.h / qrcode.c        # 内置二维码编码器（AP配网二维码）
 ├── fonts.h                    # 字库头文件
 ├── font24.cpp                 # 24像素字体数据
 ├── font12.cpp                 # 12像素字体数据
+├── font12CN.c                 # 中文提示字库（16x16）
+├── fontNum.c                  # 数字/英文混排字库（8x16）
 ├── partitions.csv             # Flash分区表
 └── README.md                  # 本文件
 ```
@@ -216,6 +219,33 @@ spiffs,   data, spiffs,  0x250000, 0x1B0000,
    - 工具 -> Erase Flash -> **All Flash Contents**（首次烧录建议完全擦除）
    - 点击上传
 
+#### Windows 命令行编译（推荐）
+
+如果 Arduino IDE 在中文路径下报：
+
+```text
+Sketch too big
+text section exceeds available space in board
+```
+
+优先不要先怀疑代码本身，先改用仓库自带脚本在 ASCII 临时目录里编译：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1
+```
+
+脚本会自动：
+- 把工程镜像到 `C:\Loader_esp32wf`
+- 固定使用 `ESP32C3 Dev Module` 对应 FQBN
+- 固定使用 `FlashSize=4M`、`FlashMode=dio`、`PartitionScheme=custom`
+- 输出 `.bin/.elf/partitions.csv` 到 `C:\Loader_esp32wf\.build\esp32c3`
+
+如果你需要保留镜像目录用于后续烧录：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
+```
+
 ### 5. WiFi配网
 
 设备支持两种WiFi配网方式：
@@ -224,9 +254,13 @@ spiffs,   data, spiffs,  0x250000, 0x1B0000,
 
 1. 设备启动后，如果未配置WiFi，会自动进入AP模式
 2. 设备会创建一个WiFi热点：`EPD-XXXXXX`（XXXXXX为设备码）
-3. 设备进入 AP 配网模式后，会同步在墨水屏上显示该设备码，便于网页绑定时直接核对
-4. 用手机/电脑连接此热点（默认无密码；如你自行修改了热点配置，请以实际为准）
-5. 打开浏览器访问配网页面（设备热点的网关地址，通常为默认网关地址）
+3. 设备进入 AP 配网模式后，墨水屏会显示：
+   - WiFi 二维码（可直接扫码加入热点）
+   - 热点名称 `EPD-XXXXXX`
+   - 设备码
+   - 备用访问地址 `192.168.4.1`
+4. iPhone 可直接用相机扫描二维码并加入热点；Android/电脑也可手动连接此热点（默认无密码；如你自行修改了热点配置，请以实际为准）
+5. 设备会尝试通过 Captive Portal 弹出配网页；如果系统没有自动弹出，请手动打开 `http://192.168.4.1`
 6. 输入 WiFi 名称与密码（如有），点击连接
 7. 设备会自动重启并连接WiFi
 
@@ -235,18 +269,21 @@ spiffs,   data, spiffs,  0x250000, 0x1B0000,
 如果设备已配置WiFi但需要更换WiFi网络，可以使用此方法：
 
 1. **从Deep-sleep唤醒**：短按GPIO0按键唤醒设备（或等待定时唤醒）
-2. **长按进入配网**：在设备唤醒后，**继续按住GPIO0按键3秒**（不要松开）
+2. **长按进入配网**：
+   - 如果设备当前处于 Deep-sleep：按下 GPIO0 唤醒后，**继续按住约 1.2 秒**，设备会立刻清除 WiFi 配置并进入二维码配网
+   - 如果设备是上电/复位启动：从启动开始保持 GPIO0 低电平 **3 秒**
 3. **自动进入AP模式**：设备检测到长按后会：
    - 清除已保存的WiFi配置
    - 自动进入AP配网模式
    - 创建WiFi热点 `EPD-XXXXXX`
-   - 在墨水屏上显示当前设备码
+   - 在墨水屏上显示 WiFi 二维码、热点名、设备码和 `192.168.4.1`
 4. **完成配网**：按照方式1的步骤4-7完成WiFi配置
 
 **注意**：
-- 长按检测在设备启动时立即进行，建议在设备唤醒后立即按住按键
-- 如果设备从Deep-sleep被按键唤醒，可以在唤醒后继续按住按键3秒
-- 如果设备是定时唤醒或复位唤醒，需要在上电后立即按住GPIO0按键3秒
+- 长按检测在设备启动时立即进行，建议在设备唤醒后不要松手，直接持续按住直到屏幕切到二维码配网页
+- 如果设备从 Deep-sleep 被按键唤醒，当前固件会把“唤醒按下”也算进重新配网动作，因此不需要再从开机后重新数满 3 秒
+- 如果设备是定时唤醒或复位唤醒，需要在上电后立即按住 GPIO0 按键 3 秒
+- iOS / Android 的 Captive Portal 自动弹出受系统策略影响，不能保证 100% 弹出，因此屏幕会始终保留 `192.168.4.1` 作为备用入口
 
 ### 6. 测试系统
 

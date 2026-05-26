@@ -26,6 +26,7 @@ bool wifiConfigured = false;  // WiFi配网状态标志
 
 /* ------------------------ 用户自定义：长按进入配网 ------------------------ */
 #define WIFI_RECONFIG_HOLD_MS 3000  // 长按GPIO0进入"清除WiFi并AP配网"的阈值（ms）
+#define WIFI_RECONFIG_POST_WAKE_CONFIRM_MS 1200  // GPIO唤醒后继续按住多长时间触发清配置+配网
 #define WAKE_DEBUG_SERIAL_DELAY_MS 500  // 调试期给串口监视器留一点启动输出时间
 
 RTC_DATA_ATTR uint32_t g_deepSleepBootCount = 0;
@@ -87,13 +88,26 @@ static bool isWakeKeyHeldLow(uint32_t holdMs) {
   return true;  // 全程按住
 }
 
+static uint32_t getWiFiReconfigHoldMs(esp_sleep_wakeup_cause_t cause) {
+  if (cause == ESP_SLEEP_WAKEUP_GPIO ||
+      cause == ESP_SLEEP_WAKEUP_EXT0 ||
+      cause == ESP_SLEEP_WAKEUP_EXT1) {
+    return WIFI_RECONFIG_POST_WAKE_CONFIRM_MS;
+  }
+  return WIFI_RECONFIG_HOLD_MS;
+}
+
 static void showProvisioningCodeOnScreen() {
   if (!apModeStarted) {
     return;
   }
 
-  Serial.println("🖥️ 当前处于AP配网模式，同步在屏幕上显示设备码...");
-  displayDeviceCode();
+  Serial.println("🖥️ 当前处于AP配网模式，同步在屏幕上显示WiFi二维码和配网提示...");
+  if (!displayProvisioningScreen(getProvisioningApSSID(),
+                                 getProvisioningDeviceCode(),
+                                 getProvisioningWifiQrPayload())) {
+    Serial.println("❌ WiFi配网页显示失败，保持AP模式等待串口排查");
+  }
 }
 
 static void printWakeDebug(esp_sleep_wakeup_cause_t cause) {
@@ -150,7 +164,13 @@ void setup()
     // 1) 长按 GPIO0 进入"清除WiFi + AP配网"
     //    - 适用于：从 deep-sleep 按键唤醒后继续按住不放
     //    - 也适用于：上电/复位后按住 GPIO0（若硬件允许）
-    if (isWakeKeyHeldLow(WIFI_RECONFIG_HOLD_MS)) {
+    uint32_t reconfigHoldMs = getWiFiReconfigHoldMs(cause);
+    if (reconfigHoldMs != WIFI_RECONFIG_HOLD_MS) {
+        Serial.printf("ℹ️ 检测到按键唤醒：继续按住GPIO0 %lu ms 可清除WiFi并进入二维码配网\n",
+                      (unsigned long)reconfigHoldMs);
+    }
+
+    if (isWakeKeyHeldLow(reconfigHoldMs)) {
         Serial.println("🧹 检测到长按GPIO0：清除WiFi配置并进入AP配网模式");
         clearWiFiConfig();       // 清除NVS WiFi信息
         if (startAPMode()) {     // 启动AP
