@@ -78,18 +78,22 @@ typedef struct
   
 }cFONT;
 
+/* 基础 ASCII 字库 */
 extern sFONT Font24;
 extern sFONT Font20;
 extern sFONT Font16;
 extern sFONT Font12;
 extern sFONT Font8;
 
+/* 基础中文/数字字库 */
 extern cFONT Font12CN;
-extern cFONT Font24CN;
 extern cFONT FontNum;
-extern cFONT Font38CN;
-extern cFONT Font36CN;
-extern cFONT Font20CN;
+
+/* AP 配网页专用字库 */
+extern cFONT Font38CN;  /* 标题 */
+extern cFONT Font36CN;  /* 右侧提示 */
+extern cFONT Font24CN;  /* 预留徽标/状态字 */
+extern cFONT Font20CN;  /* 左下标签 */
 // extern const unsigned char Font16_Table[];
 
 #ifdef __cplusplus

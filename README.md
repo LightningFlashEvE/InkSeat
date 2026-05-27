@@ -22,14 +22,15 @@
    - `POST /api/device/status` 上报 `deviceId/ip/rssi/uptime_ms/freeHeap/wakeType/wakeCause`，并获取 `claimed/imageVersion/imageUrl`
    - 若云端图片同步标记 `imageVersion > 0` 且 `imageVersion != NVS(imgVer)`：`GET imageUrl` 流式下载到 SPIFFS 临时文件 → 刷新墨水屏 → 刷新成功后写入 NVS 新版本 → Deep-sleep
    - 若版本一致：直接 Deep-sleep
-   - 若未绑定：显示设备码和云端配置网页二维码 → Deep-sleep
+   - 若未绑定：显示居中设备码页（云端配置二维码 + 设备码）→ Deep-sleep
 
 ## 硬件要求
 
 ### ESP32-C3 模块
-- **当前硬件**：ESP32-C3-WROOM-02U-N4（4MB Flash，外接天线）
+- **当前硬件**：ESP32-C3-WROOM-02U-N4（4MB Flash，外接天线，**无 PSRAM**）
 - **Flash容量**：4MB（用于固件和SPIFFS存储）
 - **WiFi**：2.4GHz 802.11 b/g/n
+- **SRAM 注意**：运行时堆最大连续块约 **115KB**，无法动态分配 192KB 全屏画布；本地 UI 统一使用约 **58KB** 的 `480x240` 画布按需分配/释放
 
 ### 墨水屏
 - **型号**：7.3寸 E6 彩色电子纸（800x480分辨率）
@@ -95,8 +96,10 @@
 ├── EPD_7in3e.h/cpp            # 墨水屏驱动
 ├── GUI_Paint.h/cpp            # GUI绘制库
 ├── qrcode.h / qrcode.c        # 内置二维码编码器（AP配网二维码）
-├── fonts.h                    # 字库头文件
-├── font24.cpp                 # 24像素字体数据
+├── fonts.h                    # 基础字库声明
+├── provisioning_fonts.h       # AP 配网页字体角色映射
+├── font24.cpp                 # 24像素 ASCII 字体
+├── font16.cpp                 # 16像素 ASCII 字体（AP 页动态值）
 ├── font12.cpp                 # 12像素字体数据
 ├── font12CN.c                 # 中文提示字库（16x16）
 ├── fontNum.c                  # 数字/英文混排字库（8x16）
@@ -254,12 +257,11 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 
 1. 设备启动后，如果未配置WiFi，会自动进入AP模式
 2. 设备会创建一个WiFi热点：`EPD-XXXXXX`（XXXXXX为设备码）
-3. 设备进入 AP 配网模式后，墨水屏会显示：
+3. 设备进入 AP 配网模式后，墨水屏会显示 **居中的 480×240 配网页**：
    - WiFi 二维码（可直接扫码加入热点）
    - 热点名称 `EPD-XXXXXX`
-   - 设备码
-   - 备用访问地址 `192.168.4.1`
-4. iPhone 可直接用相机扫描二维码并加入热点；Android/电脑也可手动连接此热点（默认无密码；如你自行修改了热点配置，请以实际为准）
+   - 配网说明与备用访问地址 `192.168.4.1`
+4. iPhone 可直接用相机扫描二维码并加入开放热点；也可在系统 WiFi 列表手动连接 `EPD-XXXXXX`（默认无密码）
 5. 设备会尝试通过 Captive Portal 弹出配网页；如果系统没有自动弹出，请手动打开 `http://192.168.4.1`
 6. 输入 WiFi 名称与密码（如有），点击连接
 7. 设备会自动重启并连接WiFi
@@ -276,7 +278,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
    - 清除已保存的WiFi配置
    - 自动进入AP配网模式
    - 创建WiFi热点 `EPD-XXXXXX`
-   - 在墨水屏上显示 WiFi 二维码、热点名、设备码和 `192.168.4.1`
+   - 在墨水屏上满屏显示 WiFi 配网界面（二维码、热点名、`192.168.4.1` 等）
 4. **完成配网**：按照方式1的步骤4-7完成WiFi配置
 
 **注意**：
@@ -339,9 +341,24 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 
 ### SPIFFS使用
 
-- **用途**：存储临时图片数据（避免内存不足；下载过程流式写入）
+- **用途**：存储云端下发的临时图片（下载过程 512 字节流式写入，刷新时 **400 字节行缓冲** 送屏，不占 192KB RAM）
 - **自动格式化**：首次使用时自动格式化
 - **文件路径**：`/temp_image.bin`
+- **期望大小**：384000 字符（`a`~`p` 编码的 800×480 四色数据）
+
+### 显示与内存（本地 UI vs 云端图）
+
+固件有两条独立的显示路径：
+
+| 场景 | 数据来源 | RAM 占用 | 关键代码 |
+|------|----------|----------|----------|
+| **云端会议牌** | SPIFFS `/temp_image.bin` | ~400 B 行缓冲 | `EPD_load_7in3E_from_buff()`（`epd7in3.h`） |
+| **WiFi AP 配网页** | 设备实时绘制 | `480x240` 画布（约 58KB）按需分配 | `displayProvisioningScreen()` |
+| **未绑定设备码页** | 设备实时绘制 | 同上缓冲上的 **480×240** 局部画布，居中刷新 | `displayDeviceCode()` |
+
+- `http_update.h` 通过 `acquireEpdUiFrame()` / `releaseEpdUiFrame()` 管理共享 UI 画布，WiFi 配网页与设备码页 **共用、互斥**（同一唤醒周期只画其一）。
+- AP 模式顺序：**WiFi OFF → 分配约 58KB 画布刷 480×240 配网页 → 释放画布 → 启动开放热点 → 终端关联 / DHCP 后再启动 DNS 和 Web 配网**；可选 WPA2：在 `wifi_config.h` 将 `PROVISIONING_AP_PSK` 设为 ≥8 字符密码。
+- 新增本地页面时：优先复用 `480x240` 画布并居中显示，**不要** `malloc(192000)`，也不要再引入 192KB 静态缓冲。
 
 ## 设备码说明
 
@@ -377,7 +394,14 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
    - 模式1：前6位MAC
    - 模式2：后6位MAC（默认）
 
-**重要**：从V3.0.0开始，设备在复位重启后会主动连接WiFi查询云端状态。如果云端显示 `claimed=false`，设备会在屏幕上显示配置码。
+**重要**：从V3.0.0开始，设备在复位重启后会主动连接WiFi查询云端状态。如果云端显示 `claimed=false`，设备会在屏幕上显示 **居中设备码页**（480×240 区域：云端配置二维码 + 大号设备码）。
+
+### AP 配网页或设备码页不显示
+
+1. **能搜到热点但无法加入**：确认连接的是开放热点 `EPD-XXXXXX`（无密码）；串口应出现 `📱 设备已关联热点`。若自定义了 `PROVISIONING_AP_PSK`，扫码或手动输入该密码。仍失败时可改 `PROVISIONING_AP_CHANNEL` 为 `1` 或 `11` 后重试。
+2. **串口出现画布分配失败**：确认日志为 `画板: 堆分配 57600 字节 (480x240)`，并检查 `malloc_before` / `largest`；当前固件不应再依赖 192KB 静态缓冲。
+3. **屏幕 BUSY 超时**：检查排线、供电与 `BUSY` 上拉；当前固件会先刷屏再启动热点，若 BUSY 卡死会直接跳过本次本地页面显示。
+4. **已有旧 WiFi 配置**：上电会优先连路由器而非 AP，需 Erase Flash 或长按 GPIO0 重新配网。
 
 如果串口出现 `❌ AP热点启动失败`，说明不是“已有旧WiFi配置”的问题，而是 AP 本身没有起起来。此时优先检查供电稳定性、天线，以及 Arduino IDE 中选择的板卡/Flash/分区参数是否与本文档一致。
 
@@ -457,7 +481,8 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 - ✅ **复位后自动查询云端**（V3.0.0+：复位重启后也会连接WiFi查询claimed状态）
 - ✅ 设备绑定管理
 - ✅ 图片发布到云端持久化（设备离线可用）
-- ✅ 设备唤醒后 HTTP 拉取更新（流式写入 SPIFFS）
+- ✅ 设备唤醒后 HTTP 拉取更新（流式写入 SPIFFS + 行缓冲刷屏）
+- ✅ 本地 UI 双页共用静态帧缓冲（满屏 WiFi 配网 + 居中设备码，适配 ESP32-C3 无 PSRAM）
 - ✅ 多用户支持
 - ✅ 三种图像处理算法（Floyd-Steinberg抖动、梯度边界混合、灰阶颜色映射）
 - ✅ 算法选择界面和实时预览

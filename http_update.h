@@ -21,6 +21,7 @@
 #include <FS.h>
 #include <stdlib.h>
 #include "esp_mac.h"
+#include "esp_heap_caps.h"
 #include "esp_wifi.h"
 #include "esp_sleep.h"
 #include "esp_err.h"
@@ -30,6 +31,7 @@
 #include "EPD_7in3e.h"
 #include "GUI_Paint.h"
 #include "fonts.h"
+#include "provisioning_fonts.h"
 #include "logo_phenosolar.h"
 #include "qrcode.h"
 
@@ -69,14 +71,11 @@
 #define PREF_KEY_CLAIMED "claimed"
 #define PREF_KEY_IMG_VER "imgVer"
 
-/* 全局图像缓冲区（用于显示设备码） */
-#define GLOBAL_IMAGE_BUFFER_WIDTH  400
-#define GLOBAL_IMAGE_BUFFER_HEIGHT 240
-#define GLOBAL_IMAGE_BUFFER_PACKED_WIDTH  ((GLOBAL_IMAGE_BUFFER_WIDTH + 1) / 2)
-#define GLOBAL_IMAGE_BUFFER_SIZE (GLOBAL_IMAGE_BUFFER_PACKED_WIDTH * GLOBAL_IMAGE_BUFFER_HEIGHT)
-UBYTE globalImageBuffer[GLOBAL_IMAGE_BUFFER_SIZE];
+/* 本地 UI 页帧缓冲：按需 malloc，画完 free（去掉 192KB 静态 BSS 以腾出 SRAM 给 WiFi） */
+#define EPD_PANEL_WIDTH 800
+#define EPD_PANEL_HEIGHT 480
 
-/* 辅助页面局部画布（设备码页等，按需动态分配） */
+/* AP 配网页 / 设备码页统一使用 480x240 局部画布后居中 DisplayPart */
 #define PROVISIONING_CANVAS_WIDTH 480
 #define PROVISIONING_CANVAS_HEIGHT 240
 #define PROVISIONING_CANVAS_PACKED_WIDTH ((PROVISIONING_CANVAS_WIDTH + 1) / 2)
@@ -84,12 +83,57 @@ UBYTE globalImageBuffer[GLOBAL_IMAGE_BUFFER_SIZE];
 #define PROVISIONING_QR_VERSION 5
 #define PROVISIONING_QR_TARGET_SIZE 220
 
-/* AP 配网页全屏画布（800x480，按需动态分配） */
-#define WIFI_CONFIG_SCREEN_WIDTH 800
-#define WIFI_CONFIG_SCREEN_HEIGHT 480
-#define WIFI_CONFIG_SCREEN_PACKED_WIDTH ((WIFI_CONFIG_SCREEN_WIDTH + 1) / 2)
-#define WIFI_CONFIG_SCREEN_SIZE (WIFI_CONFIG_SCREEN_PACKED_WIDTH * WIFI_CONFIG_SCREEN_HEIGHT)
-UBYTE wifiConfigScreenBuffer[WIFI_CONFIG_SCREEN_SIZE];
+static UBYTE* g_epdUiFrameHeap = nullptr;
+static size_t g_epdUiFrameCapacity = 0;
+
+void releaseEpdUiFrame();
+
+static void logUiFrameHeap(const char* hypothesisId, const char* message, size_t needBytes) {
+    Serial.printf(
+        "{\"sessionId\":\"958611\",\"hypothesisId\":\"%s\",\"location\":\"epdUiFrame\","
+        "\"message\":\"%s\",\"data\":{\"need\":%u,\"free\":%u,\"largest\":%u},"
+        "\"timestamp\":%lu}\n",
+        hypothesisId, message, (unsigned)needBytes, (unsigned)ESP.getFreeHeap(),
+        (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+        (unsigned long)millis());
+}
+
+static UBYTE* acquireEpdUiFrame(size_t needBytes) {
+    if (g_epdUiFrameHeap != nullptr && g_epdUiFrameCapacity >= needBytes) {
+        return g_epdUiFrameHeap;
+    }
+    releaseEpdUiFrame();
+
+    const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    logUiFrameHeap("H8", "malloc_before", needBytes);
+    if (largest < needBytes) {
+        logUiFrameHeap("H8", "malloc_failed", needBytes);
+        return nullptr;
+    }
+
+    g_epdUiFrameHeap = (UBYTE*)heap_caps_malloc(needBytes, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    if (g_epdUiFrameHeap == nullptr) {
+        g_epdUiFrameHeap = (UBYTE*)malloc(needBytes);
+    }
+    if (g_epdUiFrameHeap == nullptr) {
+        logUiFrameHeap("H8", "malloc_failed", needBytes);
+        g_epdUiFrameCapacity = 0;
+        return nullptr;
+    }
+    g_epdUiFrameCapacity = needBytes;
+    logUiFrameHeap("H8", "malloc_ok", needBytes);
+    return g_epdUiFrameHeap;
+}
+
+void releaseEpdUiFrame() {
+    if (g_epdUiFrameHeap == nullptr) {
+        return;
+    }
+    heap_caps_free(g_epdUiFrameHeap);
+    g_epdUiFrameHeap = nullptr;
+    g_epdUiFrameCapacity = 0;
+    logUiFrameHeap("H8", "free_done", 0);
+}
 
 /* ============================================================================
  *                               全局变量
@@ -132,6 +176,14 @@ void ensureDisplayHardwareReady();
 /* ============================================================================
  *                            辅助函数：AP 配网页二维码
  * ============================================================================ */
+
+static int getCFontTextWidth(const String& text, const cFONT* font);
+static int getCenteredTextX(int areaX, int areaWidth, const String& text, const cFONT* font);
+static bool drawProvisioningQrToPaintEx(const String& payload, int centerX, int centerY, int targetSize,
+                                        int canvasWidth, int canvasHeight, UWORD darkColor);
+static void drawBitmapMask(int x0, int y0, int width, int height, const uint8_t* bitmap, UWORD color);
+
+String getProvisioningApPassword();
 
 static bool drawProvisioningQrToPaintEx(const String& payload, int centerX, int centerY, int targetSize,
                                         int canvasWidth, int canvasHeight, UWORD darkColor) {
@@ -198,66 +250,6 @@ static void drawBitmapMask(int x0, int y0, int width, int height, const uint8_t*
     }
 }
 
-static const CH_CN* findCFontAsciiGlyph(const cFONT* font, char ch) {
-    if (font == NULL) {
-        return NULL;
-    }
-
-    for (uint16_t i = 0; i < font->size; i++) {
-        if (font->table[i].index[0] == (unsigned char)ch && font->table[i].index[1] == '\0') {
-            return &font->table[i];
-        }
-    }
-    return NULL;
-}
-
-static void drawCompactAsciiString(UWORD x, UWORD y, const String& text, const cFONT* font,
-                                   int advance, UWORD foreground, UWORD background) {
-    if (font == NULL || advance <= 0) {
-        return;
-    }
-
-    int currentX = x;
-    for (size_t idx = 0; idx < text.length(); idx++) {
-        char ch = text.charAt(idx);
-        if (ch == '.') {
-            const int dotSize = 4;
-            const int dotAdvance = 10;
-            const int dotX = currentX + (dotAdvance - dotSize) / 2;
-            const int dotY = y + font->Height - dotSize - 1;
-            Paint_DrawRectangle(dotX, dotY, dotX + dotSize - 1, dotY + dotSize - 1,
-                                foreground, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-            currentX += dotAdvance;
-            continue;
-        }
-
-        const CH_CN* glyph = findCFontAsciiGlyph(font, ch);
-        if (glyph == NULL) {
-            currentX += advance;
-            continue;
-        }
-
-        const unsigned char* ptr = &glyph->matrix[0];
-        for (int row = 0; row < font->Height; row++) {
-            for (int col = 0; col < font->Width; col++) {
-                if (*ptr & (0x80 >> (col % 8))) {
-                    Paint_SetPixel(currentX + col, y + row, foreground);
-                } else if (FONT_BACKGROUND != background) {
-                    Paint_SetPixel(currentX + col, y + row, background);
-                }
-                if (col % 8 == 7) {
-                    ptr++;
-                }
-            }
-            if (font->Width % 8 != 0) {
-                ptr++;
-            }
-        }
-
-        currentX += advance;
-    }
-}
-
 static int getCFontTextWidth(const String& text, const cFONT* font) {
     if (font == NULL) {
         return 0;
@@ -289,24 +281,71 @@ static int getCenteredTextX(int areaX, int areaWidth, const String& text, const 
     return x < areaX ? areaX : x;
 }
 
-static void drawMixedCnLine(UWORD x, UWORD y, const String& text, int prefixLen,
-                            UWORD foreground, UWORD background) {
-    if (prefixLen < 0) {
-        prefixLen = 0;
+static bool renderProvisioningCompactScreen(UBYTE* imageBuffer, const String& apSSID,
+                                            const String& wifiQrPayload,
+                                            const String& apPassword) {
+    (void)apPassword;
+    const int paintWidth = PROVISIONING_CANVAS_WIDTH;
+    const int paintHeight = PROVISIONING_CANVAS_HEIGHT;
+    const UWORD fg = EPD_7IN3E_BLACK;
+    const UWORD bg = EPD_7IN3E_WHITE;
+    const int headerHeight = 42;
+    const int dividerX = 239;
+    const int qrSize = 126;
+    const int qrCenterX = 120;
+    const int qrCenterY = 109;
+    const int rightAreaX = 242;
+    const int rightAreaW = paintWidth - rightAreaX - 8;
+    const int logoX = 356;
+    const int logoY = 180;
+
+    Paint_NewImage(imageBuffer, paintWidth, paintHeight, 0, EPD_7IN3E_WHITE);
+    Paint_SetScale(6);
+    Paint_SelectImage(imageBuffer);
+    Paint_Clear(EPD_7IN3E_WHITE);
+
+    cFONT* titleFont = provisioningTitleFont();
+    cFONT* hintFont = provisioningHintFont();
+    cFONT* labelFont = provisioningLabelFont();
+    sFONT* valueFont = provisioningValueFont();
+
+    Paint_DrawString_CN(getCenteredTextX(0, paintWidth, "钙钛矿墨水屏会议牌", titleFont),
+                        2, "钙钛矿墨水屏会议牌", titleFont, EPD_7IN3E_BLUE, bg);
+
+    if (!drawProvisioningQrToPaintEx(wifiQrPayload, qrCenterX, qrCenterY, qrSize,
+                                     paintWidth, paintHeight, EPD_7IN3E_BLACK)) {
+        return false;
     }
 
-    String asciiPart = text.substring(0, prefixLen);
-    String chinesePart = text.substring(prefixLen);
-    UWORD currentX = x;
+    Paint_DrawRectangle(dividerX, headerHeight, dividerX + 2, paintHeight - 1,
+                        fg, DOT_PIXEL_1X1, DRAW_FILL_FULL);
 
-    if (asciiPart.length() > 0) {
-        Paint_DrawString_CN(currentX, y, asciiPart.c_str(), &FontNum, foreground, background);
-        currentX += asciiPart.length() * FontNum.ASCII_Width;
-    }
+    Paint_DrawString_CN(getCenteredTextX(rightAreaX, rightAreaW, "扫描二维码", hintFont),
+                        86, "扫描二维码", hintFont, EPD_7IN3E_RED, bg);
+    Paint_DrawString_CN(getCenteredTextX(rightAreaX, rightAreaW, "进行配置", hintFont),
+                        128, "进行配置", hintFont, EPD_7IN3E_RED, bg);
 
-    if (chinesePart.length() > 0) {
-        Paint_DrawString_CN(currentX, y, chinesePart.c_str(), &Font20CN, foreground, background);
-    }
+    const int labelX = 18;
+    const int valueX = 82;
+    const int dynamicValueX = valueX + 20;
+    const int ssidRowY = 178;
+    const int ipRowY = 206;
+    Paint_DrawString_CN(labelX, ssidRowY, "热点", labelFont, fg, bg);
+    Paint_DrawString_EN(dynamicValueX, ssidRowY + 2, apSSID.c_str(), valueFont,
+                        EPD_7IN3E_WHITE, EPD_7IN3E_BLUE);
+
+    Paint_DrawString_EN(labelX, ipRowY + 3, "ip", valueFont,
+                        EPD_7IN3E_WHITE, EPD_7IN3E_BLACK);
+    Paint_DrawString_CN(labelX + 28, ipRowY, "地址", labelFont, fg, bg);
+    Paint_DrawString_EN(dynamicValueX, ipRowY + 2, "192.168.4.1", valueFont,
+                        EPD_7IN3E_WHITE, EPD_7IN3E_BLUE);
+
+    drawBitmapMask(logoX, logoY, PHENOSOLAR_LOGO_WIDTH, PHENOSOLAR_LOGO_HEIGHT,
+                   phenosolar_logo_black_mask, EPD_7IN3E_BLACK);
+    drawBitmapMask(logoX, logoY, PHENOSOLAR_LOGO_WIDTH, PHENOSOLAR_LOGO_HEIGHT,
+                   phenosolar_logo_green_mask, EPD_7IN3E_GREEN);
+
+    return true;
 }
 
 String getCloudPortalUrl() {
@@ -314,15 +353,24 @@ String getCloudPortalUrl() {
 }
 
 bool displayProvisioningScreen(const String& apSSID, const String& deviceCode, const String& wifiQrPayload) {
-    if (apSSID.length() == 0 || deviceCode.length() == 0 || wifiQrPayload.length() == 0) {
+    (void)deviceCode;
+
+    if (apSSID.length() == 0 || wifiQrPayload.length() == 0) {
         Serial.println("⚠️  配网页二维码信息不完整，跳过二维码显示");
         return false;
     }
 
     Serial.println("📱 开始显示AP配网页二维码...");
     Serial.printf("   SSID: %s\n", apSSID.c_str());
-    Serial.printf("   设备码: %s\n", deviceCode.c_str());
-    Serial.printf("   分配前剩余内存: %u 字节\n", (unsigned int)ESP.getFreeHeap());
+    Serial.printf("   画板: 堆分配 %u 字节 (480x240)\n", (unsigned)PROVISIONING_CANVAS_SIZE);
+
+    UBYTE* imageBuffer = acquireEpdUiFrame(PROVISIONING_CANVAS_SIZE);
+    if (imageBuffer == nullptr) {
+        Serial.println("❌ 配网页画布分配失败（请查看 malloc_before / largest 日志）");
+        return false;
+    }
+
+    dbgSetEpdActive(true);
 
     if (EPD_dispIndex < 0 || EPD_dispIndex >= (sizeof(EPD_dispMass) / sizeof(EPD_dispMass[0]))) {
         EPD_dispIndex = 0;
@@ -332,92 +380,30 @@ bool displayProvisioningScreen(const String& apSSID, const String& deviceCode, c
     EPD_7IN3E_ClearBusyTimeout();
     EPD_dispInit();
     if (EPD_7IN3E_LastBusyTimeout()) {
+        dbgSetEpdActive(false);
+        releaseEpdUiFrame();
         Serial.println("❌ 配网页二维码显示初始化失败，请检查BUSY线、屏幕供电和排线");
         return false;
     }
-    Serial.printf("   EPD初始化后剩余内存: %u 字节\n", (unsigned int)ESP.getFreeHeap());
-    const int screenWidth = WIFI_CONFIG_SCREEN_WIDTH;
-    const int screenHeight = WIFI_CONFIG_SCREEN_HEIGHT;
-    const int headerHeight = 82;
-    const int headerBottomLineHeight = 5;
-    const int mainTop = headerHeight;
-    const int dividerX = 400;
-    const int dividerWidth = 4;
-    const int qrLeft = 75;
-    const int qrTop = 120;
-    const int qrSize = 250;
-    const int qrCenterX = qrLeft + qrSize / 2;
-    const int qrCenterY = qrTop + qrSize / 2;
-    const int logoX = 660;
-    const int logoY = 400;
 
-    const UWORD fg = EPD_7IN3E_BLACK;
-    const UWORD bg = EPD_7IN3E_WHITE;
-    UBYTE* imageBuffer = wifiConfigScreenBuffer;
-
-    Paint_NewImage(imageBuffer, screenWidth, screenHeight, 0, EPD_7IN3E_WHITE);
-    Paint_SetScale(6);
-    Paint_SelectImage(imageBuffer);
-    Paint_Clear(EPD_7IN3E_WHITE);
-
-    if (!drawProvisioningQrToPaintEx(wifiQrPayload, qrCenterX, qrCenterY, qrSize,
-                                     screenWidth, screenHeight, EPD_7IN3E_BLACK)) {
-        return false;
+    const bool rendered = renderProvisioningCompactScreen(imageBuffer, apSSID, wifiQrPayload,
+                                                          getProvisioningApPassword());
+    if (rendered) {
+        const UWORD xstart = (EPD_PANEL_WIDTH - PROVISIONING_CANVAS_WIDTH) / 2;
+        const UWORD ystart = (EPD_PANEL_HEIGHT - PROVISIONING_CANVAS_HEIGHT) / 2;
+        EPD_7IN3E_ClearBusyTimeout();
+        EPD_7IN3E_DisplayPart(imageBuffer, xstart, ystart,
+                              PROVISIONING_CANVAS_WIDTH, PROVISIONING_CANVAS_HEIGHT);
     }
+    dbgSetEpdActive(false);
+    releaseEpdUiFrame();
 
-    Paint_DrawRectangle(0, headerHeight - headerBottomLineHeight,
-                        screenWidth - 1, headerHeight - 1,
-                        fg, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-    Paint_DrawRectangle(dividerX, mainTop,
-                        dividerX + dividerWidth - 1, screenHeight - 1,
-                        fg, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-
-    Paint_DrawString_CN(220, 22, "钙钛矿墨水屏会议牌", &Font38CN, EPD_7IN3E_BLUE, bg);
-
-    const int labelX = 24;
-    const int valueX = 132;
-    const int ssidRowY = 392;
-    const int ipRowY = 432;
-    Paint_DrawString_CN(labelX, ssidRowY, "热点名称", &Font20CN, fg, bg);
-    Paint_DrawString_EN(valueX, ssidRowY - 2, apSSID.c_str(), &Font24,
-                        EPD_7IN3E_WHITE, EPD_7IN3E_BLUE);
-    Paint_DrawString_CN(labelX, ipRowY, "IP地址", &Font20CN, fg, bg);
-    Paint_DrawString_EN(valueX, ipRowY - 2, "192.168.4.1", &Font24,
-                        EPD_7IN3E_WHITE, EPD_7IN3E_BLUE);
-
-    const int badgeX = 520;
-    const int badgeY = 130;
-    const int badgeW = 160;
-    const int badgeH = 52;
-    Paint_DrawRectangle(badgeX, badgeY, badgeX + badgeW - 1, badgeY + badgeH - 1,
-                        EPD_7IN3E_YELLOW, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-    Paint_DrawRectangle(badgeX, badgeY, badgeX + badgeW - 1, badgeY + badgeH - 1,
-                        fg, DOT_PIXEL_3X3, DRAW_FILL_EMPTY);
-    Paint_DrawString_CN(getCenteredTextX(badgeX, badgeW, "WIFI配置", &Font24CN),
-                        badgeY + 14, "WIFI配置", &Font24CN, fg, EPD_7IN3E_YELLOW);
-
-    const int rightAreaX = 404;
-    const int rightAreaW = 396;
-    Paint_DrawString_CN(getCenteredTextX(rightAreaX, rightAreaW, "手机扫描二维码", &Font36CN),
-                        220, "手机扫描二维码", &Font36CN, EPD_7IN3E_BLUE, bg);
-    Paint_DrawString_CN(getCenteredTextX(rightAreaX, rightAreaW, "连接设备热点", &Font36CN),
-                        275, "连接设备热点", &Font36CN, EPD_7IN3E_GREEN, bg);
-    Paint_DrawString_CN(getCenteredTextX(rightAreaX, rightAreaW, "进行WiFi配置", &Font36CN),
-                        330, "进行WiFi配置", &Font36CN, EPD_7IN3E_RED, bg);
-
-    drawBitmapMask(logoX, logoY, PHENOSOLAR_LOGO_WIDTH, PHENOSOLAR_LOGO_HEIGHT,
-                   phenosolar_logo_black_mask, EPD_7IN3E_BLACK);
-    drawBitmapMask(logoX, logoY, PHENOSOLAR_LOGO_WIDTH, PHENOSOLAR_LOGO_HEIGHT,
-                   phenosolar_logo_green_mask, EPD_7IN3E_GREEN);
-
-    EPD_7IN3E_ClearBusyTimeout();
-    EPD_7IN3E_DisplayPart(imageBuffer, 0, 0, screenWidth, screenHeight);
-    if (EPD_7IN3E_LastBusyTimeout()) {
+    if (!rendered) {
         Serial.println("❌ 配网页二维码显示未正常完成，请检查BUSY线、屏幕供电和排线");
         return false;
     }
 
-    Serial.println("✅ AP配网页二维码已显示在屏幕上");
+    Serial.println("✅ AP配网页二维码已显示在屏幕上（画布已释放）");
     return true;
 }
 
@@ -636,16 +622,18 @@ void displayDeviceCode() {
         return;
     }
 
-    int width = 800;
-    int height = 480;
     String code = deviceId;
-    int paintWidth = PROVISIONING_CANVAS_WIDTH;
-    int paintHeight = PROVISIONING_CANVAS_HEIGHT;
-    UBYTE *imageBuffer = (UBYTE*)malloc(PROVISIONING_CANVAS_SIZE);
-    if (imageBuffer == NULL) {
-        Serial.println("❌ 设备码页面画布分配失败");
+    const int paintWidth = PROVISIONING_CANVAS_WIDTH;
+    const int paintHeight = PROVISIONING_CANVAS_HEIGHT;
+
+    UBYTE* imageBuffer = acquireEpdUiFrame(PROVISIONING_CANVAS_SIZE);
+    if (imageBuffer == nullptr) {
+        Serial.println("❌ 设备码画布分配失败");
         return;
     }
+
+    Serial.printf("   画板: 堆分配 %dx%d (%u 字节)\n", paintWidth, paintHeight,
+                  (unsigned)PROVISIONING_CANVAS_SIZE);
 
     Paint_NewImage(imageBuffer, paintWidth, paintHeight, 0, EPD_7IN3E_WHITE);
     Paint_SetScale(6);
@@ -653,22 +641,21 @@ void displayDeviceCode() {
     Paint_Clear(EPD_7IN3E_WHITE);
 
     if (!drawProvisioningQrToPaint(portalUrl, 118, paintHeight / 2, 188)) {
-        free(imageBuffer);
         Serial.println("❌ 云端网页二维码生成失败");
+        releaseEpdUiFrame();
         return;
     }
 
-    Paint_DrawString_CN(52, 24, "钙钛矿墨水屏会议牌", &Font38CN, EPD_7IN3E_BLACK, EPD_7IN3E_WHITE);
     // Paint_DrawString_EN 内部前景/背景参数顺序与声明相反，这里传 WHITE/BLACK 才能得到白底黑字。
-    Paint_DrawString_EN(250, 64, "Scan QR to open web page", &Font12, EPD_7IN3E_WHITE, EPD_7IN3E_BLACK);
-    Paint_DrawString_EN(250, 98, "Device Code", &Font12, EPD_7IN3E_WHITE, EPD_7IN3E_BLACK);
+    Paint_DrawString_EN(250, 40, "Scan QR to open web page", &Font12, EPD_7IN3E_WHITE, EPD_7IN3E_BLACK);
+    Paint_DrawString_EN(250, 74, "Device Code", &Font12, EPD_7IN3E_WHITE, EPD_7IN3E_BLACK);
 
     int fontScale = 2;
     int charWidth = Font24.Width * fontScale;
     int charHeight = Font24.Height * fontScale;
     int textWidth = code.length() * charWidth;
     int startX = 250;
-    int startY = 120;
+    int startY = 96;
     if (startX + textWidth > paintWidth - 12) {
         startX = paintWidth - textWidth - 12;
         if (startX < 220) {
@@ -708,14 +695,15 @@ void displayDeviceCode() {
         pStr++;
     }
 
-    Paint_DrawString_EN(250, 204, portalLabel.c_str(), &Font12, EPD_7IN3E_WHITE, EPD_7IN3E_BLACK);
+    Paint_DrawString_EN(250, 188, portalLabel.c_str(), &Font12, EPD_7IN3E_WHITE, EPD_7IN3E_BLACK);
     
-    UWORD xstart = (width - paintWidth) / 2;
-    UWORD ystart = (height - paintHeight) / 2;
-    
+    const UWORD xstart = (EPD_PANEL_WIDTH - paintWidth) / 2;
+    const UWORD ystart = (EPD_PANEL_HEIGHT - paintHeight) / 2;
+
     EPD_7IN3E_ClearBusyTimeout();
     EPD_7IN3E_DisplayPart(imageBuffer, xstart, ystart, paintWidth, paintHeight);
-    free(imageBuffer);
+
+    releaseEpdUiFrame();
 
     if (EPD_7IN3E_LastBusyTimeout()) {
         Serial.println("❌ 设备码显示未正常完成，请检查BUSY线、屏幕供电和排线");

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate subset cFONT tables (row-major, MSB first) for provisioning UI."""
+"""Generate provisioning-page dedicated cFONT tables (row-major, MSB first)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,33 +10,31 @@ from PIL import Image, ImageDraw, ImageFont
 FONT_PATH = r"C:\Windows\Fonts\msyhbd.ttc"
 OUT_DIR = Path(__file__).resolve().parent.parent
 
-# 每套字库只含本档用到的字符（省 Flash）
+# AP 配网页按角色拆分字库，只保留页面实际用到的字符
 FONT_SPECS: dict[str, dict] = {
     "font38CN": {
         "size": 38,
         "var": "Font38CN",
-        "comment": "顶部标题 Font38_Bold",
+        "comment": "AP 配网页标题 Font38_Bold",
         "chars": "钙钛矿墨水屏会议牌",
     },
     "font36CN": {
         "size": 36,
         "var": "Font36CN",
-        "comment": "右侧三行提示 Font36_Bold",
-        # 显示为「进行 WiFi 配置」
-        "chars": "手机扫描二维码连接设备热点进行配置 WiFi",
+        "comment": "AP 配网页右侧提示 Font36_Bold",
+        "chars": "扫描二维码进行配置",
     },
     "font24CN": {
         "size": 24,
         "var": "Font24CN",
-        "comment": "WIFI 配置小框 Font24_Bold",
+        "comment": "AP 配网页预留状态字 Font24_Bold",
         "chars": "WIFI配置",
     },
     "font20CN": {
         "size": 20,
         "var": "Font20CN",
-        "comment": "左侧标签与内容 Font20_Bold",
-        # 含 EPD-xxxx 热点前缀及 MeetingBoard-Setup / 192.168.4.1
-        "chars": "热点名称IP地址MeetingBoard-Setup192.168.4.1EPD",
+        "comment": "AP 配网页左下标签 Font20_Bold",
+        "chars": "热点地址",
     },
 }
 

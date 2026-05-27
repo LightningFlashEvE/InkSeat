@@ -59,5 +59,6 @@ void EPD_7IN3E_DisplayPart(const UBYTE *Image, UWORD xstart, UWORD ystart, UWORD
 void EPD_7IN3E_Sleep(void);
 void EPD_7IN3E_ClearBusyTimeout(void);
 bool EPD_7IN3E_LastBusyTimeout(void);
+void EPD_ProvisioningYield(void);
 
 #endif

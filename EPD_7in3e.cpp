@@ -92,11 +92,17 @@ static bool EPD_7IN3E_ReadBusyH(uint32_t timeoutMs)
 {
     Debug("e-Paper busy H\r\n");
     uint32_t start = millis();
+    uint32_t lastYieldMs = 0;
     while(!DEV_Digital_Read(EPD_BUSY_PIN)) {      // 低电平：忙碌，高电平：空闲
         if ((millis() - start) >= timeoutMs) {
             g_epdBusyTimeout = true;
             Serial.printf("❌ EPD BUSY等待超时: %lu ms\n", (unsigned long)timeoutMs);
             return false;
+        }
+        const uint32_t now = millis();
+        if (now - lastYieldMs >= 20) {
+            EPD_ProvisioningYield();
+            lastYieldMs = now;
         }
         DEV_Delay_ms(1);
     }

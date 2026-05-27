@@ -28,7 +28,6 @@ bool wifiConfigured = false;  // WiFi配网状态标志
 #define WIFI_RECONFIG_HOLD_MS 3000  // 长按GPIO0进入"清除WiFi并AP配网"的阈值（ms）
 #define WIFI_RECONFIG_POST_WAKE_CONFIRM_MS 1200  // GPIO唤醒后继续按住多长时间触发清配置+配网
 #define WAKE_DEBUG_SERIAL_DELAY_MS 500  // 调试期给串口监视器留一点启动输出时间
-
 RTC_DATA_ATTR uint32_t g_deepSleepBootCount = 0;
 
 static const char* wakeCauseName(esp_sleep_wakeup_cause_t cause) {
@@ -98,15 +97,23 @@ static uint32_t getWiFiReconfigHoldMs(esp_sleep_wakeup_cause_t cause) {
 }
 
 static void showProvisioningCodeOnScreen() {
-  if (!apModeStarted) {
+#if !PROVISIONING_RENDER_AP_SCREEN
+  Serial.println("ℹ️ 调试模式：已临时关闭AP配网屏幕显示");
+  return;
+#endif
+  if (provisioningScreenAttempted) {
+    Serial.println("ℹ️ AP配网页已显示，跳过重复刷新");
     return;
   }
-
-  Serial.println("🖥️ 当前处于AP配网模式，同步在屏幕上显示WiFi二维码和配网提示...");
+  if (provisioningApSSID.length() == 0) {
+    return;
+  }
+  provisioningScreenAttempted = true;
+  Serial.println("🖥️ 补刷配网二维码...");
   if (!displayProvisioningScreen(getProvisioningApSSID(),
                                  getProvisioningDeviceCode(),
                                  getProvisioningWifiQrPayload())) {
-    Serial.println("❌ WiFi配网页显示失败，保持AP模式等待串口排查");
+    Serial.println("❌ WiFi配网页显示失败");
   }
 }
 
@@ -173,10 +180,7 @@ void setup()
     if (isWakeKeyHeldLow(reconfigHoldMs)) {
         Serial.println("🧹 检测到长按GPIO0：清除WiFi配置并进入AP配网模式");
         clearWiFiConfig();       // 清除NVS WiFi信息
-        if (startAPMode()) {     // 启动AP
-            initConfigServer();  // 启动Web配网服务器
-            showProvisioningCodeOnScreen();
-        }
+        startAPMode();
         wifiConfigured = false;
         if (apModeStarted) {
             Serial.println("⏳ 等待配网中...（AP模式）");
@@ -197,7 +201,6 @@ void setup()
         } else {
             // WiFi连接失败时 initWiFiConfig() 会打开AP修复入口（不清除旧配置）
             if (apModeStarted) {
-                showProvisioningCodeOnScreen();
                 Serial.println("📱 WiFi连接失败，已打开AP修复入口");
                 Serial.println("   如需修改WiFi，请连接热点并访问: http://192.168.4.1");
                 Serial.println("⏳ 等待配网中...（AP模式）");
@@ -218,10 +221,9 @@ void setup()
         // 未连接：可能进入AP配网，也可能因已有配置但临时连接失败而直接回睡
         Serial.println();
         if (apModeStarted) {
-            showProvisioningCodeOnScreen();
             Serial.println("📱 设备已进入AP配网模式");
             Serial.println("   请按以下步骤操作：");
-            Serial.println("   1. 连接WiFi热点（名称见上方）");
+            Serial.println("   1. 扫描屏幕二维码或连接WiFi热点");
             Serial.println("   2. 访问 http://192.168.4.1");
             Serial.println("   3. 输入WiFi名称和密码");
             Serial.println("   4. 点击连接，设备将自动重启");
@@ -264,7 +266,6 @@ void loop()
         // 如果执行到这里，尝试重新进入Deep-sleep
         HTTP_UPDATE__loop();
     } else {
-        // AP配网模式，处理Web服务器请求
-        handleAPMode();
+        processApProvisioningLoop();
     }
 }
