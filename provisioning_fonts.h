@@ -15,7 +15,7 @@ static inline cFONT* provisioningTitleFont() {
 }
 
 static inline cFONT* provisioningHintFont() {
-    return &Font36CN;
+    return &Font24CN;
 }
 
 static inline cFONT* provisioningLabelFont() {

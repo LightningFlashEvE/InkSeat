@@ -320,10 +320,10 @@ static bool renderProvisioningCompactScreen(UBYTE* imageBuffer, const String& ap
     Paint_DrawRectangle(dividerX, headerHeight, dividerX + 2, paintHeight - 1,
                         fg, DOT_PIXEL_1X1, DRAW_FILL_FULL);
 
-    Paint_DrawString_CN(getCenteredTextX(rightAreaX, rightAreaW, "扫描二维码", hintFont),
-                        86, "扫描二维码", hintFont, EPD_7IN3E_RED, bg);
-    Paint_DrawString_CN(getCenteredTextX(rightAreaX, rightAreaW, "进行配置", hintFont),
-                        128, "进行配置", hintFont, EPD_7IN3E_RED, bg);
+    Paint_DrawString_CN(getCenteredTextX(rightAreaX, rightAreaW, "扫二维码或连接热点", hintFont),
+                        96, "扫二维码或连接热点", hintFont, EPD_7IN3E_RED, bg);
+    Paint_DrawString_CN(getCenteredTextX(rightAreaX, rightAreaW, "配置设备WiFi", hintFont),
+                        132, "配置设备WiFi", hintFont, EPD_7IN3E_RED, bg);
 
     const int labelX = 18;
     const int valueX = 82;

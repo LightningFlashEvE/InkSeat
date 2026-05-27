@@ -27,8 +27,8 @@ FONT_SPECS: dict[str, dict] = {
     "font24CN": {
         "size": 24,
         "var": "Font24CN",
-        "comment": "AP 配网页预留状态字 Font24_Bold",
-        "chars": "WIFI配置",
+        "comment": "AP 配网页右侧提示 Font24_Bold",
+        "chars": "扫二维码或连接热点配置设备WiFi",
     },
     "font20CN": {
         "size": 20,

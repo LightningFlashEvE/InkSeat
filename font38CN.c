@@ -1,7 +1,7 @@
 #include "fonts.h"
 
 /*
- * 顶部标题 Font38_Bold — 38px 粗体 (msyhbd)
+ * AP 配网页标题 Font38_Bold — 38px 粗体 (msyhbd)
  * 取模：逐行、MSB 在前；宽 40px × 高 38px，每字 2 字节
  * 字符集: 钙钛矿墨水屏会议牌
  */
