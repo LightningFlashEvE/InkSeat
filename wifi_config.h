@@ -611,34 +611,12 @@ void handleConfig() {
 }
 
 /**
- * 处理扫描WiFi请求
- */
-void handleScan() {
-    Serial.println("📡 扫描WiFi网络...");
-    int n = WiFi.scanNetworks();
-    
-    String json = "[";
-    for (int i = 0; i < n; i++) {
-        if (i > 0) json += ",";
-        json += "{";
-        json += "\"ssid\":\"" + WiFi.SSID(i) + "\",";
-        json += "\"rssi\":" + String(WiFi.RSSI(i)) + ",";
-        json += "\"encryption\":" + String(WiFi.encryptionType(i));
-        json += "}";
-    }
-    json += "]";
-    
-    getConfigServer().send(200, "application/json", json);
-}
-
-/**
  * 初始化Web服务器（AP模式）
  */
 void initConfigServer() {
     (void)getConfigServer();
     getConfigServer().on("/", HTTP_GET, handleRoot);
     getConfigServer().on("/config", HTTP_POST, handleConfig);
-    getConfigServer().on("/scan", HTTP_GET, handleScan);
     getConfigServer().on("/hotspot-detect.html", HTTP_GET, handleCaptivePortal);
     getConfigServer().on("/library/test/success.html", HTTP_GET, handleCaptivePortal);
     getConfigServer().on("/generate_204", HTTP_GET, handleCaptivePortal);

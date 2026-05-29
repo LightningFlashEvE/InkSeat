@@ -357,7 +357,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 | **未绑定设备码页** | 设备实时绘制 | 同上缓冲上的 **480×240** 局部画布，居中刷新 | `displayDeviceCode()` |
 
 - `http_update.h` 通过 `acquireEpdUiFrame()` / `releaseEpdUiFrame()` 管理共享 UI 画布，WiFi 配网页与设备码页 **共用、互斥**（同一唤醒周期只画其一）。
-- AP 模式顺序：**WiFi OFF → 分配约 58KB 画布刷 480×240 配网页 → 释放画布 → 启动开放热点 → 终端关联 / DHCP 后再启动 DNS 和 Web 配网**；可选 WPA2：在 `wifi_config.h` 将 `PROVISIONING_AP_PSK` 设为 ≥8 字符密码。
+- AP 模式顺序：**WiFi OFF → 分配约 58KB 画布刷 480×240 配网页 → 释放画布 → 启动开放热点 → 终端关联 / DHCP 后再启动 DNS 和 Web 配网**；AP 页面只走这一条预渲染路径，不再在 `loop()` 中补刷。可选 WPA2：在 `wifi_config.h` 将 `PROVISIONING_AP_PSK` 设为 ≥8 字符密码。
 - 新增本地页面时：优先复用 `480x240` 画布并居中显示，**不要** `malloc(192000)`，也不要再引入 192KB 静态缓冲。
 
 ## 设备码说明

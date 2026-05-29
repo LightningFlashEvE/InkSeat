@@ -96,27 +96,6 @@ static uint32_t getWiFiReconfigHoldMs(esp_sleep_wakeup_cause_t cause) {
   return WIFI_RECONFIG_HOLD_MS;
 }
 
-static void showProvisioningCodeOnScreen() {
-#if !PROVISIONING_RENDER_AP_SCREEN
-  Serial.println("ℹ️ 调试模式：已临时关闭AP配网屏幕显示");
-  return;
-#endif
-  if (provisioningScreenAttempted) {
-    Serial.println("ℹ️ AP配网页已显示，跳过重复刷新");
-    return;
-  }
-  if (provisioningApSSID.length() == 0) {
-    return;
-  }
-  provisioningScreenAttempted = true;
-  Serial.println("🖥️ 补刷配网二维码...");
-  if (!displayProvisioningScreen(getProvisioningApSSID(),
-                                 getProvisioningDeviceCode(),
-                                 getProvisioningWifiQrPayload())) {
-    Serial.println("❌ WiFi配网页显示失败");
-  }
-}
-
 static void printWakeDebug(esp_sleep_wakeup_cause_t cause) {
   pinMode((int)WAKEUP_GPIO, INPUT_PULLUP);
   gpio_pullup_en(WAKEUP_GPIO);

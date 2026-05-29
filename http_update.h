@@ -771,7 +771,7 @@ DeviceStatusResponse queryDeviceStatus() {
             break;
     }
 
-    StaticJsonDocument<768> doc;
+    JsonDocument doc;
     doc["deviceId"] = deviceId;
     doc["ip"] = WiFi.localIP().toString();
     doc["rssi"] = WiFi.RSSI();
@@ -795,7 +795,7 @@ DeviceStatusResponse queryDeviceStatus() {
         String response = http.getString();
         Serial.printf("✅ 云端响应: %s\n", response.c_str());
         
-        StaticJsonDocument<1024> respDoc;
+        JsonDocument respDoc;
         DeserializationError error = deserializeJson(respDoc, response);
         
         if (!error) {

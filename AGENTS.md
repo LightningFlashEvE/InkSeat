@@ -188,7 +188,7 @@ AP 配网热点 `EPD-XXXXXX` 默认**开放网络**（`PROVISIONING_AP_PSK` 留�
 固件每次调用 `/api/device/status` 时除 `deviceId` 外，还会上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`、`wakeType`、`wakeCause`。后端保存到 `device_status_collection`，并由 `/api/devices` 返回给前端设备卡片显示。`wakeType=manual` 更新 `lastManualWake`，`wakeType=auto` 更新 `lastAutoWake`。修改字段名时必须同步 `http_update.h`、`cloud_server/backend/app.py` 和 `cloud_server/frontend/devices.js`。
 
 ### 未配网开机显示
-当设备没有本地 WiFi 配置时，`startAPMode()` 后立刻 `showProvisioningCodeOnScreen()` 显示二维码；Captive Portal Web/DNS 延后到手机拿到 IP 且刷屏结束后。已显示过则跳过重复刷屏。该显示不放入 `loop()`，避免 AP 模式下重复刷新墨水屏。
+当设备没有本地 WiFi 配置时，`startAPMode()` 内会先渲染并显示 AP 配网页，再启动 `softAP`；Captive Portal Web/DNS 延后到手机拿到 IP 且刷屏结束后。`loop()` 不再补刷 AP 页面，避免重复刷新墨水屏或引入第二条渲染路径。
 
 ## 9. 常见陷阱
 
