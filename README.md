@@ -23,7 +23,7 @@
    - 若云端返回 `nextSleepSeconds > 0`，设备保存到 NVS `device/slpInt`，本次回睡时按该秒数配置定时唤醒；未返回或返回 0 时保留本地已有间隔，若本地未设置则使用默认 12 小时
    - 若云端图片同步标记 `imageVersion > 0` 且 `imageVersion != NVS(imgVer)`：`GET imageUrl` 流式下载到 SPIFFS 临时文件 → 刷新墨水屏 → 刷新成功后写入 NVS 新版本 → Deep-sleep
    - 若版本一致：直接 Deep-sleep
-   - 若未绑定：显示居中设备码页（云端配置二维码 + 设备码）→ Deep-sleep
+   - 若未绑定：显示满屏添加设备页（云端配置二维码 + 设备码）→ Deep-sleep
 
 ## 硬件要求
 
@@ -31,7 +31,7 @@
 - **当前硬件**：ESP32-C3-WROOM-02U-N4（4MB Flash，外接天线，**无 PSRAM**）
 - **Flash容量**：4MB（用于固件和SPIFFS存储）
 - **WiFi**：2.4GHz 802.11 b/g/n
-- **SRAM 注意**：运行时堆最大连续块约 **115KB**，无法动态分配 192KB 全屏画布；AP 配网页使用 **800×144 条带**流式绘制整屏，设备码页使用约 **58KB** 的 `480x240` 画布按需分配/释放
+- **SRAM 注意**：运行时堆最大连续块约 **115KB**，无法动态分配 192KB 全屏画布；AP 配网页和添加设备码页都使用 **800×144 条带**流式绘制整屏，按需分配/释放约 **58KB** 缓冲
 
 ### 墨水屏
 - **型号**：7.3寸 E6 彩色电子纸（800x480分辨率）
@@ -355,10 +355,11 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 |------|----------|----------|----------|
 | **云端会议牌** | SPIFFS `/temp_image.bin` | ~400 B 行缓冲 | `EPD_load_7in3E_from_buff()`（`epd7in3.h`） |
 | **WiFi AP 配网页** | 设备实时绘制 | `800x144` 条带（约 58KB）按需分配，整屏流式发送 | `displayProvisioningScreen()` |
-| **未绑定设备码页** | 设备实时绘制 | 同上缓冲上的 **480×240** 局部画布，居中刷新 | `displayDeviceCode()` |
+| **未绑定添加设备码页** | 设备实时绘制 | `800x144` 条带（约 58KB）按需分配，整屏流式发送 | `displayDeviceCode()` |
 
 - `http_update.h` 通过 `acquireEpdUiFrame()` / `releaseEpdUiFrame()` 管理共享 UI 画布，WiFi 配网页与设备码页 **共用、互斥**（同一唤醒周期只画其一）。
 - AP 模式顺序：**WiFi OFF → 分配约 58KB 条带缓冲流式刷整屏配网页 → 释放画布 → 启动开放热点 → 终端关联 / DHCP 后再启动 DNS 和 Web 配网**；AP 页面只走这一条预渲染路径，不再在 `loop()` 中补刷。可选 WPA2：在 `wifi_config.h` 将 `PROVISIONING_AP_PSK` 设为 ≥8 字符密码。
+- 未绑定添加设备码页同样使用约 58KB 条带缓冲流式刷整屏，二维码 payload 为云端 `index.html` 地址，设备码按当前 MAC 动态绘制。
 - 新增本地页面时：优先复用约 58KB 的 UI 缓冲；需要满屏时使用条带流式发送，**不要** `malloc(192000)`，也不要再引入 192KB 静态缓冲。
 
 ## 设备码说明
@@ -395,12 +396,12 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
    - 模式1：前6位MAC
    - 模式2：后6位MAC（默认）
 
-**重要**：从V3.0.0开始，设备在复位重启后会主动连接WiFi查询云端状态。如果云端显示 `claimed=false`，设备会在屏幕上显示 **居中设备码页**（480×240 区域：云端配置二维码 + 大号设备码）。
+**重要**：从V3.0.0开始，设备在复位重启后会主动连接WiFi查询云端状态。如果云端显示 `claimed=false`，设备会在屏幕上显示 **满屏添加设备码页**（云端配置二维码 + 设备码）。
 
 ### AP 配网页或设备码页不显示
 
 1. **能搜到热点但无法加入**：确认连接的是开放热点 `EPD-XXXXXX`（无密码）；串口应出现 `📱 设备已关联热点`。若自定义了 `PROVISIONING_AP_PSK`，扫码或手动输入该密码。仍失败时可改 `PROVISIONING_AP_CHANNEL` 为 `1` 或 `11` 后重试。
-2. **串口出现画布分配失败**：确认 AP 页日志为 `画板: 堆分配 57600 字节 (800x144 条带)`，并检查 `malloc_before` / `largest`；当前固件不应再依赖 192KB 静态缓冲。
+2. **串口出现画布分配失败**：确认 AP 页 / 添加设备码页日志为 `画板: 堆分配 57600 字节 (800x144 条带)`，并检查 `malloc_before` / `largest`；当前固件不应再依赖 192KB 静态缓冲。
 3. **屏幕 BUSY 超时**：检查排线、供电与 `BUSY` 上拉；当前固件会先刷屏再启动热点，若 BUSY 卡死会直接跳过本次本地页面显示。
 4. **已有旧 WiFi 配置**：上电会优先连路由器而非 AP，需 Erase Flash 或长按 GPIO0 重新配网。
 

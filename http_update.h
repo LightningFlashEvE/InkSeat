@@ -77,7 +77,7 @@
 #define EPD_PANEL_WIDTH 800
 #define EPD_PANEL_HEIGHT 480
 
-/* AP 配网页整屏按 800x144 条带流式发送；设备码页仍使用 480x240 局部画布 */
+/* AP 配网页 / 添加设备码页按 800x144 条带流式发送整屏，避免 192KB 全屏画布 */
 #define PROVISIONING_CANVAS_WIDTH 480
 #define PROVISIONING_CANVAS_HEIGHT 240
 #define PROVISIONING_CANVAS_PACKED_WIDTH ((PROVISIONING_CANVAS_WIDTH + 1) / 2)
@@ -315,6 +315,21 @@ static void drawStringENInStripe(int x, int y, const char* text, sFONT* font,
     Paint_DrawString_EN(x, y - stripeY, text, font, bg, fg);
 }
 
+static void drawStringENSpacedInStripe(int x, int y, const char* text, sFONT* font,
+                                       UWORD fg, UWORD bg, int spacing,
+                                       int stripeY, int stripeHeight) {
+    if (text == NULL || font == NULL || !isElementInStripe(y, font->Height, stripeY, stripeHeight)) {
+        return;
+    }
+
+    int cursorX = x;
+    while (*text != '\0') {
+        Paint_DrawChar(cursorX, y - stripeY, *text, font, fg, bg);
+        cursorX += font->Width + spacing;
+        text++;
+    }
+}
+
 static void drawStringCNInStripe(int x, int y, const char* text, cFONT* font,
                                  UWORD fg, UWORD bg, int stripeY, int stripeHeight) {
     if (text == NULL || font == NULL || !isElementInStripe(y, font->Height, stripeY, stripeHeight)) {
@@ -366,17 +381,17 @@ static bool renderProvisioningFullStripe(UBYTE* imageBuffer, int stripeY, int st
     const int paintWidth = EPD_PANEL_WIDTH;
     const UWORD fg = EPD_7IN3E_BLACK;
     const UWORD bg = EPD_7IN3E_GREEN;
-    const int logoX = 27;
+    const int logoX = 26;
     const int logoY = 22;
     const int leftX = 78;
     const int titleCnX = 77;
     const int valueX = 222;
-    const int qrBoxX = 520;
-    const int qrBoxY = 204;
-    const int qrBoxW = 218;
-    const int qrBoxH = 218;
-    const int qrRadius = 18;
-    const int qrCenterX = 629;
+    const int qrBoxX = 531;
+    const int qrBoxY = 214;
+    const int qrBoxW = 195;
+    const int qrBoxH = 195;
+    const int qrRadius = 10;
+    const int qrCenterX = 628;
     const int qrCenterY = 311;
     const int qrSize = 193;
 
@@ -388,14 +403,13 @@ static bool renderProvisioningFullStripe(UBYTE* imageBuffer, int stripeY, int st
     cFONT* titleCnFont = &Font36CN;
     cFONT* hintFont = provisioningHintFont();
     cFONT* labelFont = hintFont;
-    sFONT* smallValueFont = provisioningValueFont();
     sFONT* largeValueFont = &Font24;
 
     drawBitmapMaskClipped(logoX, logoY - stripeY, PHENOSOLAR_LOGO_WIDTH, PHENOSOLAR_LOGO_HEIGHT,
                           phenosolar_logo_white_mask, EPD_7IN3E_WHITE,
                           paintWidth, stripeHeight);
 
-    drawStringENInStripe(leftX, 113, "NETWORK CONFIGURATION", smallValueFont,
+    drawStringENInStripe(leftX, 113, "NETWORK CONFIGURATION", largeValueFont,
                          fg, bg, stripeY, stripeHeight);
     drawStringCNInStripe(titleCnX, 145, "配网设置", titleCnFont,
                          fg, bg, stripeY, stripeHeight);
@@ -413,10 +427,72 @@ static bool renderProvisioningFullStripe(UBYTE* imageBuffer, int stripeY, int st
     }
 
     drawStringCNInStripe(leftX, 329, "热点名称", labelFont, fg, bg, stripeY, stripeHeight);
-    drawStringENInStripe(valueX, 329, apSSID.c_str(), largeValueFont, fg, bg, stripeY, stripeHeight);
+    drawStringENSpacedInStripe(valueX, 329, apSSID.c_str(), largeValueFont,
+                               EPD_7IN3E_WHITE, bg, 6, stripeY, stripeHeight);
     drawStringENInStripe(leftX, 370, "IP", largeValueFont, fg, bg, stripeY, stripeHeight);
     drawStringCNInStripe(leftX + 45, 370, "地址", labelFont, fg, bg, stripeY, stripeHeight);
-    drawStringENInStripe(valueX, 370, "192.168.4.1", largeValueFont, fg, bg, stripeY, stripeHeight);
+    drawStringENSpacedInStripe(valueX, 370, "192.168.4.1", largeValueFont,
+                               EPD_7IN3E_WHITE, bg, 3, stripeY, stripeHeight);
+
+    return true;
+}
+
+static bool renderAddDeviceFullStripe(UBYTE* imageBuffer, int stripeY, int stripeHeight,
+                                      const String& portalUrl, const String& code) {
+    const int paintWidth = EPD_PANEL_WIDTH;
+    const UWORD fg = EPD_7IN3E_BLACK;
+    const UWORD bg = EPD_7IN3E_GREEN;
+    const int logoX = 26;
+    const int logoY = 22;
+    const int leftX = 78;
+    const int qrBoxX = 531;
+    const int qrBoxY = 214;
+    const int qrBoxW = 195;
+    const int qrBoxH = 195;
+    const int qrRadius = 10;
+    const int qrCenterX = 628;
+    const int qrCenterY = 311;
+    const int qrSize = 193;
+
+    Paint_NewImage(imageBuffer, paintWidth, stripeHeight, 0, bg);
+    Paint_SetScale(6);
+    Paint_SelectImage(imageBuffer);
+    Paint_Clear(bg);
+
+    cFONT* titleCnFont = &Font36CN;
+    cFONT* bodyFont = provisioningHintFont();
+    sFONT* smallValueFont = provisioningValueFont();
+    sFONT* largeValueFont = &Font24;
+
+    drawBitmapMaskClipped(logoX, logoY - stripeY, PHENOSOLAR_LOGO_WIDTH, PHENOSOLAR_LOGO_HEIGHT,
+                          phenosolar_logo_white_mask, EPD_7IN3E_WHITE,
+                          paintWidth, stripeHeight);
+
+    drawStringENInStripe(leftX, 112, "ADD DEVICE", largeValueFont,
+                         fg, bg, stripeY, stripeHeight);
+    drawStringCNInStripe(leftX, 145, "添加设备", titleCnFont,
+                         fg, bg, stripeY, stripeHeight);
+
+    drawStringCNInStripe(leftX, 217, "手机扫描右侧二维码", bodyFont,
+                         fg, bg, stripeY, stripeHeight);
+    drawStringCNInStripe(leftX, 251, "或浏览器地址输入网址", bodyFont,
+                         fg, bg, stripeY, stripeHeight);
+    drawStringENInStripe(leftX, 288, portalUrl.c_str(), smallValueFont,
+                         fg, bg, stripeY, stripeHeight);
+    drawStringCNInStripe(leftX, 318, "登录管理网页添加设备码", bodyFont,
+                         fg, bg, stripeY, stripeHeight);
+
+    drawStringCNInStripe(leftX, 369, "设备码", bodyFont,
+                         fg, bg, stripeY, stripeHeight);
+    drawStringENSpacedInStripe(190, 369, code.c_str(), largeValueFont,
+                               EPD_7IN3E_WHITE, bg, 7, stripeY, stripeHeight);
+
+    fillRoundedRectClipped(qrBoxX, qrBoxY - stripeY, qrBoxW, qrBoxH, qrRadius,
+                           EPD_7IN3E_WHITE, paintWidth, stripeHeight);
+    if (!drawProvisioningQrToPaintEx(portalUrl, qrCenterX, qrCenterY - stripeY, qrSize,
+                                     paintWidth, stripeHeight, EPD_7IN3E_BLACK)) {
+        return false;
+    }
 
     return true;
 }
@@ -480,6 +556,31 @@ static bool displayProvisioningFullScreen(UBYTE* imageBuffer, const String& apSS
 
         if (!renderProvisioningFullStripe(imageBuffer, stripeY, stripeHeight,
                                           apSSID, wifiQrPayload, apPassword)) {
+            return false;
+        }
+
+        for (int row = 0; row < stripeHeight; row++) {
+            epdWriteDataBuffer(imageBuffer + row * packedWidth, packedWidth);
+        }
+        EPD_ProvisioningYield();
+    }
+
+    return refreshEpdAfterFullFrame();
+}
+
+static bool displayAddDeviceFullScreen(UBYTE* imageBuffer, const String& portalUrl,
+                                       const String& code) {
+    const int packedWidth = (EPD_PANEL_WIDTH + 1) / 2;
+    EPD_7in3E_ClearBusyTimeout();
+    epdWriteCommandByte(0x10);
+
+    for (int stripeY = 0; stripeY < EPD_PANEL_HEIGHT; stripeY += PROVISIONING_FULL_STRIPE_HEIGHT) {
+        int stripeHeight = PROVISIONING_FULL_STRIPE_HEIGHT;
+        if (stripeY + stripeHeight > EPD_PANEL_HEIGHT) {
+            stripeHeight = EPD_PANEL_HEIGHT - stripeY;
+        }
+
+        if (!renderAddDeviceFullStripe(imageBuffer, stripeY, stripeHeight, portalUrl, code)) {
             return false;
         }
 
@@ -773,8 +874,7 @@ void displayDeviceCode() {
     Serial.println("📱 开始显示设备码...");
     Serial.print("⭐ 设备码: ");
     Serial.println(deviceId);
-    String portalUrl = getCloudPortalUrl();
-    String portalLabel = String(CLOUD_API_HOST) + ":" + String(CLOUD_API_PORT);
+    String portalUrl = getCloudPortalUrl() + "index.html";
     Serial.printf("🌐 云端配置页: %s\n", portalUrl.c_str());
     
     // 默认使用 7.3" E6 屏
@@ -790,92 +890,21 @@ void displayDeviceCode() {
         return;
     }
 
-    String code = deviceId;
-    const int paintWidth = PROVISIONING_CANVAS_WIDTH;
-    const int paintHeight = PROVISIONING_CANVAS_HEIGHT;
-
-    UBYTE* imageBuffer = acquireEpdUiFrame(PROVISIONING_CANVAS_SIZE);
+    UBYTE* imageBuffer = acquireEpdUiFrame(PROVISIONING_FULL_STRIPE_SIZE);
     if (imageBuffer == nullptr) {
         Serial.println("❌ 设备码画布分配失败");
         return;
     }
 
-    Serial.printf("   画板: 堆分配 %dx%d (%u 字节)\n", paintWidth, paintHeight,
-                  (unsigned)PROVISIONING_CANVAS_SIZE);
-
-    Paint_NewImage(imageBuffer, paintWidth, paintHeight, 0, EPD_7IN3E_WHITE);
-    Paint_SetScale(6);
-    Paint_SelectImage(imageBuffer);
-    Paint_Clear(EPD_7IN3E_WHITE);
-
-    if (!drawProvisioningQrToPaint(portalUrl, 118, paintHeight / 2, 188)) {
-        Serial.println("❌ 云端网页二维码生成失败");
-        releaseEpdUiFrame();
-        return;
-    }
-
-    cFONT* devicePageTextFont = &Font24CN;
-    Paint_DrawString_CN(getCenteredTextX(250, paintWidth - 250, "扫码打开网页", devicePageTextFont),
-                        38, "扫码打开网页", devicePageTextFont, EPD_7IN3E_BLACK, EPD_7IN3E_WHITE);
-    Paint_DrawString_CN(getCenteredTextX(250, paintWidth - 250, "设备码", devicePageTextFont),
-                        72, "设备码", devicePageTextFont, EPD_7IN3E_BLACK, EPD_7IN3E_WHITE);
-
-    int fontScale = 2;
-    int charWidth = Font24.Width * fontScale;
-    int charHeight = Font24.Height * fontScale;
-    int textWidth = code.length() * charWidth;
-    int startX = 250;
-    int startY = 104;
-    if (startX + textWidth > paintWidth - 12) {
-        startX = paintWidth - textWidth - 12;
-        if (startX < 220) {
-            startX = 220;
-        }
-    }
-
-    const char* pStr = code.c_str();
-    int charX = startX;
-    int charY = startY;
-
-    while (*pStr != '\0') {
-        char c = *pStr;
-        uint32_t Char_Offset = (c - ' ') * Font24.Height * (Font24.Width / 8 + (Font24.Width % 8 ? 1 : 0));
-        const unsigned char *ptr = &Font24.table[Char_Offset];
-
-        for (int Page = 0; Page < Font24.Height; Page++) {
-            for (int Column = 0; Column < Font24.Width; Column++) {
-                bool pixelOn = (*ptr & (0x80 >> (Column % 8))) != 0;
-
-                for (int sy = 0; sy < fontScale; sy++) {
-                    for (int sx = 0; sx < fontScale; sx++) {
-                        int px = charX + Column * fontScale + sx;
-                        int py = charY + Page * fontScale + sy;
-                        if (px < paintWidth && py < paintHeight) {
-                            Paint_SetPixel(px, py, pixelOn ? EPD_7IN3E_BLUE : EPD_7IN3E_WHITE);
-                        }
-                    }
-                }
-
-                if (Column % 8 == 7) ptr++;
-            }
-            if (Font24.Width % 8 != 0) ptr++;
-        }
-
-        charX += charWidth;
-        pStr++;
-    }
-
-    Paint_DrawString_EN(250, 188, portalLabel.c_str(), &Font12, EPD_7IN3E_WHITE, EPD_7IN3E_BLACK);
-    
-    const UWORD xstart = (EPD_PANEL_WIDTH - paintWidth) / 2;
-    const UWORD ystart = (EPD_PANEL_HEIGHT - paintHeight) / 2;
+    Serial.printf("   画板: 堆分配 %u 字节 (800x144 条带)\n",
+                  (unsigned)PROVISIONING_FULL_STRIPE_SIZE);
 
     EPD_7IN3E_ClearBusyTimeout();
-    EPD_7IN3E_DisplayPart(imageBuffer, xstart, ystart, paintWidth, paintHeight);
+    bool rendered = displayAddDeviceFullScreen(imageBuffer, portalUrl, deviceId);
 
     releaseEpdUiFrame();
 
-    if (EPD_7IN3E_LastBusyTimeout()) {
+    if (!rendered || EPD_7IN3E_LastBusyTimeout()) {
         Serial.println("❌ 设备码显示未正常完成，请检查BUSY线、屏幕供电和排线");
     } else {
         Serial.println("✅ 设备码已显示在屏幕上");

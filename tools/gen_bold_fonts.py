@@ -2,13 +2,21 @@
 """Generate provisioning-page dedicated cFONT tables (row-major, MSB first)."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-# Microsoft YaHei Bold — 中英文粗体
-FONT_PATH = r"C:\Windows\Fonts\msyhbd.ttc"
 OUT_DIR = Path(__file__).resolve().parent.parent
+FONT_DIR = Path(os.environ.get("PHENO_FONT_DIR", r"C:\Windows\Fonts"))
+
+
+def pick_font(*names: str) -> str:
+    for name in names:
+        path = FONT_DIR / name
+        if path.exists():
+            return str(path)
+    return r"C:\Windows\Fonts\msyhbd.ttc"
 
 # AP 配网页按角色拆分字库，只保留页面实际用到的字符
 FONT_SPECS: dict[str, dict] = {
@@ -17,24 +25,28 @@ FONT_SPECS: dict[str, dict] = {
         "var": "Font38CN",
         "comment": "AP 配网页标题 Font38_Bold",
         "chars": "钙钛矿墨水屏会议牌",
+        "font": pick_font("MiSans-Bold.ttf"),
     },
     "font36CN": {
         "size": 36,
         "var": "Font36CN",
-        "comment": "AP 配网页右侧提示 Font36_Bold",
-        "chars": "配网设置扫描二维码进行配置",
+        "comment": "AP 配网页标题 Font36_Bold",
+        "chars": "配网设置添加设备",
+        "font": pick_font("MiSans-Bold.ttf"),
     },
     "font24CN": {
         "size": 24,
         "var": "Font24CN",
-        "comment": "AP 配网页 / 设备码页提示 Font24_Bold",
-        "chars": "手机扫描右侧二维码连接设备热点进行WiFi配置热点名称IP地址扫码或打开网页",
+        "comment": "AP 配网页 / 添加设备页正文 Font24_Normal",
+        "chars": "手机扫描右侧二维码连接设备热点进行WiFi配置热点名称IP地址或浏览器输入网址登录管理网页添加设备码扫码打开",
+        "font": pick_font("MiSans-Normal.ttf", "MiSans-Semibold.ttf", "MiSans-Bold.ttf"),
     },
     "font20CN": {
         "size": 20,
         "var": "Font20CN",
-        "comment": "AP 配网页左下标签 Font20_Bold",
-        "chars": "热点名称IP地址",
+        "comment": "AP 配网页小号标签 Font20_Normal",
+        "chars": "热点名称IP地址设备码",
+        "font": pick_font("MiSans-Normal.ttf", "MiSans-Semibold.ttf", "MiSans-Bold.ttf"),
     },
 }
 
@@ -43,10 +55,10 @@ def cell_width(size: int) -> int:
     return ((size + 7) // 8) * 8
 
 
-def render_char(ch: str, size: int, cw: int) -> Image.Image:
+def render_char(ch: str, size: int, cw: int, font_path: str) -> Image.Image:
     img = Image.new("1", (cw, size), 1)
     draw = ImageDraw.Draw(img)
-    font = ImageFont.truetype(FONT_PATH, size)
+    font = ImageFont.truetype(font_path, size)
     bbox = draw.textbbox((0, 0), ch, font=font)
     w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
     x = (cw - w) // 2 - bbox[0]
@@ -97,13 +109,13 @@ def emit_c_file(name: str, spec: dict) -> Path:
 
     entries: list[str] = []
     for ch in chars:
-        data = img_to_bytes(render_char(ch, size, cw))
+        data = img_to_bytes(render_char(ch, size, cw, spec["font"]))
         entries.append(format_entry(ch, data))
 
     content = f"""#include "fonts.h"
 
 /*
- * {spec["comment"]} — {size}px 粗体 (msyhbd)
+ * {spec["comment"]} — {size}px ({Path(spec["font"]).name})
  * 取模：逐行、MSB 在前；宽 {cw}px × 高 {size}px，每字 {len(entries[0].split(chr(10))[1].split(",")) if entries else 0} 字节
  * 字符集: {chars}
  */
@@ -121,7 +133,7 @@ cFONT {var} = {{
 """
     out = OUT_DIR / f"{name}.c"
     out.write_text(content, encoding="utf-8", newline="\n")
-    nbytes = sum(len(img_to_bytes(render_char(c, size, cw))) for c in chars)
+    nbytes = sum(len(img_to_bytes(render_char(c, size, cw, spec["font"]))) for c in chars)
     print(f"{out.name}: {len(chars)} glyphs, ~{nbytes} bytes data, cell {cw}x{size}")
     return out
 
