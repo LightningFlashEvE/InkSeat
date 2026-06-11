@@ -56,8 +56,9 @@
 
 /* Deep-sleep 配置 */
 #define WAKEUP_GPIO GPIO_NUM_0  // GPIO0 按键唤醒（按键接地，低电平唤醒）
-#define DEEP_SLEEP_INTERVAL_HOURS 12  // 定时唤醒间隔（小时）
-#define DEEP_SLEEP_INTERVAL_US (DEEP_SLEEP_INTERVAL_HOURS * 60ULL * 60ULL * 1000000ULL)
+#define DEEP_SLEEP_INTERVAL_HOURS 12  // 默认定时唤醒间隔（小时），可由云端 nextSleepSeconds 覆盖
+#define DEFAULT_SLEEP_INTERVAL_SECONDS (DEEP_SLEEP_INTERVAL_HOURS * 3600UL)
+#define DEEP_SLEEP_INTERVAL_US (DEFAULT_SLEEP_INTERVAL_SECONDS * 1000000ULL)
 // 避免“按键仍按下/引脚为低”导致刚入睡就立刻被再次唤醒
 #define WAKEUP_RELEASE_WAIT_MS 2500
 
@@ -70,16 +71,19 @@
 #define PREF_NAMESPACE "device"
 #define PREF_KEY_CLAIMED "claimed"
 #define PREF_KEY_IMG_VER "imgVer"
+#define PREF_KEY_SLEEP_INTERVAL "slpInt"  // 单位：秒，0 = 未设置（使用默认值）
 
 /* 本地 UI 页帧缓冲：按需 malloc，画完 free（去掉 192KB 静态 BSS 以腾出 SRAM 给 WiFi） */
 #define EPD_PANEL_WIDTH 800
 #define EPD_PANEL_HEIGHT 480
 
-/* AP 配网页 / 设备码页统一使用 480x240 局部画布后居中 DisplayPart */
+/* AP 配网页整屏按 800x144 条带流式发送；设备码页仍使用 480x240 局部画布 */
 #define PROVISIONING_CANVAS_WIDTH 480
 #define PROVISIONING_CANVAS_HEIGHT 240
 #define PROVISIONING_CANVAS_PACKED_WIDTH ((PROVISIONING_CANVAS_WIDTH + 1) / 2)
 #define PROVISIONING_CANVAS_SIZE (PROVISIONING_CANVAS_PACKED_WIDTH * PROVISIONING_CANVAS_HEIGHT)
+#define PROVISIONING_FULL_STRIPE_HEIGHT 144
+#define PROVISIONING_FULL_STRIPE_SIZE (((EPD_PANEL_WIDTH + 1) / 2) * PROVISIONING_FULL_STRIPE_HEIGHT)
 #define PROVISIONING_QR_VERSION 5
 #define PROVISIONING_QR_TARGET_SIZE 220
 
@@ -182,6 +186,9 @@ static int getCenteredTextX(int areaX, int areaWidth, const String& text, const 
 static bool drawProvisioningQrToPaintEx(const String& payload, int centerX, int centerY, int targetSize,
                                         int canvasWidth, int canvasHeight, UWORD darkColor);
 static void drawBitmapMask(int x0, int y0, int width, int height, const uint8_t* bitmap, UWORD color);
+static void drawBitmapMaskClipped(int x0, int y0, int width, int height,
+                                  const uint8_t* bitmap, UWORD color,
+                                  int canvasWidth, int canvasHeight);
 
 String getProvisioningApPassword();
 
@@ -235,16 +242,30 @@ static bool drawProvisioningQrToPaint(const String& payload, int centerX, int ce
 }
 
 static void drawBitmapMask(int x0, int y0, int width, int height, const uint8_t* bitmap, UWORD color) {
+    drawBitmapMaskClipped(x0, y0, width, height, bitmap, color, Paint.Width, Paint.Height);
+}
+
+static void drawBitmapMaskClipped(int x0, int y0, int width, int height,
+                                  const uint8_t* bitmap, UWORD color,
+                                  int canvasWidth, int canvasHeight) {
     if (bitmap == NULL || width <= 0 || height <= 0) {
         return;
     }
 
     const int rowBytes = (width + 7) / 8;
     for (int y = 0; y < height; y++) {
+        const int py = y0 + y;
+        if (py < 0 || py >= canvasHeight) {
+            continue;
+        }
         for (int x = 0; x < width; x++) {
+            const int px = x0 + x;
+            if (px < 0 || px >= canvasWidth) {
+                continue;
+            }
             const uint8_t byte = bitmap[y * rowBytes + (x / 8)];
             if (byte & (0x80 >> (x % 8))) {
-                Paint_SetPixel(x0 + x, y0 + y, color);
+                Paint_SetPixel(px, py, color);
             }
         }
     }
@@ -281,71 +302,194 @@ static int getCenteredTextX(int areaX, int areaWidth, const String& text, const 
     return x < areaX ? areaX : x;
 }
 
-static bool renderProvisioningCompactScreen(UBYTE* imageBuffer, const String& apSSID,
-                                            const String& wifiQrPayload,
-                                            const String& apPassword) {
-    (void)apPassword;
-    const int paintWidth = PROVISIONING_CANVAS_WIDTH;
-    const int paintHeight = PROVISIONING_CANVAS_HEIGHT;
-    const UWORD fg = EPD_7IN3E_BLACK;
-    const UWORD bg = EPD_7IN3E_WHITE;
-    const int headerHeight = 42;
-    const int dividerX = 239;
-    const int qrSize = 126;
-    const int qrCenterX = 120;
-    const int qrCenterY = 109;
-    const int rightAreaX = 242;
-    const int rightAreaW = paintWidth - rightAreaX - 8;
-    const int logoX = 356;
-    const int logoY = 180;
+static bool isElementInStripe(int y, int height, int stripeY, int stripeHeight) {
+    return y >= stripeY && (y + height) <= (stripeY + stripeHeight);
+}
 
-    Paint_NewImage(imageBuffer, paintWidth, paintHeight, 0, EPD_7IN3E_WHITE);
+static void drawStringENInStripe(int x, int y, const char* text, sFONT* font,
+                                 UWORD fg, UWORD bg, int stripeY, int stripeHeight) {
+    if (text == NULL || font == NULL || !isElementInStripe(y, font->Height, stripeY, stripeHeight)) {
+        return;
+    }
+    // Paint_DrawString_EN 内部前景/背景参数顺序与声明相反，这里用包装函数统一为 fg/bg。
+    Paint_DrawString_EN(x, y - stripeY, text, font, bg, fg);
+}
+
+static void drawStringCNInStripe(int x, int y, const char* text, cFONT* font,
+                                 UWORD fg, UWORD bg, int stripeY, int stripeHeight) {
+    if (text == NULL || font == NULL || !isElementInStripe(y, font->Height, stripeY, stripeHeight)) {
+        return;
+    }
+    Paint_DrawString_CN(x, y - stripeY, text, font, fg, bg);
+}
+
+static void fillRoundedRectClipped(int x0, int y0, int width, int height, int radius,
+                                   UWORD color, int canvasWidth, int canvasHeight) {
+    if (width <= 0 || height <= 0 || radius <= 0) {
+        return;
+    }
+
+    const int x1 = x0 + width - 1;
+    const int y1 = y0 + height - 1;
+    const int startX = x0 < 0 ? 0 : x0;
+    const int endX = x1 >= canvasWidth ? canvasWidth - 1 : x1;
+    const int startY = y0 < 0 ? 0 : y0;
+    const int endY = y1 >= canvasHeight ? canvasHeight - 1 : y1;
+    const int r2 = radius * radius;
+
+    for (int y = startY; y <= endY; y++) {
+        for (int x = startX; x <= endX; x++) {
+            int dx = 0;
+            int dy = 0;
+            if (x < x0 + radius) {
+                dx = x0 + radius - x;
+            } else if (x > x1 - radius) {
+                dx = x - (x1 - radius);
+            }
+            if (y < y0 + radius) {
+                dy = y0 + radius - y;
+            } else if (y > y1 - radius) {
+                dy = y - (y1 - radius);
+            }
+            if (dx > 0 && dy > 0 && (dx * dx + dy * dy) > r2) {
+                continue;
+            }
+            Paint_SetPixel(x, y, color);
+        }
+    }
+}
+
+static bool renderProvisioningFullStripe(UBYTE* imageBuffer, int stripeY, int stripeHeight,
+                                         const String& apSSID, const String& wifiQrPayload,
+                                         const String& apPassword) {
+    (void)apPassword;
+    const int paintWidth = EPD_PANEL_WIDTH;
+    const UWORD fg = EPD_7IN3E_BLACK;
+    const UWORD bg = EPD_7IN3E_GREEN;
+    const int logoX = 27;
+    const int logoY = 22;
+    const int leftX = 78;
+    const int titleCnX = 77;
+    const int valueX = 222;
+    const int qrBoxX = 520;
+    const int qrBoxY = 204;
+    const int qrBoxW = 218;
+    const int qrBoxH = 218;
+    const int qrRadius = 18;
+    const int qrCenterX = 629;
+    const int qrCenterY = 311;
+    const int qrSize = 193;
+
+    Paint_NewImage(imageBuffer, paintWidth, stripeHeight, 0, bg);
     Paint_SetScale(6);
     Paint_SelectImage(imageBuffer);
-    Paint_Clear(EPD_7IN3E_WHITE);
+    Paint_Clear(bg);
 
-    cFONT* titleFont = provisioningTitleFont();
+    cFONT* titleCnFont = &Font36CN;
     cFONT* hintFont = provisioningHintFont();
-    cFONT* labelFont = provisioningLabelFont();
-    sFONT* valueFont = provisioningValueFont();
+    cFONT* labelFont = hintFont;
+    sFONT* smallValueFont = provisioningValueFont();
+    sFONT* largeValueFont = &Font24;
 
-    Paint_DrawString_CN(getCenteredTextX(0, paintWidth, "钙钛矿墨水屏会议牌", titleFont),
-                        2, "钙钛矿墨水屏会议牌", titleFont, EPD_7IN3E_BLUE, bg);
+    drawBitmapMaskClipped(logoX, logoY - stripeY, PHENOSOLAR_LOGO_WIDTH, PHENOSOLAR_LOGO_HEIGHT,
+                          phenosolar_logo_white_mask, EPD_7IN3E_WHITE,
+                          paintWidth, stripeHeight);
 
-    if (!drawProvisioningQrToPaintEx(wifiQrPayload, qrCenterX, qrCenterY, qrSize,
-                                     paintWidth, paintHeight, EPD_7IN3E_BLACK)) {
+    drawStringENInStripe(leftX, 113, "NETWORK CONFIGURATION", smallValueFont,
+                         fg, bg, stripeY, stripeHeight);
+    drawStringCNInStripe(titleCnX, 145, "配网设置", titleCnFont,
+                         fg, bg, stripeY, stripeHeight);
+
+    drawStringCNInStripe(leftX, 219, "手机扫描右侧二维码", hintFont,
+                         fg, bg, stripeY, stripeHeight);
+    drawStringCNInStripe(leftX, 258, "连接设备热点进行WiFi配置", hintFont,
+                         fg, bg, stripeY, stripeHeight);
+
+    fillRoundedRectClipped(qrBoxX, qrBoxY - stripeY, qrBoxW, qrBoxH, qrRadius,
+                           EPD_7IN3E_WHITE, paintWidth, stripeHeight);
+    if (!drawProvisioningQrToPaintEx(wifiQrPayload, qrCenterX, qrCenterY - stripeY, qrSize,
+                                     paintWidth, stripeHeight, EPD_7IN3E_BLACK)) {
         return false;
     }
 
-    Paint_DrawRectangle(dividerX, headerHeight, dividerX + 2, paintHeight - 1,
-                        fg, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-
-    Paint_DrawString_CN(getCenteredTextX(rightAreaX, rightAreaW, "扫二维码或连接热点", hintFont),
-                        96, "扫二维码或连接热点", hintFont, EPD_7IN3E_RED, bg);
-    Paint_DrawString_CN(getCenteredTextX(rightAreaX, rightAreaW, "配置设备WiFi", hintFont),
-                        132, "配置设备WiFi", hintFont, EPD_7IN3E_RED, bg);
-
-    const int labelX = 18;
-    const int valueX = 82;
-    const int dynamicValueX = valueX + 20;
-    const int ssidRowY = 178;
-    const int ipRowY = 206;
-    Paint_DrawString_CN(labelX, ssidRowY, "热点", labelFont, fg, bg);
-    Paint_DrawString_EN(dynamicValueX, ssidRowY + 2, apSSID.c_str(), valueFont,
-                        EPD_7IN3E_WHITE, EPD_7IN3E_BLUE);
-
-    Paint_DrawString_EN(labelX, ipRowY + 3, "ip", valueFont,
-                        EPD_7IN3E_WHITE, EPD_7IN3E_BLACK);
-    Paint_DrawString_CN(labelX + 28, ipRowY, "地址", labelFont, fg, bg);
-    Paint_DrawString_EN(dynamicValueX, ipRowY + 2, "192.168.4.1", valueFont,
-                        EPD_7IN3E_WHITE, EPD_7IN3E_BLUE);
-
-    drawBitmapMask(logoX, logoY, PHENOSOLAR_LOGO_WIDTH, PHENOSOLAR_LOGO_HEIGHT,
-                   phenosolar_logo_black_mask, EPD_7IN3E_BLACK);
-    drawBitmapMask(logoX, logoY, PHENOSOLAR_LOGO_WIDTH, PHENOSOLAR_LOGO_HEIGHT,
-                   phenosolar_logo_green_mask, EPD_7IN3E_GREEN);
+    drawStringCNInStripe(leftX, 329, "热点名称", labelFont, fg, bg, stripeY, stripeHeight);
+    drawStringENInStripe(valueX, 329, apSSID.c_str(), largeValueFont, fg, bg, stripeY, stripeHeight);
+    drawStringENInStripe(leftX, 370, "IP", largeValueFont, fg, bg, stripeY, stripeHeight);
+    drawStringCNInStripe(leftX + 45, 370, "地址", labelFont, fg, bg, stripeY, stripeHeight);
+    drawStringENInStripe(valueX, 370, "192.168.4.1", largeValueFont, fg, bg, stripeY, stripeHeight);
 
     return true;
+}
+
+static void epdWriteCommandByte(UBYTE command) {
+    DEV_Digital_Write(EPD_DC_PIN, 0);
+    DEV_Digital_Write(EPD_CS_PIN, 0);
+    DEV_SPI_WriteByte(command);
+    DEV_Digital_Write(EPD_CS_PIN, 1);
+}
+
+static void epdWriteDataByte(UBYTE data) {
+    DEV_Digital_Write(EPD_DC_PIN, 1);
+    DEV_Digital_Write(EPD_CS_PIN, 0);
+    DEV_SPI_WriteByte(data);
+    DEV_Digital_Write(EPD_CS_PIN, 1);
+}
+
+static void epdWriteDataBuffer(const UBYTE* data, int length) {
+    DEV_Digital_Write(EPD_DC_PIN, 1);
+    DEV_Digital_Write(EPD_CS_PIN, 0);
+    DEV_SPI_Write_nByte((UBYTE*)data, length);
+    DEV_Digital_Write(EPD_CS_PIN, 1);
+}
+
+static bool refreshEpdAfterFullFrame() {
+    epdWriteCommandByte(0x04);
+    if (!EPD_7in3E_WaitBusy(EPD7IN3_BUSY_INIT_TIMEOUT_MS, "配网页上电")) {
+        return false;
+    }
+
+    epdWriteCommandByte(0x06);
+    epdWriteDataByte(0x6F);
+    epdWriteDataByte(0x1F);
+    epdWriteDataByte(0x17);
+    epdWriteDataByte(0x49);
+
+    epdWriteCommandByte(0x12);
+    epdWriteDataByte(0x00);
+    if (!EPD_7in3E_WaitBusy(EPD7IN3_BUSY_REFRESH_TIMEOUT_MS, "配网页刷新")) {
+        return false;
+    }
+
+    epdWriteCommandByte(0x02);
+    epdWriteDataByte(0x00);
+    return EPD_7in3E_WaitBusy(EPD7IN3_BUSY_INIT_TIMEOUT_MS, "配网页断电");
+}
+
+static bool displayProvisioningFullScreen(UBYTE* imageBuffer, const String& apSSID,
+                                          const String& wifiQrPayload,
+                                          const String& apPassword) {
+    const int packedWidth = (EPD_PANEL_WIDTH + 1) / 2;
+    EPD_7in3E_ClearBusyTimeout();
+    epdWriteCommandByte(0x10);
+
+    for (int stripeY = 0; stripeY < EPD_PANEL_HEIGHT; stripeY += PROVISIONING_FULL_STRIPE_HEIGHT) {
+        int stripeHeight = PROVISIONING_FULL_STRIPE_HEIGHT;
+        if (stripeY + stripeHeight > EPD_PANEL_HEIGHT) {
+            stripeHeight = EPD_PANEL_HEIGHT - stripeY;
+        }
+
+        if (!renderProvisioningFullStripe(imageBuffer, stripeY, stripeHeight,
+                                          apSSID, wifiQrPayload, apPassword)) {
+            return false;
+        }
+
+        for (int row = 0; row < stripeHeight; row++) {
+            epdWriteDataBuffer(imageBuffer + row * packedWidth, packedWidth);
+        }
+        EPD_ProvisioningYield();
+    }
+
+    return refreshEpdAfterFullFrame();
 }
 
 String getCloudPortalUrl() {
@@ -362,9 +506,9 @@ bool displayProvisioningScreen(const String& apSSID, const String& deviceCode, c
 
     Serial.println("📱 开始显示AP配网页二维码...");
     Serial.printf("   SSID: %s\n", apSSID.c_str());
-    Serial.printf("   画板: 堆分配 %u 字节 (480x240)\n", (unsigned)PROVISIONING_CANVAS_SIZE);
+    Serial.printf("   画板: 堆分配 %u 字节 (800x144 条带)\n", (unsigned)PROVISIONING_FULL_STRIPE_SIZE);
 
-    UBYTE* imageBuffer = acquireEpdUiFrame(PROVISIONING_CANVAS_SIZE);
+    UBYTE* imageBuffer = acquireEpdUiFrame(PROVISIONING_FULL_STRIPE_SIZE);
     if (imageBuffer == nullptr) {
         Serial.println("❌ 配网页画布分配失败（请查看 malloc_before / largest 日志）");
         return false;
@@ -386,15 +530,9 @@ bool displayProvisioningScreen(const String& apSSID, const String& deviceCode, c
         return false;
     }
 
-    const bool rendered = renderProvisioningCompactScreen(imageBuffer, apSSID, wifiQrPayload,
-                                                          getProvisioningApPassword());
-    if (rendered) {
-        const UWORD xstart = (EPD_PANEL_WIDTH - PROVISIONING_CANVAS_WIDTH) / 2;
-        const UWORD ystart = (EPD_PANEL_HEIGHT - PROVISIONING_CANVAS_HEIGHT) / 2;
-        EPD_7IN3E_ClearBusyTimeout();
-        EPD_7IN3E_DisplayPart(imageBuffer, xstart, ystart,
-                              PROVISIONING_CANVAS_WIDTH, PROVISIONING_CANVAS_HEIGHT);
-    }
+    EPD_7IN3E_ClearBusyTimeout();
+    const bool rendered = displayProvisioningFullScreen(imageBuffer, apSSID, wifiQrPayload,
+                                                        getProvisioningApPassword());
     dbgSetEpdActive(false);
     releaseEpdUiFrame();
 
@@ -527,6 +665,36 @@ void saveImageVersion(int64_t version) {
     Serial.printf("💾 保存本地图片版本: %lld\n", version);
 }
 
+/**
+ * 读取云端下发的定时唤醒间隔（秒）
+ * 返回 0 表示未设置，使用默认 DEEP_SLEEP_INTERVAL_HOURS。
+ */
+uint32_t loadSleepInterval() {
+    if (!preferences.begin(PREF_NAMESPACE, true)) {
+        preferences.end();
+        return 0;
+    }
+    uint32_t interval = preferences.getUInt(PREF_KEY_SLEEP_INTERVAL, 0);
+    preferences.end();
+    return interval;
+}
+
+/**
+ * 保存云端下发的定时唤醒间隔（秒）
+ */
+void saveSleepInterval(uint32_t seconds) {
+    if (seconds == 0) {
+        return;
+    }
+    if (!preferences.begin(PREF_NAMESPACE, false)) {
+        Serial.println("⚠️  NVS命名空间打开失败，无法保存唤醒间隔");
+        return;
+    }
+    preferences.putUInt(PREF_KEY_SLEEP_INTERVAL, seconds);
+    preferences.end();
+    Serial.printf("💾 保存本地唤醒间隔: %u 秒\n", seconds);
+}
+
 /* ============================================================================
  *                            辅助函数：Flash 存储
  * ============================================================================ */
@@ -646,16 +814,18 @@ void displayDeviceCode() {
         return;
     }
 
-    // Paint_DrawString_EN 内部前景/背景参数顺序与声明相反，这里传 WHITE/BLACK 才能得到白底黑字。
-    Paint_DrawString_EN(250, 40, "Scan QR to open web page", &Font12, EPD_7IN3E_WHITE, EPD_7IN3E_BLACK);
-    Paint_DrawString_EN(250, 74, "Device Code", &Font12, EPD_7IN3E_WHITE, EPD_7IN3E_BLACK);
+    cFONT* devicePageTextFont = &Font24CN;
+    Paint_DrawString_CN(getCenteredTextX(250, paintWidth - 250, "扫码打开网页", devicePageTextFont),
+                        38, "扫码打开网页", devicePageTextFont, EPD_7IN3E_BLACK, EPD_7IN3E_WHITE);
+    Paint_DrawString_CN(getCenteredTextX(250, paintWidth - 250, "设备码", devicePageTextFont),
+                        72, "设备码", devicePageTextFont, EPD_7IN3E_BLACK, EPD_7IN3E_WHITE);
 
     int fontScale = 2;
     int charWidth = Font24.Width * fontScale;
     int charHeight = Font24.Height * fontScale;
     int textWidth = code.length() * charWidth;
     int startX = 250;
-    int startY = 96;
+    int startY = 104;
     if (startX + textWidth > paintWidth - 12) {
         startX = paintWidth - textWidth - 12;
         if (startX < 220) {
@@ -724,6 +894,7 @@ struct DeviceStatusResponse {
     bool claimed;
     int64_t imageVersion;
     String imageUrl;
+    uint32_t nextSleepSeconds;
     String error;
 };
 
@@ -731,7 +902,7 @@ struct DeviceStatusResponse {
  * 向云端查询设备状态
  */
 DeviceStatusResponse queryDeviceStatus() {
-    DeviceStatusResponse result = {false, false, 0, "", ""};
+    DeviceStatusResponse result = {false, false, 0, "", 0, ""};
     
     if (WiFi.status() != WL_CONNECTED) {
         result.error = "WiFi未连接";
@@ -779,15 +950,18 @@ DeviceStatusResponse queryDeviceStatus() {
     doc["freeHeap"] = ESP.getFreeHeap();
     doc["wakeType"] = wakeType;
     doc["wakeCause"] = wakeCauseText;
+    uint32_t currentSleepSeconds = loadSleepInterval();
+    doc["currentSleepSeconds"] = currentSleepSeconds;
     String requestBody;
     serializeJson(doc, requestBody);
-    Serial.printf("   上报状态: ip=%s, rssi=%d dBm, uptime=%lu ms, freeHeap=%lu, wakeType=%s, wakeCause=%s\n",
+    Serial.printf("   上报状态: ip=%s, rssi=%d dBm, uptime=%lu ms, freeHeap=%lu, wakeType=%s, wakeCause=%s, currentSleepSeconds=%u\n",
                   WiFi.localIP().toString().c_str(),
                   WiFi.RSSI(),
                   (unsigned long)millis(),
                   (unsigned long)ESP.getFreeHeap(),
                   wakeType,
-                  wakeCauseText);
+                  wakeCauseText,
+                  currentSleepSeconds);
     
     int httpCode = http.POST(requestBody);
     
@@ -811,6 +985,15 @@ DeviceStatusResponse queryDeviceStatus() {
             
             if (respDoc["imageUrl"].is<String>()) {
                 result.imageUrl = respDoc["imageUrl"].as<String>();
+            }
+
+            if (respDoc["nextSleepSeconds"].is<uint32_t>()) {
+                result.nextSleepSeconds = respDoc["nextSleepSeconds"].as<uint32_t>();
+            }
+
+            if (result.nextSleepSeconds > 0) {
+                saveSleepInterval(result.nextSleepSeconds);
+                Serial.printf("   云端下发唤醒间隔: %u 秒\n", result.nextSleepSeconds);
             }
             
             Serial.printf("   绑定状态: %s\n", result.claimed ? "已绑定" : "未绑定");
@@ -1116,14 +1299,24 @@ void enterDeepSleep() {
     Serial.println("   配置GPIO0按键唤醒...");
     esp_deep_sleep_enable_gpio_wakeup(1ULL << WAKEUP_GPIO, ESP_GPIO_WAKEUP_GPIO_LOW);
     
-    // 3. 配置定时唤醒（12小时）
-    Serial.printf("   配置定时唤醒: %d 小时\n", DEEP_SLEEP_INTERVAL_HOURS);
-    esp_sleep_enable_timer_wakeup(DEEP_SLEEP_INTERVAL_US);
+    // 3. 配置定时唤醒（云端下发优先，未设置时使用默认间隔）
+    uint32_t sleepSec = loadSleepInterval();
+    if (sleepSec == 0) {
+        sleepSec = DEFAULT_SLEEP_INTERVAL_SECONDS;
+    }
+    esp_sleep_enable_timer_wakeup((uint64_t)sleepSec * 1000000ULL);
+    if (sleepSec >= 3600) {
+        Serial.printf("   配置定时唤醒: %u 秒（%u 小时）\n", sleepSec, sleepSec / 3600);
+    } else if (sleepSec >= 60) {
+        Serial.printf("   配置定时唤醒: %u 秒（%u 分钟）\n", sleepSec, sleepSec / 60);
+    } else {
+        Serial.printf("   配置定时唤醒: %u 秒\n", sleepSec);
+    }
     
     // 4. 打印信息
     Serial.println("\n✅ Deep-sleep配置完成:");
     Serial.println("   - GPIO0 按键唤醒（低电平）");
-    Serial.printf("   - 定时唤醒: %d 小时后\n", DEEP_SLEEP_INTERVAL_HOURS);
+    Serial.printf("   - 定时唤醒: %u 秒后\n", sleepSec);
     Serial.println("   - 墨水屏将保持当前画面");
     Serial.println("\n💤 进入Deep-sleep...\n");
     Serial.flush();

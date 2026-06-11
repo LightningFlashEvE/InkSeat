@@ -92,7 +92,7 @@ extern cFONT FontNum;
 /* AP 配网页专用字库 */
 extern cFONT Font38CN;  /* 标题 */
 extern cFONT Font36CN;  /* 备用大提示 */
-extern cFONT Font24CN;  /* 右侧提示 */
+extern cFONT Font24CN;  /* AP / 设备码提示 */
 extern cFONT Font20CN;  /* 左下标签 */
 // extern const unsigned char Font16_Table[];
 

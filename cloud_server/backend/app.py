@@ -38,6 +38,70 @@ EPD_WIDTH = 800
 EPD_HEIGHT = 480
 EPD_EXPECTED_CHARS = EPD_WIDTH * EPD_HEIGHT  # 384000
 EPD_ALLOWED_CHARS = set('abcdefghijklmnop')
+DEFAULT_SLEEP_INTERVAL_SECONDS = 12 * 60 * 60
+TEMPLATE_SLEEP_INTERVAL_SECONDS = {
+    'clock': 60 * 60,
+    'weather': 6 * 60 * 60,
+    'calendar': 24 * 60 * 60,
+    'quote': 24 * 60 * 60,
+    'todo': DEFAULT_SLEEP_INTERVAL_SECONDS,
+    'qrcode': DEFAULT_SLEEP_INTERVAL_SECONDS,
+}
+CONTENT_MODE_LABELS = {
+    'image': '普通图片',
+    'text': '文字内容',
+    'mixed': '图文内容',
+    'custom': '自定义内容',
+}
+
+def get_template_meta(template_id: str):
+    """查找当前仍可用的内置模板。"""
+    if not template_id:
+        return None
+    template_id = str(template_id).strip().lower()
+    return next((t for t in TEMPLATES if t.get('templateId') == template_id), None)
+
+def build_content_metadata(content_mode=None, template_id=None):
+    """统一计算设备当前内容标签和云端期望的唤醒间隔。"""
+    mode = (content_mode or 'image')
+    mode = str(mode).strip().lower() if isinstance(mode, str) else 'image'
+    template_id = str(template_id).strip().lower() if template_id else None
+
+    if mode == 'template':
+        template = get_template_meta(template_id)
+        if template:
+            sleep_interval = TEMPLATE_SLEEP_INTERVAL_SECONDS.get(template_id, DEFAULT_SLEEP_INTERVAL_SECONDS)
+            return {
+                'activeContentMode': 'template',
+                'activeTemplateId': template_id,
+                'activeContentLabel': f"{template.get('name', template_id)}模板",
+                'sleepIntervalSeconds': sleep_interval,
+            }
+        mode = 'custom'
+
+    if mode not in CONTENT_MODE_LABELS:
+        mode = 'image'
+
+    return {
+        'activeContentMode': mode,
+        'activeTemplateId': None,
+        'activeContentLabel': CONTENT_MODE_LABELS[mode],
+        'sleepIntervalSeconds': DEFAULT_SLEEP_INTERVAL_SECONDS,
+    }
+
+def get_device_content_metadata(device):
+    if not device:
+        return build_content_metadata()
+    return build_content_metadata(device.get('activeContentMode'), device.get('activeTemplateId'))
+
+def to_epoch_ms(value):
+    if not value:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if hasattr(value, 'timestamp'):
+        return int(value.timestamp() * 1000)
+    return None
 
 def validate_epd_text_payload(image_data: str):
     """校验 EPD 原始数据（a~p 编码字符串）是否完整且合法。
@@ -443,6 +507,9 @@ def add_device():
             'owner': owner,
             'claimed': True,
             'imageVersion': 0,
+            'activeContentMode': 'image',
+            'activeContentLabel': CONTENT_MODE_LABELS['image'],
+            'sleepIntervalSeconds': DEFAULT_SLEEP_INTERVAL_SECONDS,
             'addedAt': datetime.utcnow(),
             'createdAt': datetime.utcnow(),
             'updatedAt': datetime.utcnow()
@@ -520,7 +587,8 @@ def get_devices_status():
         devices = []
         for device in registered_devices:
             device_id = device['deviceId']
-            
+            content_meta = get_device_content_metadata(device)
+
             device_info = {
                 'deviceId': device_id,
                 'deviceName': device.get('deviceName', device_id),
@@ -528,7 +596,13 @@ def get_devices_status():
                 'online': False,  # Deep-sleep架构下设备通常离线
                 'sleeping': False,  # Deep-sleep 架构：离线并不一定异常，后端给出“睡眠态”提示
                 'claimed': device.get('claimed', False),
-                'imageVersion': device.get('imageVersion', 0)
+                'imageVersion': device.get('imageVersion', 0),
+                'activeContentMode': content_meta['activeContentMode'],
+                'activeTemplateId': content_meta['activeTemplateId'],
+                'activeContentLabel': content_meta['activeContentLabel'],
+                'sleepIntervalSeconds': content_meta['sleepIntervalSeconds'],
+                'estimatedNextAutoWakeAt': None,
+                'wakePolicyPending': False
             }
             
             # 检查设备最后活动时间
@@ -540,9 +614,21 @@ def get_devices_status():
                     # Deep-sleep架构：最近5分钟内有活动则认为在线
                     device_info['online'] = (current_time - last_seen < 300000)
                     # Deep-sleep架构：在一个唤醒周期内无上报视为“睡眠中”，超过周期则视为“离线/失联”
-                    # 默认周期：12小时唤醒一次（设备也可能按键唤醒），这里给 1 小时宽限
-                    sleep_window_ms = 13 * 60 * 60 * 1000
+                    # 默认周期：12小时唤醒一次；如果设备上报了云端动态间隔，则按该间隔再给 1 小时宽限
+                    current_sleep_seconds = status.get('currentSleepSeconds')
+                    if isinstance(current_sleep_seconds, (int, float)) and current_sleep_seconds > 0:
+                        sleep_window_ms = int((current_sleep_seconds + 3600) * 1000)
+                    else:
+                        sleep_window_ms = 13 * 60 * 60 * 1000
                     device_info['sleeping'] = (not device_info['online']) and (current_time - last_seen < sleep_window_ms)
+                    interval_for_estimate = content_meta['sleepIntervalSeconds']
+                    content_updated_ms = to_epoch_ms(device.get('activeContentUpdatedAt') or device.get('updatedAt'))
+                    if content_updated_ms and last_seen and content_updated_ms > last_seen:
+                        if isinstance(current_sleep_seconds, (int, float)) and current_sleep_seconds > 0:
+                            interval_for_estimate = int(current_sleep_seconds)
+                            device_info['wakePolicyPending'] = True
+                    if last_seen:
+                        device_info['estimatedNextAutoWakeAt'] = int(last_seen + interval_for_estimate * 1000)
                     device_info['lastSeen'] = last_seen
                     device_info['lastWakeType'] = status.get('lastWakeType')
                     device_info['lastWakeCause'] = status.get('lastWakeCause')
@@ -553,6 +639,7 @@ def get_devices_status():
                     device_info['rssi'] = status.get('rssi')
                     device_info['uptime_ms'] = status.get('uptime_ms')
                     device_info['freeHeap'] = status.get('freeHeap')
+                    device_info['currentSleepSeconds'] = status.get('currentSleepSeconds')
             
             devices.append(device_info)
         
@@ -602,7 +689,7 @@ def device_status():
         if isinstance(ip, str) and ip.strip():
             telemetry['ip'] = ip.strip()
 
-        for field in ('rssi', 'uptime_ms', 'freeHeap'):
+        for field in ('rssi', 'uptime_ms', 'freeHeap', 'currentSleepSeconds'):
             value = data.get(field)
             if isinstance(value, (int, float)):
                 telemetry[field] = int(value)
@@ -626,7 +713,8 @@ def device_status():
             f"uptime_ms={telemetry.get('uptime_ms', '-')}, "
             f"freeHeap={telemetry.get('freeHeap', '-')}, "
             f"wakeType={telemetry.get('lastWakeType', '-')}, "
-            f"wakeCause={telemetry.get('lastWakeCause', '-')}"
+            f"wakeCause={telemetry.get('lastWakeCause', '-')}, "
+            f"currentSleepSeconds={telemetry.get('currentSleepSeconds', '-')}"
         )
 
         # 更新设备最后活动时间和调试遥测
@@ -652,8 +740,10 @@ def device_status():
         if claimed and device:
             # 已绑定：返回图片版本和下载URL
             image_version = device.get('imageVersion', 0)
+            content_meta = get_device_content_metadata(device)
             response['imageVersion'] = image_version
-            
+            response['nextSleepSeconds'] = content_meta['sleepIntervalSeconds']
+
             # 检查是否有持久化的图片
             image_path = get_device_image_path(clean_id)
             if image_path.exists() and image_version > 0:
@@ -665,10 +755,12 @@ def device_status():
                 if device.get('imageSha256') is not None:
                     response['imageSha256'] = device.get('imageSha256')
             
-            print(f'📊 设备 {clean_id} 查询状态: claimed=True, imageVersion={image_version}')
+            print(f"📊 设备 {clean_id} 查询状态: claimed=True, imageVersion={image_version}, "
+                  f"nextSleepSeconds={content_meta['sleepIntervalSeconds']}")
         else:
             # 未绑定：生成或返回配对码
             response['imageVersion'] = 0
+            response['nextSleepSeconds'] = DEFAULT_SLEEP_INTERVAL_SECONDS
             
             pairing_code = None
             expires_at = None
@@ -1283,19 +1375,6 @@ TEMPLATES = [
         }
     },
     {
-        'templateId': 'counter',
-        'name': '计数器',
-        'icon': '🔢',
-        'description': '显示倒计时或正计时',
-        'preview': '/templates/counter.png',
-        'defaultData': {
-            'type': 'template',
-            'template': 'counter',
-            'targetDate': '',
-            'title': '距离目标'
-        }
-    },
-    {
         'templateId': 'qrcode',
         'name': '二维码',
         'icon': '📱',
@@ -1306,17 +1385,6 @@ TEMPLATES = [
             'template': 'qrcode',
             'content': '',
             'title': ''
-        }
-    },
-    {
-        'templateId': 'blank',
-        'name': '空白画布',
-        'icon': '⬜',
-        'description': '从空白开始自由创作',
-        'preview': '/templates/blank.png',
-        'defaultData': {
-            'type': 'custom',
-            'elements': []
         }
     }
 ]
@@ -1362,6 +1430,7 @@ def epd_load():
     data = request.get_json()
     device_id = data.get('deviceId')
     image_data = data.get('data')
+    content_meta = build_content_metadata(data.get('contentMode'), data.get('templateId'))
     
     if not device_id or not image_data:
         return jsonify({'success': False, 'error': 'Missing deviceId or data'}), 400
@@ -1392,23 +1461,34 @@ def epd_load():
         device = devices_collection.find_one({'deviceId': clean_id})
         current_version = device.get('imageVersion', 0) if device else 0
         new_version = current_version + 1
-        
+        now = datetime.utcnow()
+        update_fields = {
+            'imageVersion': new_version,
+            'imageSizeChars': image_size_chars,
+            'imageSizeBytes': image_size_bytes,
+            'imageSha256': image_sha256,
+            'activeContentMode': content_meta['activeContentMode'],
+            'activeContentLabel': content_meta['activeContentLabel'],
+            'sleepIntervalSeconds': content_meta['sleepIntervalSeconds'],
+            'activeContentUpdatedAt': now,
+            'updatedAt': now
+        }
+        update_doc = {'$set': update_fields}
+        if content_meta['activeTemplateId']:
+            update_fields['activeTemplateId'] = content_meta['activeTemplateId']
+        else:
+            update_doc['$unset'] = {'activeTemplateId': ''}
+
         result = devices_collection.update_one(
             {'deviceId': clean_id},
-            {
-                '$set': {
-                    'imageVersion': new_version,
-                    'imageSizeChars': image_size_chars,
-                    'imageSizeBytes': image_size_bytes,
-                    'imageSha256': image_sha256,
-                    'updatedAt': datetime.utcnow()
-                }
-            }
+            update_doc
         )
         
         print(f'✅ 图片已保存: {clean_id}, 版本: {current_version} -> {new_version} '
               f'(matched={result.matched_count}, modified={result.modified_count})')
         print(f'   数据大小: {len(image_data)} 字符 ({len(image_data)/1024:.2f} KB)')
+        print(f"   当前内容: {content_meta['activeContentLabel']}, "
+              f"唤醒间隔: {content_meta['sleepIntervalSeconds']} 秒")
         print(f'   设备下次唤醒时将自动拉取更新')
         
         return jsonify({
@@ -1417,7 +1497,9 @@ def epd_load():
             'imageVersion': new_version,
             'imageUrl': f'http://{Config.FLASK_HOST}:{Config.FLASK_PORT}/api/epd/raw/{clean_id}?v={new_version}',
             'imageSizeChars': image_size_chars,
-            'imageSha256': image_sha256
+            'imageSha256': image_sha256,
+            'activeContentLabel': content_meta['activeContentLabel'],
+            'sleepIntervalSeconds': content_meta['sleepIntervalSeconds']
         })
     
     return jsonify({'success': True, 'message': 'Image saved'})

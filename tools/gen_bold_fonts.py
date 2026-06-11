@@ -22,19 +22,19 @@ FONT_SPECS: dict[str, dict] = {
         "size": 36,
         "var": "Font36CN",
         "comment": "AP 配网页右侧提示 Font36_Bold",
-        "chars": "扫描二维码进行配置",
+        "chars": "配网设置扫描二维码进行配置",
     },
     "font24CN": {
         "size": 24,
         "var": "Font24CN",
-        "comment": "AP 配网页右侧提示 Font24_Bold",
-        "chars": "扫二维码或连接热点配置设备WiFi",
+        "comment": "AP 配网页 / 设备码页提示 Font24_Bold",
+        "chars": "手机扫描右侧二维码连接设备热点进行WiFi配置热点名称IP地址扫码或打开网页",
     },
     "font20CN": {
         "size": 20,
         "var": "Font20CN",
         "comment": "AP 配网页左下标签 Font20_Bold",
-        "chars": "热点地址",
+        "chars": "热点名称IP地址",
     },
 }
 
@@ -120,7 +120,7 @@ cFONT {var} = {{
 }};
 """
     out = OUT_DIR / f"{name}.c"
-    out.write_text(content, encoding="utf-8")
+    out.write_text(content, encoding="utf-8", newline="\n")
     nbytes = sum(len(img_to_bytes(render_char(c, size, cw))) for c in chars)
     print(f"{out.name}: {len(chars)} glyphs, ~{nbytes} bytes data, cell {cw}x{size}")
     return out

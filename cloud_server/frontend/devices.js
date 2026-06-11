@@ -200,13 +200,27 @@ function renderDevices() {
             status.remoteIp ||
             status.rssi !== undefined ||
             status.uptime_ms !== undefined ||
-            status.freeHeap !== undefined
+            status.freeHeap !== undefined ||
+            status.currentSleepSeconds !== undefined ||
+            status.sleepIntervalSeconds !== undefined ||
+            status.activeContentLabel ||
+            status.estimatedNextAutoWakeAt
         );
         const ipText = status.ip || (status.remoteIp ? `${status.remoteIp}（来源）` : '未上报');
         const telemetryHtml = hasTelemetry ? `
                     <div class="device-info-item">
+                        <span class="device-info-label">当前内容</span>
+                        <span class="device-info-value">${status.activeContentLabel || '普通图片'}</span>
+                    </div>
+
+                    <div class="device-info-item">
                         <span class="device-info-label">最后唤醒</span>
                         <span class="device-info-value">${formatWakeSummary(status)}</span>
+                    </div>
+
+                    <div class="device-info-item">
+                        <span class="device-info-label">预计唤醒</span>
+                        <span class="device-info-value">${formatEstimatedWake(status)}</span>
                     </div>
 
                     <div class="device-info-item">
@@ -237,6 +251,11 @@ function renderDevices() {
                     <div class="device-info-item">
                         <span class="device-info-label">剩余内存</span>
                         <span class="device-info-value">${formatMemory(status.freeHeap)}</span>
+                    </div>
+
+                    <div class="device-info-item">
+                        <span class="device-info-label">唤醒间隔</span>
+                        <span class="device-info-value">${formatSleepInterval(status.sleepIntervalSeconds || status.currentSleepSeconds)}</span>
                     </div>
                 ` : '';
         
@@ -379,6 +398,13 @@ async function pollDeviceStatus() {
                         lastAutoWake: device.lastAutoWake,
                         uptime_ms: device.uptime_ms,
                         freeHeap: device.freeHeap,
+                        currentSleepSeconds: device.currentSleepSeconds,
+                        sleepIntervalSeconds: device.sleepIntervalSeconds,
+                        activeContentMode: device.activeContentMode,
+                        activeTemplateId: device.activeTemplateId,
+                        activeContentLabel: device.activeContentLabel,
+                        estimatedNextAutoWakeAt: device.estimatedNextAutoWakeAt,
+                        wakePolicyPending: device.wakePolicyPending,
                         lastSeen: device.lastSeen
                     };
                     
@@ -407,7 +433,14 @@ async function pollDeviceStatus() {
                         oldStatus.lastManualWake !== newStatus.lastManualWake ||
                         oldStatus.lastAutoWake !== newStatus.lastAutoWake ||
                         oldStatus.uptime_ms !== newStatus.uptime_ms ||
-                        oldStatus.freeHeap !== newStatus.freeHeap) {
+                        oldStatus.freeHeap !== newStatus.freeHeap ||
+                        oldStatus.currentSleepSeconds !== newStatus.currentSleepSeconds ||
+                        oldStatus.sleepIntervalSeconds !== newStatus.sleepIntervalSeconds ||
+                        oldStatus.activeContentMode !== newStatus.activeContentMode ||
+                        oldStatus.activeTemplateId !== newStatus.activeTemplateId ||
+                        oldStatus.activeContentLabel !== newStatus.activeContentLabel ||
+                        oldStatus.estimatedNextAutoWakeAt !== newStatus.estimatedNextAutoWakeAt ||
+                        oldStatus.wakePolicyPending !== newStatus.wakePolicyPending) {
                         hasChanges = true;
                     }
                     
@@ -472,6 +505,22 @@ function formatMemory(bytes) {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function formatSleepInterval(seconds) {
+    if (seconds === undefined || seconds === null) return '默认 12小时';
+    if (seconds <= 0) return '默认 12小时';
+
+    if (seconds % 86400 === 0) return `${seconds / 86400}天`;
+    if (seconds % 3600 === 0) return `${seconds / 3600}小时`;
+    if (seconds % 60 === 0) return `${seconds / 60}分钟`;
+    return `${seconds}秒`;
+}
+
+function formatEstimatedWake(status) {
+    if (!status.estimatedNextAutoWakeAt) return '等待设备上报';
+    const suffix = status.wakePolicyPending ? '（待同步）' : '';
+    return `${formatDate(status.estimatedNextAutoWakeAt)}${suffix}`;
 }
 
 // 工具函数：格式化日期

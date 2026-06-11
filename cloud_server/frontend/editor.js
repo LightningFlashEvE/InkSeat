@@ -102,8 +102,12 @@ function renderModalTemplateGrid() {
     `).join('');
 }
 
+function getLoadedTemplate(templateId) {
+    return templates.find(t => t.templateId === templateId);
+}
+
 function selectTemplate(templateId) {
-    const template = templates.find(t => t.templateId === templateId);
+    const template = getLoadedTemplate(templateId);
     if (template) {
         log(`选择模板: ${template.name}`);
         // TODO: 应用模板到画布
@@ -338,7 +342,19 @@ function loadPageToCanvas(page) {
     
     // 模板页面：根据 data.template 渲染（否则会被 renderCanvas 清空导致白屏）
     if ((page.type === 'template' || currentMode === 'template') && data.template) {
-        currentTemplateId = data.template;
+        const template = getLoadedTemplate(data.template);
+        if (!template) {
+            currentTemplateId = null;
+            currentMode = 'image';
+            sourceImage = null;
+            textItems = [];
+            mixedTextItems = [];
+            renderCanvas();
+            log('历史模板已移除，已按自定义内容打开', 'info');
+            return;
+        }
+
+        currentTemplateId = template.templateId;
         // 模板页默认不加载图片/文字叠加
         sourceImage = null;
         textItems = [];
@@ -520,7 +536,11 @@ function hideNewPageModal() {
 }
 
 async function createPageFromTemplate(templateId) {
-    const template = templates.find(t => t.templateId === templateId);
+    const template = getLoadedTemplate(templateId);
+    if (!template) {
+        log('模板不存在或已移除', 'error');
+        return;
+    }
     const pageName = document.getElementById('newPageName').value.trim() || template.name;
     
     hideNewPageModal();
@@ -529,12 +549,8 @@ async function createPageFromTemplate(templateId) {
     currentPageId = null;
     
     // 切换到对应模式
-    if (templateId === 'blank') {
-        switchMode('image');
-    } else {
-        switchMode('template');
-        applyTemplate(template);
-    }
+    switchMode('template');
+    applyTemplate(template);
     
     // 自动保存
     try {
@@ -547,7 +563,7 @@ async function createPageFromTemplate(templateId) {
             body: JSON.stringify({
                 deviceId,
                 name: pageName,
-                type: templateId === 'blank' ? 'custom' : 'template',
+                type: 'template',
                 data: { template: templateId },
                 thumbnail
             })
@@ -1338,7 +1354,6 @@ function renderTemplateCanvas(ctx, width, height) {
         case 'qrcode':
             renderQRCodeTemplate(ctx, width, height);
             break;
-        case 'blank':
         default:
             break;
     }

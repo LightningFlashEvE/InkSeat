@@ -10,8 +10,9 @@ let isDragging = false;
 let dragStartX = 0;
 let dragStartY = 0;
 
-// 当前模式：'image' 或 'text' 或 'mixed'
+// 当前模式：'image'、'text'、'mixed' 或 'template'
 let currentMode = 'image';
+const PUBLISH_TEMPLATE_IDS = new Set(['clock', 'weather', 'calendar', 'todo', 'quote', 'qrcode']);
 
 // 文字模式相关变量
 let textItems = [];  // [{id, text, x, y, size, color}]
@@ -28,6 +29,32 @@ let mixedCropY = 0;
 
 // API 基础地址（前后端分离时，API通过nginx代理到后端）
 const API_BASE = '';
+
+function getPublishMetadata() {
+    const mode = (typeof currentMode === 'string' && currentMode) ? currentMode : 'image';
+    const templateId = (typeof currentTemplateId !== 'undefined' && currentTemplateId) ? currentTemplateId : null;
+
+    if (mode === 'template') {
+        if (templateId && PUBLISH_TEMPLATE_IDS.has(templateId)) {
+            return { contentMode: 'template', templateId };
+        }
+        return { contentMode: 'custom', templateId: null };
+    }
+
+    if (mode === 'text' || mode === 'mixed') {
+        return { contentMode: mode, templateId: null };
+    }
+
+    return { contentMode: 'image', templateId: null };
+}
+
+function formatPublishSleepInterval(seconds) {
+    if (!seconds || seconds <= 0) return '默认12小时';
+    if (seconds % 86400 === 0) return `${seconds / 86400}天`;
+    if (seconds % 3600 === 0) return `${seconds / 3600}小时`;
+    if (seconds % 60 === 0) return `${seconds / 60}分钟`;
+    return `${seconds}秒`;
+}
 
 // 初始化 - 由 editor.js 处理主要初始化，这里只做基础设置
 // 如果 editor.js 未加载，则执行基础初始化
@@ -717,72 +744,73 @@ async function sendDataToDeviceInChunks(deviceId, dataString, chunkSize = 1000) 
 async function uploadToDevice() {
     // 检查是否有处理后的数据
     if (!window.e6Data4bit) {
-        log('请先处理图片（点击"处理并预览"）', 'error');
+        showPublishAlert();
         return;
     }
-    
+
     // 获取deviceId，优先从隐藏input获取，如果没有则从URL参数获取
     let deviceId = '';
     const deviceIdInput = document.getElementById('deviceId');
     if (deviceIdInput) {
         deviceId = deviceIdInput.value.trim();
     }
-    
+
     // 如果还是没有，尝试从URL参数获取
     if (!deviceId) {
         const params = new URLSearchParams(window.location.search);
         deviceId = params.get('deviceId') || '';
     }
-    
+
     // 如果还是没有，尝试从全局变量获取（editor.js设置的）
     if (!deviceId && typeof window.deviceId !== 'undefined') {
         deviceId = window.deviceId;
     }
-    
+
     if (!deviceId) {
         log('请输入设备ID', 'error');
         console.error('❌ deviceId未找到');
         return;
     }
-    
+
     const epdType = 0; // 固定为7.3寸E6
     const width = 800;
     const height = 480;
-    
-    console.log('📤 发布参数:', { deviceId, epdType, width, height });
-    
+    const publishMetadata = getPublishMetadata();
+
+    console.log('📤 发布参数:', { deviceId, epdType, width, height, ...publishMetadata });
+
     try {
         showProgress('准备发布...');
         log('正在准备发布（记录屏幕参数）...');
-        
+
         // 1. 记录EPD参数（云端记录即可，设备会在唤醒后自行初始化/刷新）
         const initResponse = await fetch(`${API_BASE}/api/epd/init`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ 
-                deviceId: deviceId, 
-                epdType: Number(epdType) 
+            body: JSON.stringify({
+                deviceId: deviceId,
+                epdType: Number(epdType)
             })
         });
-        
+
         if (!initResponse.ok) {
             throw new Error('初始化失败: ' + await initResponse.text());
         }
-        
+
         await sleep(500);
-        
+
         log(`正在上传图像数据到云端 (${width}x${height})...`);
-        
+
         showProgress('上传6色数据（云端持久化）...');
         log(`上传6色数据（4bit格式，云端持久化保存）...`);
-        
+
         // 从后端返回的base64数据解码
         const binaryString = atob(window.e6Data4bit);
         const bytes = new Uint8Array(binaryString.length);
         for (let i = 0; i < binaryString.length; i++) {
             bytes[i] = binaryString.charCodeAt(i);
         }
-        
+
         // 转换为编码字符串格式（'a'=0, 'b'=1, ..., 'p'=15）
         const sixColorDataString = [];
         for (let i = 0; i < bytes.length; i++) {
@@ -793,22 +821,23 @@ async function uploadToDevice() {
             sixColorDataString.push(String.fromCharCode(97 + low));
             sixColorDataString.push(String.fromCharCode(97 + high));
         }
-        
+
         const dataString = sixColorDataString.join('');
         console.log(`📊 6色数据: ${dataString.length} 字符 (${width}x${height}, 4bit格式，后端处理)`);
         console.log(`📦 一次上传所有数据 (${dataString.length} 字符)`);
-        
+
         // 一次上传所有数据到云端（设备唤醒后通过HTTP拉取）
         const response = await fetch(`${API_BASE}/api/epd/load`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ 
-                deviceId, 
+            body: JSON.stringify({
+                deviceId,
                 data: dataString,
-                length: dataString.length
+                length: dataString.length,
+                ...publishMetadata
             })
         });
-        
+
         if (!response.ok) {
             throw new Error('数据发送失败: ' + await response.text());
         }
@@ -817,12 +846,14 @@ async function uploadToDevice() {
         let respJson = null;
         try { respJson = await response.json(); } catch (e) { respJson = null; }
         const verText = respJson && respJson.imageVersion ? `，版本：v=${respJson.imageVersion}` : '';
-        
+        const contentText = respJson && respJson.activeContentLabel ? `，内容：${respJson.activeContentLabel}` : '';
+        const sleepText = respJson && respJson.sleepIntervalSeconds ? `，唤醒间隔：${formatPublishSleepInterval(respJson.sleepIntervalSeconds)}` : '';
+
         updateProgress(100);
         hideProgress();
-        log(`✅ 已发布到云端${verText}（设备下次唤醒会自动更新）`, 'success');
+        log(`✅ 已发布到云端${verText}${contentText}${sleepText}（设备下次唤醒会自动更新）`, 'success');
         log('提示：设备无需在线；按键/定时唤醒后才会拉取并刷新墨水屏。', 'info');
-        
+
         // 更新顶部“最近发布时间”显示（如果页面有该元素）
         const lastUpdateEl = document.getElementById('lastUpdateDisplay');
         if (lastUpdateEl) {
@@ -835,6 +866,29 @@ async function uploadToDevice() {
         hideProgress();
         log(`上传失败: ${error.message}`, 'error');
         console.error(error);
+    }
+}
+
+// ===== 发布前提醒弹窗 =====
+function showPublishAlert() {
+    const modal = document.getElementById('publishAlertModal');
+    if (modal) modal.classList.add('show');
+}
+
+function hidePublishAlert() {
+    const modal = document.getElementById('publishAlertModal');
+    if (modal) modal.classList.remove('show');
+}
+
+function hidePublishAlertAndFocusProcess() {
+    hidePublishAlert();
+    // 滚动右侧面板到"处理并预览"按钮并高亮闪烁
+    const btn = document.querySelector('[onclick="processImage()"]');
+    if (btn) {
+        btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        btn.style.transition = 'box-shadow 0.3s';
+        btn.style.boxShadow = '0 0 0 4px rgba(99,102,241,0.5)';
+        setTimeout(() => { btn.style.boxShadow = ''; }, 2000);
     }
 }
 

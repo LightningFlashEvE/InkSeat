@@ -162,7 +162,7 @@ void clearWiFiConfig() {
 // AP 配网阶段需要在 WiFi 配置前生成设备码，因此这里保留独立的 MAC 读取逻辑
 String getDeviceIdForAP() {
     uint8_t mac[6] = {0};
-    
+
     // 尝试使用esp_read_mac读取MAC地址（使用ESP_MAC_EFUSE_FACTORY类型）
     esp_err_t ret = esp_read_mac(mac, ESP_MAC_EFUSE_FACTORY);
     if (ret != ESP_OK) {
@@ -173,7 +173,7 @@ String getDeviceIdForAP() {
     } else {
         Serial.println("✅ 使用esp_read_mac(ESP_MAC_EFUSE_FACTORY)读取MAC");
     }
-    
+
     // 如果MAC地址后三个字节仍为0，尝试使用esp_wifi_get_mac（使用STA接口）
     if (mac[3] == 0 && mac[4] == 0 && mac[5] == 0) {
         Serial.println("⚠️  MAC地址后三个字节为0，尝试esp_wifi_get_mac(WIFI_IF_STA)");
@@ -189,14 +189,14 @@ String getDeviceIdForAP() {
             }
         }
     }
-    
+
     // 调试输出：打印完整MAC地址
-    Serial.printf("🔍 读取MAC地址: %02X:%02X:%02X:%02X:%02X:%02X\n", 
+    Serial.printf("🔍 读取MAC地址: %02X:%02X:%02X:%02X:%02X:%02X\n",
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     Serial.printf("   DEVICE_ID_MODE = %d\n", DEVICE_ID_MODE);
-    
+
     char buf[32];
-    
+
     #if DEVICE_ID_MODE == 1
         // 仅使用MAC地址前6位（前3个字节）
         snprintf(buf, sizeof(buf), "%02X%02X%02X",
@@ -210,7 +210,7 @@ String getDeviceIdForAP() {
         snprintf(buf, sizeof(buf), "%02X%02X%02X%02X%02X%02X",
                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     #endif
-    
+
     Serial.printf("   提取的设备码: %s\n", buf);
     return String(buf);
 }
@@ -586,24 +586,24 @@ void handleConfig() {
         getConfigServer().send(405, "text/plain", "Method Not Allowed");
         return;
     }
-    
+
     String ssid = getConfigServer().arg("ssid");
     String password = getConfigServer().arg("password");
-    
+
     if (ssid.length() == 0) {
         getConfigServer().send(400, "text/plain", "SSID不能为空");
         return;
     }
-    
+
     Serial.println("📝 收到WiFi配置:");
     Serial.printf("   SSID: %s\n", ssid.c_str());
     Serial.printf("   密码: %s\n", password.length() > 0 ? "***" : "(无密码)");
-    
+
     // 保存配置
     saveWiFiConfig(ssid, password);
-    
+
     getConfigServer().send(200, "text/plain", "success");
-    
+
     // 延迟后重启
     Serial.println("⏳ 3秒后重启并连接WiFi...");
     delay(3000);
@@ -645,14 +645,14 @@ bool connectWiFi() {
     WiFi.disconnect(false, true);
     delay(100);
     WiFi.begin(savedSSID.c_str(), savedPassword.c_str());
-    
+
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < 20) {
         delay(500);
         Serial.print(".");
         attempts++;
     }
-    
+
     if (WiFi.status() == WL_CONNECTED) {
 #if PROVISIONING_ENABLE_CAPTIVE_DNS
         dnsServer.stop();

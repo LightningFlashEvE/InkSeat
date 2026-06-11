@@ -9,7 +9,7 @@
  *          才联网HTTP拉取更新图片，刷新墨水屏后立即回到Deep-sleep
  *
  ******************************************************************************
-*/ 
+*/
 
 /* Includes ------------------------------------------------------------------*/
 #include <WiFi.h>
@@ -65,7 +65,7 @@ static bool isNormalWakeCause(esp_sleep_wakeup_cause_t cause) {
 static bool isWakeKeyHeldLow(uint32_t holdMs) {
   // WAKEUP_GPIO 在 http_update.h 中已定义为 GPIO_NUM_0
   const gpio_num_t wakeupPin = WAKEUP_GPIO;
-  
+
   pinMode((int)wakeupPin, INPUT_PULLUP);
   gpio_pullup_en(wakeupPin);
   gpio_pulldown_dis(wakeupPin);
@@ -119,12 +119,12 @@ static void printWakeDebug(esp_sleep_wakeup_cause_t cause) {
 }
 
 /* Entry point ----------------------------------------------------------------*/
-void setup() 
+void setup()
 {
     // Serial port initialization
     Serial.begin(115200);
     delay(WAKE_DEBUG_SERIAL_DELAY_MS);
-    
+
     // 打印启动信息
     Serial.println();
     Serial.println("========================================");
@@ -189,10 +189,10 @@ void setup()
         }
         return;
     }
-    
+
     // WiFi配网初始化
     Serial.println("📶 WiFi配网初始化...");
-    
+
     bool openApOnSavedWiFiFailure = !alreadyConfigured || !isNormalWakeCause(cause);
     bool wifiConnected = initWiFiConfig(openApOnSavedWiFiFailure);
 
@@ -219,14 +219,14 @@ void setup()
         // 注意：AP配网模式下不进入Deep-sleep，保持Web服务器运行
         return;
     }
-    
+
     // WiFi已连接，执行HTTP更新检查
     Serial.println();
     Serial.println("✅ WiFi已连接，开始HTTP更新检查...");
-    
+
     // HTTP更新模式初始化：本次唤醒只做一次“是否需要更新”的判定
     HTTP_UPDATE__setup();
-    
+
     // 为了避免进入 loop 后再做一次兜底，这里直接调用一次 loop 处理：
     // - 需要更新：执行下载+刷新，然后 deep-sleep
     // - 不需要更新：直接 deep-sleep
@@ -237,7 +237,7 @@ void setup()
 }
 
 /* The main loop -------------------------------------------------------------*/
-void loop() 
+void loop()
 {
     if (wifiConfigured) {
         // WiFi已配置，正常情况下不会执行到这里

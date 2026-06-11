@@ -20,7 +20,7 @@
              ESP32-C3（Deep-sleep）<--> 7.3寸 E6 墨水屏
 ```
 
-唤醒触发：GPIO0 按键（低电平）或 12 小时定时器。
+唤醒触发：GPIO0 按键（低电平）或定时器；默认 12 小时，云端可通过 `nextSleepSeconds` 动态下发。
 
 ## 2. 项目结构
 
@@ -55,7 +55,7 @@ Loader_esp32wf/
 | 需要修改的内容 | 文件 | 位置 |
 |---|---|---|
 | 云端 IP/端口 | `http_update.h` | `CLOUD_API_HOST` / `CLOUD_API_PORT` |
-| Deep-sleep 间隔 | `http_update.h` | `DEEP_SLEEP_INTERVAL_HOURS`（默认 12h） |
+| Deep-sleep 间隔 | `http_update.h` | `DEEP_SLEEP_INTERVAL_HOURS`（默认 12h 回退值）/ NVS `slpInt`（云端动态下发秒数） |
 | 设备码模式 | `http_update.h` | `DEVICE_ID_MODE`（默认 2=后6位） |
 | 长按配网阈值 | `Loader_esp32wf.ino` | `WIFI_RECONFIG_HOLD_MS`（冷启动默认 3000ms）/ `WIFI_RECONFIG_POST_WAKE_CONFIRM_MS`（GPIO唤醒后默认 1200ms） |
 | 本地 UI 帧缓冲 | `http_update.h` | `acquireEpdUiFrame()` / `releaseEpdUiFrame()`（按需 malloc，画完 free） |
@@ -64,10 +64,10 @@ Loader_esp32wf/
 ## 3. 快速定位
 
 - **修改云端地址**：`http_update.h` 第 37-38 行
-- **修改唤醒间隔**：`http_update.h` 第 51 行
-- **NVS 命名空间**：WiFi 配置用 `wifi_cfg`，设备状态用 `device`（键名 `claimed`/`imgVer`）
+- **修改默认唤醒间隔**：`http_update.h` 的 `DEEP_SLEEP_INTERVAL_HOURS`；模板动态间隔由云端返回 `nextSleepSeconds`，设备保存到 NVS `device/slpInt`
+- **NVS 命名空间**：WiFi 配置用 `wifi_cfg`，设备状态用 `device`（键名 `claimed`/`imgVer`/`slpInt`）
 - **SPIFFS 临时文件**：`/temp_image.bin`，期望大小固定 384000 字节（7.3" E6）
-- **本地 UI 帧缓冲**：`http_update.h` 中 `acquireEpdUiFrame()`（AP 配网页 / 设备码页均为 `PROVISIONING_CANVAS_SIZE`，约 57600 字节），`releaseEpdUiFrame()` 释放；**不得**再保留 192KB 静态 BSS
+- **本地 UI 帧缓冲**：`http_update.h` 中 `acquireEpdUiFrame()`（AP 配网页使用 `PROVISIONING_FULL_STRIPE_SIZE` 的 800×144 条带，设备码页使用 `PROVISIONING_CANVAS_SIZE`，两者约 57600 字节），`releaseEpdUiFrame()` 释放；**不得**再保留 192KB 静态 BSS
 - **AP 配网页字体角色**：`provisioning_fonts.h`（标题 / 提示 / 标签 / 动态值）
 - **图像处理算法**：`cloud_server/backend/six_color_epd.py`
 
@@ -137,7 +137,7 @@ docker compose logs -f backend   # 查看后端日志
 - **禁止在 `http_update.h` 中定义 `Preferences preferences`**。该对象在 `.ino` 中定义，头文件只能 `extern` 引用。
 - **禁止跳过 SPIFFS 长度校验直接刷新 EPD**。数据不完整会导致 BUSY 卡死。
 - **禁止在 AP 配网模式下调用 `enterDeepSleep()`**。AP 模式需保持 Web 服务器运行。
-- **禁止**再定义 `static g_epdUiFrame[192000]`（会永久占用 BSS）。AP 配网页与设备码页统一使用 `PROVISIONING_CANVAS_SIZE`（约 58KB）按需 `malloc`→绘制→`free`。
+- **禁止**再定义 `static g_epdUiFrame[192000]`（会永久占用 BSS）。AP 配网页使用 `PROVISIONING_FULL_STRIPE_SIZE` 条带流式刷整屏，设备码页使用 `PROVISIONING_CANVAS_SIZE` 局部画布，两者均约 58KB，按需 `malloc`→绘制→`free`。
 - **禁止在全局作用域构造 `WebServer`**。使用 `wifi_config.h` 的 `getConfigServer()` 延后分配。
 
 ## 8. 项目特有模式
@@ -153,7 +153,7 @@ docker compose logs -f backend   # 查看后端日志
   -> 正常唤醒且已有 WiFi 配置但连接失败：保留配置，直接 Deep-sleep，下次唤醒重试
   -> WiFi 连接
   -> prepareUpdateDecisionOnce()（只执行一次）
-     -> POST /api/device/status（上报 ip/rssi/uptime_ms/freeHeap/wakeType/wakeCause）-> 版本比较 -> 设置 g_updateNeeded
+     -> POST /api/device/status（上报 ip/rssi/uptime_ms/freeHeap/wakeType/wakeCause/currentSleepSeconds）-> 保存云端按当前内容/模板返回的 nextSleepSeconds -> 版本比较 -> 设置 g_updateNeeded
      -> HTTP_UPDATE__loop()
      -> 若 g_updateNeeded：流式下载到 SPIFFS -> 刷新 EPD -> 刷新成功后保存版本
      -> enterDeepSleep()
@@ -172,20 +172,20 @@ GPIO0 同时作为唤醒键和长按配网入口。检测逻辑：从函数入�
 基于 MAC 地址，`DEVICE_ID_MODE=2`（默认后 6 位，如 `B6DA20`）。AP 热点名称：`EPD-XXXXXX`。AP 阶段优先 `esp_read_mac(ESP_MAC_EFUSE_FACTORY)`，无需先启动 WiFi。
 
 ### 本地 UI 显示内存（WiFi 配网页 + 设备码页）
-ESP32-C3-WROOM-02U 无 PSRAM，**堆最大连续块约 115KB**（实测 `largest≈114676`），无法 `malloc(192000)` 全屏画布。固件不得再保留 192KB 静态回退缓冲；AP 配网页与设备码页统一使用 `PROVISIONING_CANVAS_SIZE`（约 58KB）按需 `malloc`/`free`。`startAPMode()` 内 **先刷屏再启 softAP**；Captive Web 仍延后到 DHCP 之后。
+ESP32-C3-WROOM-02U 无 PSRAM，**堆最大连续块约 115KB**（实测 `largest≈114676`），无法 `malloc(192000)` 全屏画布。固件不得再保留 192KB 静态回退缓冲；AP 配网页使用 `PROVISIONING_FULL_STRIPE_SIZE`（800×144，约 58KB）条带流式刷整屏，设备码页使用 `PROVISIONING_CANVAS_SIZE`（480×240，约 58KB）局部画布，均按需 `malloc`/`free`。`startAPMode()` 内 **先刷屏再启 softAP**；Captive Web 仍延后到 DHCP 之后。
 
 | 页面 | 函数 | 画布用法 | 刷新 |
 |------|------|----------|------|
-| WiFi AP 配网 | `displayProvisioningScreen()` | 共用缓冲上按 480×240 绘制 | 居中 `DisplayPart`（`xstart=160, ystart=120`） |
+| WiFi AP 配网 | `displayProvisioningScreen()` | 共用缓冲按 800×144 条带绘制整屏 | 一次性流式发送完整 800×480，避免 `DisplayPart` 外围变白 |
 | 未绑定设备码 | `displayDeviceCode()` | 在共用缓冲上按 480×240 绘制 | 居中 `DisplayPart`（`xstart=160, ystart=120`） |
 
 顺序约束：**WiFi OFF → `malloc` 刷配网二维码 → `free` → `softAP`（不启 Web/DNS）→ 手机关联且 DHCP 完成后再 `ensureApWebServices()`**。`WebServer` 在 `initConfigServer()` 中 `new`。同一唤醒周期内不要连续画两页后再刷云端图。**云端会议牌**仍走 SPIFFS + 行缓冲，不使用 UI 帧缓冲。
 
 ### AP 配网二维码与 Captive Portal
-AP 配网热点 `EPD-XXXXXX` 默认**开放网络**（`PROVISIONING_AP_PSK` 留空）；若需 WPA2 可设 ≥8 字符密码，屏上与二维码会同步显示。开放热点使用最简 `WiFi.softAP(ssid)`，与历史可用版本一致。墨水屏使用 **480×240 居中 AP 配网页** 显示 WiFi 二维码、热点名与 `192.168.4.1`；`wifi_config.h` 的 `DNSServer` 将常见 Captive Portal 探测路径统一返回配网页。自动弹出为 best-effort，须保留 `192.168.4.1` 备用入口。
+AP 配网热点 `EPD-XXXXXX` 默认**开放网络**（`PROVISIONING_AP_PSK` 留空）；若需 WPA2 可设 ≥8 字符密码，屏上与二维码会同步显示。开放热点使用最简 `WiFi.softAP(ssid)`，与历史可用版本一致。墨水屏使用 **满屏 AP 配网页** 显示 WiFi 二维码、热点名与 `192.168.4.1`；`wifi_config.h` 的 `DNSServer` 将常见 Captive Portal 探测路径统一返回配网页。自动弹出为 best-effort，须保留 `192.168.4.1` 备用入口。
 
 ### 设备状态遥测
-固件每次调用 `/api/device/status` 时除 `deviceId` 外，还会上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`、`wakeType`、`wakeCause`。后端保存到 `device_status_collection`，并由 `/api/devices` 返回给前端设备卡片显示。`wakeType=manual` 更新 `lastManualWake`，`wakeType=auto` 更新 `lastAutoWake`。修改字段名时必须同步 `http_update.h`、`cloud_server/backend/app.py` 和 `cloud_server/frontend/devices.js`。
+固件每次调用 `/api/device/status` 时除 `deviceId` 外，还会上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`、`wakeType`、`wakeCause`、`currentSleepSeconds`。后端保存到 `device_status_collection`，并由 `/api/devices` 返回给前端设备卡片显示当前内容、唤醒间隔、预计自动唤醒时间和最后唤醒信息。`wakeType=manual` 更新 `lastManualWake`，`wakeType=auto` 更新 `lastAutoWake`。云端会在响应中返回按 `activeContentMode` / `activeTemplateId` 计算的 `nextSleepSeconds > 0`，设备保存到 NVS `device/slpInt` 并在本次回睡时使用。修改字段名时必须同步 `http_update.h`、`cloud_server/backend/app.py` 和 `cloud_server/frontend/devices.js`。当前内置模板为时钟、天气、日历、待办、每日一言、二维码；计数器和空白页不再作为内置模板入口。
 
 ### 未配网开机显示
 当设备没有本地 WiFi 配置时，`startAPMode()` 内会先渲染并显示 AP 配网页，再启动 `softAP`；Captive Portal Web/DNS 延后到手机拿到 IP 且刷屏结束后。`loop()` 不再补刷 AP 页面，避免重复刷新墨水屏或引入第二条渲染路径。
@@ -197,7 +197,7 @@ AP 配网热点 `EPD-XXXXXX` 默认**开放网络**（`PROVISIONING_AP_PSK` 留�
 - **设备唤醒后立刻再次唤醒**：GPIO0 缺少上拉电阻或按键未松开。建议硬件加 10k 上拉到 3.3V。
 - **图片版本不更新**：检查 `/api/device/status` 返回的 `imageVersion` 是否与 NVS 中的 `imgVer` 不一致；只要不一致就应按云端当前图片重新同步。
 - **下载失败（内容长度异常）**：云端图片必须恰好 384000 字节（800x480，4bit 编码，无多余换行符）。
-- **AP 配网页不显示 / 画布分配失败**：确认固件日志为 `画板: 堆分配 57600 字节 (480x240)`；若仍失败，优先检查启动前剩余堆和最大连续块，而不是重新引入 192KB 全屏缓冲。
+- **AP 配网页不显示 / 画布分配失败**：确认固件日志为 `画板: 堆分配 57600 字节 (800x144 条带)`；若仍失败，优先检查启动前剩余堆和最大连续块，而不是重新引入 192KB 全屏缓冲。
 - **iPhone 未自动弹出配网页**：属于系统 Captive Portal 策略差异，先确认已连接 `EPD-XXXXXX`，再手动打开 `http://192.168.4.1`。
 
 ## 10. 依赖清单

@@ -3,7 +3,7 @@
 本项目采用 **Deep-sleep + 按键/定时唤醒 + HTTP 拉取更新** 的低功耗架构：
 
 - 设备绝大多数时间处于 **Deep-sleep（µA 级）**
-- 仅在 **GPIO0 按键** 或 **12 小时定时** 唤醒后联网
+- 仅在 **GPIO0 按键** 或 **定时唤醒** 后联网；默认 12 小时，云端可通过 `nextSleepSeconds` 动态下发
 - 唤醒后通过 HTTP 查询版本并按需下载图片，刷新墨水屏后立刻回到 Deep-sleep
 - **服务器端上传图片时不要求设备在线**；设备下次唤醒即可拉到最新内容
 - 已保存 WiFi 但本次连接失败时会保留原配置；普通按键/定时唤醒直接回睡，下次再试。需要重新配网时长按 GPIO0。
@@ -17,9 +17,10 @@
 ### 工作流程（核心）
 
 1. 用户在 Web 页面处理图片并点击 **“发布”**（上传到云端）
-2. 云端将最新 EPD 数据持久化保存：`cloud_server/backend/data/epd/<deviceId>/latest.txt`，并递增 `devices.imageVersion`
+2. 云端将最新 EPD 数据持久化保存：`cloud_server/backend/data/epd/<deviceId>/latest.txt`，递增 `devices.imageVersion`，并记录当前内容类型、模板 ID、内容标签与云端期望唤醒间隔
 3. 设备在按键/定时唤醒后执行一次性流程：
-   - `POST /api/device/status` 上报 `deviceId/ip/rssi/uptime_ms/freeHeap/wakeType/wakeCause`，并获取 `claimed/imageVersion/imageUrl`
+   - `POST /api/device/status` 上报 `deviceId/ip/rssi/uptime_ms/freeHeap/wakeType/wakeCause/currentSleepSeconds`，并获取 `claimed/imageVersion/imageUrl/nextSleepSeconds`
+   - 若云端返回 `nextSleepSeconds > 0`，设备保存到 NVS `device/slpInt`，本次回睡时按该秒数配置定时唤醒；未返回或返回 0 时保留本地已有间隔，若本地未设置则使用默认 12 小时
    - 若云端图片同步标记 `imageVersion > 0` 且 `imageVersion != NVS(imgVer)`：`GET imageUrl` 流式下载到 SPIFFS 临时文件 → 刷新墨水屏 → 刷新成功后写入 NVS 新版本 → Deep-sleep
    - 若版本一致：直接 Deep-sleep
    - 若未绑定：显示居中设备码页（云端配置二维码 + 设备码）→ Deep-sleep
@@ -30,7 +31,7 @@
 - **当前硬件**：ESP32-C3-WROOM-02U-N4（4MB Flash，外接天线，**无 PSRAM**）
 - **Flash容量**：4MB（用于固件和SPIFFS存储）
 - **WiFi**：2.4GHz 802.11 b/g/n
-- **SRAM 注意**：运行时堆最大连续块约 **115KB**，无法动态分配 192KB 全屏画布；本地 UI 统一使用约 **58KB** 的 `480x240` 画布按需分配/释放
+- **SRAM 注意**：运行时堆最大连续块约 **115KB**，无法动态分配 192KB 全屏画布；AP 配网页使用 **800×144 条带**流式绘制整屏，设备码页使用约 **58KB** 的 `480x240` 画布按需分配/释放
 
 ### 墨水屏
 - **型号**：7.3寸 E6 彩色电子纸（800x480分辨率）
@@ -257,7 +258,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 
 1. 设备启动后，如果未配置WiFi，会自动进入AP模式
 2. 设备会创建一个WiFi热点：`EPD-XXXXXX`（XXXXXX为设备码）
-3. 设备进入 AP 配网模式后，墨水屏会显示 **居中的 480×240 配网页**：
+3. 设备进入 AP 配网模式后，墨水屏会显示 **满屏绿色配网页**：
    - WiFi 二维码（可直接扫码加入热点）
    - 热点名称 `EPD-XXXXXX`
    - 配网说明与备用访问地址 `192.168.4.1`
@@ -353,12 +354,12 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 | 场景 | 数据来源 | RAM 占用 | 关键代码 |
 |------|----------|----------|----------|
 | **云端会议牌** | SPIFFS `/temp_image.bin` | ~400 B 行缓冲 | `EPD_load_7in3E_from_buff()`（`epd7in3.h`） |
-| **WiFi AP 配网页** | 设备实时绘制 | `480x240` 画布（约 58KB）按需分配 | `displayProvisioningScreen()` |
+| **WiFi AP 配网页** | 设备实时绘制 | `800x144` 条带（约 58KB）按需分配，整屏流式发送 | `displayProvisioningScreen()` |
 | **未绑定设备码页** | 设备实时绘制 | 同上缓冲上的 **480×240** 局部画布，居中刷新 | `displayDeviceCode()` |
 
 - `http_update.h` 通过 `acquireEpdUiFrame()` / `releaseEpdUiFrame()` 管理共享 UI 画布，WiFi 配网页与设备码页 **共用、互斥**（同一唤醒周期只画其一）。
-- AP 模式顺序：**WiFi OFF → 分配约 58KB 画布刷 480×240 配网页 → 释放画布 → 启动开放热点 → 终端关联 / DHCP 后再启动 DNS 和 Web 配网**；AP 页面只走这一条预渲染路径，不再在 `loop()` 中补刷。可选 WPA2：在 `wifi_config.h` 将 `PROVISIONING_AP_PSK` 设为 ≥8 字符密码。
-- 新增本地页面时：优先复用 `480x240` 画布并居中显示，**不要** `malloc(192000)`，也不要再引入 192KB 静态缓冲。
+- AP 模式顺序：**WiFi OFF → 分配约 58KB 条带缓冲流式刷整屏配网页 → 释放画布 → 启动开放热点 → 终端关联 / DHCP 后再启动 DNS 和 Web 配网**；AP 页面只走这一条预渲染路径，不再在 `loop()` 中补刷。可选 WPA2：在 `wifi_config.h` 将 `PROVISIONING_AP_PSK` 设为 ≥8 字符密码。
+- 新增本地页面时：优先复用约 58KB 的 UI 缓冲；需要满屏时使用条带流式发送，**不要** `malloc(192000)`，也不要再引入 192KB 静态缓冲。
 
 ## 设备码说明
 
@@ -399,7 +400,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 ### AP 配网页或设备码页不显示
 
 1. **能搜到热点但无法加入**：确认连接的是开放热点 `EPD-XXXXXX`（无密码）；串口应出现 `📱 设备已关联热点`。若自定义了 `PROVISIONING_AP_PSK`，扫码或手动输入该密码。仍失败时可改 `PROVISIONING_AP_CHANNEL` 为 `1` 或 `11` 后重试。
-2. **串口出现画布分配失败**：确认日志为 `画板: 堆分配 57600 字节 (480x240)`，并检查 `malloc_before` / `largest`；当前固件不应再依赖 192KB 静态缓冲。
+2. **串口出现画布分配失败**：确认 AP 页日志为 `画板: 堆分配 57600 字节 (800x144 条带)`，并检查 `malloc_before` / `largest`；当前固件不应再依赖 192KB 静态缓冲。
 3. **屏幕 BUSY 超时**：检查排线、供电与 `BUSY` 上拉；当前固件会先刷屏再启动热点，若 BUSY 卡死会直接跳过本次本地页面显示。
 4. **已有旧 WiFi 配置**：上电会优先连路由器而非 AP，需 Erase Flash 或长按 GPIO0 重新配网。
 
@@ -467,9 +468,10 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 
 - 设备不保持常驻连接，不常驻 loop
 - 唤醒后执行一次性 HTTP 拉取流程，完成后立即回到 Deep-sleep
+- 默认定时唤醒间隔为 12 小时；云端可在 `/api/device/status` 响应中返回 `nextSleepSeconds`，设备持久化到 NVS 并在下一次入睡时使用，适配时钟、天气、日历等模板的不同刷新频率。当前内置模板为时钟、天气、日历、待办、每日一言、二维码；计数器和空白页不再作为内置模板入口。
 - 墨水屏断电仍保持画面，因此无需常供电刷新
 - 墨水屏 `BUSY` 等待带超时保护：初始化/上电/断电阶段默认 10 秒，显示刷新阶段默认 180 秒。超时会打印错误并退出当前显示流程，避免新板调试时因屏幕异常永久卡死。
-- 每次设备查询 `/api/device/status` 时会同步上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`、`wakeType`、`wakeCause`，后端在设备列表中返回这些字段供前端显示；设备卡片会显示最后唤醒时间，并分别记录最后一次手动唤醒和自动唤醒时间。
+- 每次设备查询 `/api/device/status` 时会同步上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`、`wakeType`、`wakeCause`、`currentSleepSeconds`，后端在设备列表中返回这些字段供前端显示；设备卡片会显示当前内容、唤醒间隔、预计自动唤醒时间、最后唤醒时间，并分别记录最后一次手动唤醒和自动唤醒时间。
 - 只有图片实际刷新完成后才保存本地 `imgVer`；如果下载成功但显示失败，下次唤醒会继续重试同一版本。
 
 ## 扩展功能

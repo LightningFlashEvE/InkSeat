@@ -7,7 +7,7 @@
     <link rel='icon' href='data:;base64,='>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        
+
         :root {
             --primary: #667eea;
             --primary-dark: #5a67d8;
@@ -24,15 +24,15 @@
             --header-height: 60px;
             --right-panel-width: 450px;
         }
-        
-        body { 
+
+        body {
             font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
             background: var(--bg-light);
             min-height: 100vh;
             display: flex;
             flex-direction: column;
         }
-        
+
         /* ===== 顶部导航栏 ===== */
         .top-bar {
             height: var(--header-height);
@@ -44,20 +44,20 @@
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
             z-index: 100;
         }
-        
+
         .top-bar .logo {
             font-size: 1.3em;
             font-weight: bold;
             margin-right: 30px;
         }
-        
+
         .device-status {
             display: flex;
             align-items: center;
             gap: 20px;
             flex: 1;
         }
-        
+
         .status-item {
             display: flex;
             align-items: center;
@@ -65,27 +65,27 @@
             font-size: 0.9em;
             opacity: 0.95;
         }
-        
+
         .status-dot {
             width: 10px;
             height: 10px;
             border-radius: 50%;
             animation: pulse 2s infinite;
         }
-        
+
         .status-dot.online { background: #48bb78; }
         .status-dot.offline { background: #f56565; animation: none; }
-        
+
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
         }
-        
+
         .top-bar .actions {
             display: flex;
             gap: 10px;
         }
-        
+
         .top-bar .btn {
             padding: 8px 16px;
             border: none;
@@ -95,23 +95,23 @@
             font-weight: 500;
             transition: all 0.2s;
         }
-        
+
         .btn-light {
             background: rgba(255,255,255,0.2);
             color: white;
         }
-        
+
         .btn-light:hover {
             background: rgba(255,255,255,0.3);
         }
-        
+
         /* ===== 主布局 ===== */
         .main-layout {
             display: flex;
             flex: 1;
             overflow: hidden;
         }
-        
+
         /* ===== 左侧边栏 - 页面列表 ===== */
         .left-sidebar {
             width: var(--sidebar-width);
@@ -121,7 +121,7 @@
             flex-direction: column;
             overflow: hidden;
         }
-        
+
         .sidebar-header {
             padding: 15px 20px;
             border-bottom: 1px solid var(--border);
@@ -129,12 +129,12 @@
             justify-content: space-between;
             align-items: center;
         }
-        
+
         .sidebar-header h3 {
             font-size: 1em;
             color: var(--text-dark);
         }
-        
+
         .btn-new {
             background: var(--primary);
             color: white;
@@ -145,17 +145,17 @@
             font-size: 0.85em;
             font-weight: 500;
         }
-        
+
         .btn-new:hover {
             background: var(--primary-dark);
         }
-        
+
         .page-list {
             flex: 1;
             overflow-y: auto;
             padding: 10px;
         }
-        
+
         .page-item {
             display: flex;
             align-items: center;
@@ -166,16 +166,16 @@
             transition: all 0.2s;
             border: 2px solid transparent;
         }
-        
+
         .page-item:hover {
             background: var(--bg-light);
         }
-        
+
         .page-item.active {
             background: #ebf4ff;
             border-color: var(--primary);
         }
-        
+
         .page-thumb {
             width: 60px;
             height: 36px;
@@ -187,22 +187,22 @@
             align-items: center;
             justify-content: center;
         }
-        
+
         .page-thumb img {
             width: 100%;
             height: 100%;
             object-fit: cover;
         }
-        
+
         .page-thumb .icon {
             font-size: 1.2em;
         }
-        
+
         .page-info {
             flex: 1;
             min-width: 0;
         }
-        
+
         .page-name {
             font-weight: 500;
             color: var(--text-dark);
@@ -210,23 +210,23 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        
+
         .page-type {
             font-size: 0.8em;
             color: var(--text-light);
         }
-        
+
         .page-actions {
             display: flex;
             gap: 5px;
             opacity: 0;
             transition: opacity 0.2s;
         }
-        
+
         .page-item:hover .page-actions {
             opacity: 1;
         }
-        
+
         .page-actions button {
             width: 28px;
             height: 28px;
@@ -236,16 +236,16 @@
             font-size: 0.9em;
             background: transparent;
         }
-        
+
         .page-actions button:hover {
             background: #e2e8f0;
         }
-        
+
         .page-actions .delete:hover {
             background: #fed7d7;
             color: var(--danger);
         }
-        
+
         /* ===== 主内容区 - 画布 ===== */
         .canvas-area {
             flex: 1;
@@ -255,7 +255,7 @@
             overflow: hidden;
             min-width: 0; /* 确保flex子元素可以缩小 */
         }
-        
+
         .toolbar {
             background: white;
             padding: 10px 20px;
@@ -264,7 +264,7 @@
             align-items: center;
             gap: 15px;
         }
-        
+
         .toolbar-group {
             display: flex;
             align-items: center;
@@ -272,23 +272,23 @@
             padding-right: 15px;
             border-right: 1px solid var(--border);
         }
-        
+
         .toolbar-group:last-child {
             border-right: none;
         }
-        
+
         .toolbar label {
             font-size: 0.85em;
             color: var(--text-light);
         }
-        
+
         .toolbar select, .toolbar input {
             padding: 6px 10px;
             border: 1px solid var(--border);
             border-radius: 5px;
             font-size: 0.9em;
         }
-        
+
         .toolbar .btn {
             padding: 8px 16px;
             border: none;
@@ -297,34 +297,34 @@
             font-size: 0.85em;
             font-weight: 500;
         }
-        
+
         .btn-primary {
             background: var(--primary);
             color: white;
         }
-        
+
         .btn-primary:hover {
             background: var(--primary-dark);
         }
-        
+
         .btn-success {
             background: var(--success);
             color: white;
         }
-        
+
         .btn-success:hover {
             background: #38a169;
         }
-        
+
         .btn-secondary {
             background: #e2e8f0;
             color: var(--text-dark);
         }
-        
+
         .btn-secondary:hover {
             background: #cbd5e0;
         }
-        
+
         .canvas-wrapper {
             flex: 1;
             display: flex;
@@ -334,13 +334,13 @@
             overflow: auto;
             min-height: 0; /* 确保flex子元素可以缩小 */
         }
-        
+
         .canvas-container {
             background: white;
             box-shadow: 0 10px 40px rgba(0,0,0,0.15);
             position: relative;
         }
-        
+
         #mainCanvas {
             display: block;
             max-width: 100%;
@@ -348,7 +348,7 @@
             width: auto;
             aspect-ratio: 800 / 480;  /* 保持正确的宽高比 */
         }
-        
+
         /* ===== 右侧面板 - 属性/工具 ===== */
         .right-panel {
             width: var(--right-panel-width);
@@ -359,12 +359,12 @@
             overflow: hidden;
             min-width: 0; /* 确保flex子元素可以缩小 */
         }
-        
+
         .panel-tabs {
             display: flex;
             border-bottom: 1px solid var(--border);
         }
-        
+
         .panel-tab {
             flex: 1;
             padding: 12px;
@@ -376,16 +376,16 @@
             border-bottom: 2px solid transparent;
             transition: all 0.2s;
         }
-        
+
         .panel-tab:hover {
             color: var(--text-dark);
         }
-        
+
         .panel-tab.active {
             color: var(--primary);
             border-bottom-color: var(--primary);
         }
-        
+
         .panel-content {
             flex: 1;
             overflow-y: auto;
@@ -393,11 +393,11 @@
             padding: 15px;
             min-height: 0; /* 确保flex子元素可以缩小 */
         }
-        
+
         .panel-section {
             margin-bottom: 20px;
         }
-        
+
         .panel-section h4 {
             font-size: 0.9em;
             color: var(--text-dark);
@@ -405,14 +405,14 @@
             padding-bottom: 8px;
             border-bottom: 1px solid var(--border);
         }
-        
+
         .mode-buttons {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
             gap: 8px;
             margin-bottom: 15px;
         }
-        
+
         .mode-btn {
             padding: 12px;
             border: 2px solid var(--border);
@@ -422,38 +422,38 @@
             text-align: center;
             transition: all 0.2s;
         }
-        
+
         .mode-btn:hover {
             border-color: var(--primary);
             background: #f7fafc;
         }
-        
+
         .mode-btn.active {
             border-color: var(--primary);
             background: #ebf4ff;
         }
-        
+
         .mode-btn .icon {
             font-size: 1.5em;
             margin-bottom: 5px;
         }
-        
+
         .mode-btn .label {
             font-size: 0.85em;
             color: var(--text-dark);
         }
-        
+
         .form-group {
             margin-bottom: 12px;
         }
-        
+
         .form-group label {
             display: block;
             font-size: 0.85em;
             color: var(--text-light);
             margin-bottom: 5px;
         }
-        
+
         .form-group input, .form-group select, .form-group textarea {
             width: 100%;
             padding: 8px 10px;
@@ -461,37 +461,37 @@
             border-radius: 5px;
             font-size: 0.9em;
         }
-        
+
         .form-row {
             display: flex;
             gap: 10px;
         }
-        
+
         .form-row .form-group {
             flex: 1;
         }
-        
+
         .slider-group {
             display: flex;
             align-items: center;
             gap: 10px;
         }
-        
+
         .slider-group input[type="range"] {
             flex: 1;
         }
-        
+
         .slider-group input[type="number"] {
             width: 60px;
         }
-        
+
         /* ===== 处理选项 ===== */
         .process-options {
             display: flex;
             flex-direction: column;
             gap: 8px;
         }
-        
+
         .process-option {
             display: flex;
             align-items: center;
@@ -501,20 +501,20 @@
             cursor: pointer;
             transition: all 0.2s;
         }
-        
+
         .process-option:hover {
             border-color: var(--primary);
         }
-        
+
         .process-option.active {
             border-color: var(--primary);
             background: #ebf4ff;
         }
-        
+
         .process-option input {
             margin-right: 10px;
         }
-        
+
         /* ===== 文字列表 ===== */
         .text-list {
             max-height: 200px;
@@ -522,7 +522,7 @@
             border: 1px solid var(--border);
             border-radius: 6px;
         }
-        
+
         .text-item {
             display: flex;
             align-items: center;
@@ -530,33 +530,33 @@
             border-bottom: 1px solid var(--border);
             cursor: pointer;
         }
-        
+
         .text-item:last-child {
             border-bottom: none;
         }
-        
+
         .text-item:hover {
             background: var(--bg-light);
         }
-        
+
         .text-item.selected {
             background: #ebf4ff;
         }
-        
+
         .text-item .color-dot {
             width: 12px;
             height: 12px;
             border-radius: 50%;
             margin-right: 10px;
         }
-        
+
         .text-item .text-content {
             flex: 1;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        
+
         .text-item .delete-btn {
             opacity: 0;
             background: none;
@@ -565,11 +565,11 @@
             color: var(--danger);
             padding: 4px;
         }
-        
+
         .text-item:hover .delete-btn {
             opacity: 1;
         }
-        
+
         /* ===== 底部状态栏 ===== */
         .status-bar {
             background: white;
@@ -580,7 +580,7 @@
             display: flex;
             justify-content: space-between;
         }
-        
+
         /* ===== 进度条 ===== */
         .progress-overlay {
             position: fixed;
@@ -595,31 +595,31 @@
             z-index: 1000;
             min-width: 300px;
         }
-        
+
         .progress-overlay.show {
             display: block;
         }
-        
+
         .progress-label {
             font-size: 0.9em;
             color: var(--text-dark);
             margin-bottom: 10px;
         }
-        
+
         .progress-bar-bg {
             height: 8px;
             background: var(--border);
             border-radius: 4px;
             overflow: hidden;
         }
-        
+
         .progress-bar-fill {
             height: 100%;
             background: linear-gradient(90deg, var(--primary), var(--secondary));
             border-radius: 4px;
             transition: width 0.3s;
         }
-        
+
         /* ===== 模态框 ===== */
         .modal-overlay {
             position: fixed;
@@ -633,11 +633,11 @@
             justify-content: center;
             z-index: 1000;
         }
-        
+
         .modal-overlay.show {
             display: flex;
         }
-        
+
         .modal {
             background: white;
             border-radius: 12px;
@@ -647,7 +647,7 @@
             overflow: hidden;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
         }
-        
+
         .modal-header {
             padding: 20px;
             border-bottom: 1px solid var(--border);
@@ -655,12 +655,12 @@
             justify-content: space-between;
             align-items: center;
         }
-        
+
         .modal-header h3 {
             font-size: 1.2em;
             color: var(--text-dark);
         }
-        
+
         .modal-close {
             background: none;
             border: none;
@@ -668,13 +668,13 @@
             cursor: pointer;
             color: var(--text-light);
         }
-        
+
         .modal-body {
             padding: 20px;
             overflow-y: auto;
             max-height: 60vh;
         }
-        
+
         .modal-footer {
             padding: 15px 20px;
             border-top: 1px solid var(--border);
@@ -682,14 +682,14 @@
             justify-content: flex-end;
             gap: 10px;
         }
-        
+
         /* ===== 模板选择器 ===== */
         .template-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             gap: 15px;
         }
-        
+
         .template-card {
             border: 2px solid var(--border);
             border-radius: 10px;
@@ -698,28 +698,28 @@
             transition: all 0.2s;
             text-align: center;
         }
-        
+
         .template-card:hover {
             border-color: var(--primary);
             transform: translateY(-2px);
         }
-        
+
         .template-card .icon {
             font-size: 2em;
             margin-bottom: 10px;
         }
-        
+
         .template-card .name {
             font-weight: 500;
             color: var(--text-dark);
             margin-bottom: 5px;
         }
-        
+
         .template-card .desc {
             font-size: 0.8em;
             color: var(--text-light);
         }
-        
+
         /* ===== 拖拽区域 ===== */
         .drop-zone {
             border: 2px dashed var(--border);
@@ -730,35 +730,35 @@
             transition: all 0.2s;
             margin-bottom: 15px;
         }
-        
+
         .drop-zone:hover, .drop-zone.dragover {
             border-color: var(--primary);
             background: #f0f7ff;
         }
-        
+
         .drop-zone .icon {
             font-size: 2em;
             color: var(--text-light);
             margin-bottom: 10px;
         }
-        
+
         .drop-zone p {
             color: var(--text-light);
             font-size: 0.9em;
         }
-        
+
         /* ===== 隐藏元素 ===== */
         .hidden {
             display: none !important;
         }
-        
+
         /* ===== 响应式 ===== */
         @media (max-width: 1200px) {
             .right-panel {
                 width: 390px;
             }
         }
-        
+
         @media (max-width: 992px) {
             .left-sidebar {
                 width: 220px;
@@ -792,7 +792,7 @@
             </button>
         </div>
     </div>
-    
+
     <!-- 主布局 -->
     <div class="main-layout">
         <!-- 左侧边栏 - 页面列表 -->
@@ -810,7 +810,7 @@
                 </div>
             </div>
         </div>
-        
+
         <!-- 主内容区 - 画布 -->
         <div class="canvas-area">
             <div class="toolbar">
@@ -823,21 +823,21 @@
                     <button class="btn btn-success" onclick="uploadToDevice()">📤 发布</button>
                 </div>
             </div>
-            
+
             <div class="canvas-wrapper">
                 <div class="canvas-container" id="canvasContainer">
                     <canvas id="mainCanvas" width="800" height="480"></canvas>
                 </div>
             </div>
         </div>
-        
+
         <!-- 右侧面板 -->
         <div class="right-panel">
             <div class="panel-tabs">
                 <div class="panel-tab active" data-panel="edit" onclick="switchPanel('edit')">编辑</div>
                 <div class="panel-tab" data-panel="process" onclick="switchPanel('process')">处理</div>
             </div>
-            
+
             <div class="panel-content" id="editPanel">
                 <!-- 内容模式选择 -->
                 <div class="panel-section">
@@ -861,7 +861,7 @@
                         </div>
                     </div>
                 </div>
-                
+
                 <!-- 图片模式控件 -->
                 <div id="imageModeControls">
                     <div class="panel-section">
@@ -872,7 +872,7 @@
                             <input type="file" id="fileInput" class="hidden" accept="image/*">
                         </div>
                     </div>
-                    
+
                     <div class="panel-section">
                         <h4>缩放裁剪</h4>
                         <div class="form-group">
@@ -889,7 +889,7 @@
                         </div>
                     </div>
                 </div>
-                
+
                 <!-- 文字模式控件 -->
                 <div id="textModeControls" class="hidden">
                     <div class="panel-section">
@@ -917,7 +917,7 @@
                         </div>
                         <button class="btn btn-primary" onclick="addTextItem()" style="width:100%">➕ 添加文字</button>
                     </div>
-                    
+
                     <div class="panel-section">
                         <h4>文字列表</h4>
                         <div class="text-list" id="textList">
@@ -926,7 +926,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <div class="panel-section">
                         <div class="form-group">
                             <label>背景颜色</label>
@@ -938,7 +938,7 @@
                         <button class="btn btn-secondary" onclick="clearAllText()" style="width:100%">🗑️ 清空文字</button>
                     </div>
                 </div>
-                
+
                 <!-- 图文混合模式控件 -->
                 <div id="mixedModeControls" class="hidden">
                     <div class="panel-section">
@@ -958,7 +958,7 @@
                         </div>
                         <button class="btn btn-secondary" onclick="fitMixedToScreen()" style="width:100%">📐 适应屏幕</button>
                     </div>
-                    
+
                     <div class="panel-section">
                         <h4>叠加文字</h4>
                         <div class="form-group">
@@ -984,7 +984,7 @@
                         </div>
                         <button class="btn btn-primary" onclick="addMixedTextItem()" style="width:100%">➕ 添加</button>
                     </div>
-                    
+
                     <div class="panel-section">
                         <div class="text-list" id="mixedTextList" style="max-height: 120px;">
                             <div style="padding: 15px; text-align: center; color: var(--text-light);">
@@ -994,7 +994,7 @@
                         <button class="btn btn-secondary" onclick="clearMixedText()" style="width:100%; margin-top: 10px;">🗑️ 清空</button>
                     </div>
                 </div>
-                
+
                 <!-- 模板模式控件 -->
                 <div id="templateModeControls" class="hidden">
                     <div class="panel-section">
@@ -1005,7 +1005,7 @@
                     </div>
                 </div>
             </div>
-            
+
             <!-- 处理面板 -->
             <div class="panel-content hidden" id="processPanel">
                 <div class="panel-section">
@@ -1030,14 +1030,14 @@
                         🔄 处理并预览
                     </button>
                 </div>
-                
+
                 <div class="panel-section">
                     <h4>预览</h4>
                     <div style="border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #333;">
                         <canvas id="processedCanvas" style="width: 100%; height: auto; display: block; aspect-ratio: 800 / 480;"></canvas>
                     </div>
                 </div>
-                
+
                 <div class="panel-section">
                     <h4>发布说明</h4>
                     <p style="font-size: 0.85em; color: var(--text-light); margin-bottom: 10px;">
@@ -1047,13 +1047,13 @@
             </div>
         </div>
     </div>
-    
+
     <!-- 底部状态栏 -->
     <div class="status-bar">
         <span id="statusText">就绪</span>
         <span id="canvasInfo">画布: 800×480</span>
     </div>
-    
+
     <!-- 进度条 -->
     <div class="progress-overlay" id="progressOverlay">
         <div class="progress-label" id="progressLabel">上传中...</div>
@@ -1061,7 +1061,7 @@
             <div class="progress-bar-fill" id="progressBar" style="width: 0%"></div>
         </div>
     </div>
-    
+
     <!-- 新建页面模态框 -->
     <div class="modal-overlay" id="newPageModal">
         <div class="modal">
@@ -1084,7 +1084,7 @@
             </div>
         </div>
     </div>
-    
+
     <!-- 页面列表管理模态框 -->
     <div class="modal-overlay" id="pageListModal">
         <div class="modal" style="max-width: 800px;">
@@ -1118,13 +1118,36 @@
             </div>
         </div>
     </div>
-    
+
+    <!-- 发布前提醒模态框 -->
+    <div class="modal-overlay" id="publishAlertModal">
+        <div class="modal" style="max-width: 420px;">
+            <div class="modal-header">
+                <h3>⚠️ 无法发布</h3>
+                <button class="modal-close" onclick="hidePublishAlert()">×</button>
+            </div>
+            <div class="modal-body" style="text-align: center; padding: 30px 20px;">
+                <div style="font-size: 48px; margin-bottom: 16px;">🎨</div>
+                <p style="font-size: 1.05em; color: var(--text-dark); margin-bottom: 8px;">
+                    请先进行图像处理
+                </p>
+                <p style="font-size: 0.9em; color: var(--text-light);">
+                    在右侧面板点击「处理并预览」完成色彩转换后，再发布到设备。
+                </p>
+            </div>
+            <div class="modal-footer" style="justify-content: center;">
+                <button class="btn btn-primary" onclick="hidePublishAlertAndFocusProcess()" style="min-width: 140px;">去处理</button>
+                <button class="btn btn-secondary" onclick="hidePublishAlert()">取消</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 隐藏的设备ID和EPD类型 -->
     <input type="hidden" id="deviceId">
     <input type="hidden" id="epdType" value="0">
     <input type="hidden" id="width" value="800">
     <input type="hidden" id="height" value="480">
-    
+
     <script src="auth.js"></script>
     <script src="app.js?v=20241220"></script>
     <script src="editor.js"></script>
