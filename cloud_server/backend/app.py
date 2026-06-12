@@ -18,6 +18,8 @@ from functools import wraps
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+import numpy as np
+
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
 from pymongo import MongoClient
@@ -27,6 +29,12 @@ import io
 
 from config import Config
 from six_color_epd import process_e6_image_from_base64
+from template_renderer import render_template, _fetch_weather, _fetch_quote, _encode_epd_string
+
+# ==================== APScheduler 定时任务 ====================
+from apscheduler.schedulers.background import BackgroundScheduler
+
+scheduler = BackgroundScheduler()
 
 # ==================== Flask 应用初始化 ====================
 app = Flask(__name__)
@@ -40,7 +48,6 @@ EPD_EXPECTED_CHARS = EPD_WIDTH * EPD_HEIGHT  # 384000
 EPD_ALLOWED_CHARS = set('abcdefghijklmnop')
 DEFAULT_SLEEP_INTERVAL_SECONDS = 12 * 60 * 60
 TEMPLATE_SLEEP_INTERVAL_SECONDS = {
-    'clock': 60 * 60,
     'weather': 6 * 60 * 60,
     'calendar': 24 * 60 * 60,
     'quote': 24 * 60 * 60,
@@ -61,8 +68,11 @@ def get_template_meta(template_id: str):
     template_id = str(template_id).strip().lower()
     return next((t for t in TEMPLATES if t.get('templateId') == template_id), None)
 
-def build_content_metadata(content_mode=None, template_id=None):
-    """统一计算设备当前内容标签和云端期望的唤醒间隔。"""
+def build_content_metadata(content_mode=None, template_id=None, custom_sleep_interval=None):
+    """统一计算设备当前内容标签和云端期望的唤醒间隔。
+
+    custom_sleep_interval: 用户自定义的唤醒间隔（秒），优先于硬编码默认值。
+    """
     mode = (content_mode or 'image')
     mode = str(mode).strip().lower() if isinstance(mode, str) else 'image'
     template_id = str(template_id).strip().lower() if template_id else None
@@ -70,7 +80,11 @@ def build_content_metadata(content_mode=None, template_id=None):
     if mode == 'template':
         template = get_template_meta(template_id)
         if template:
-            sleep_interval = TEMPLATE_SLEEP_INTERVAL_SECONDS.get(template_id, DEFAULT_SLEEP_INTERVAL_SECONDS)
+            # 优先使用用户自定义间隔，否则用模板默认间隔
+            if custom_sleep_interval and isinstance(custom_sleep_interval, (int, float)) and custom_sleep_interval > 0:
+                sleep_interval = int(custom_sleep_interval)
+            else:
+                sleep_interval = TEMPLATE_SLEEP_INTERVAL_SECONDS.get(template_id, DEFAULT_SLEEP_INTERVAL_SECONDS)
             return {
                 'activeContentMode': 'template',
                 'activeTemplateId': template_id,
@@ -92,7 +106,62 @@ def build_content_metadata(content_mode=None, template_id=None):
 def get_device_content_metadata(device):
     if not device:
         return build_content_metadata()
-    return build_content_metadata(device.get('activeContentMode'), device.get('activeTemplateId'))
+    # 从 templateConfig 中读取用户自定义的唤醒间隔
+    template_config = device.get('templateConfig', {})
+    custom_interval = template_config.get('sleepIntervalSeconds') if isinstance(template_config, dict) else None
+    return build_content_metadata(device.get('activeContentMode'), device.get('activeTemplateId'), custom_interval)
+
+def _should_re_render_template(template_id: str, config: dict, device: dict) -> bool:
+    """判断模板设备是否需要重渲染内容。
+
+    按需渲染逻辑（设备唤醒时调用）：
+    - Canvas 发布的模板：不自动覆盖（用户设计的排版不能被 Pillow 替换）
+    - Pillow 渲染的模板：
+        - 天气：每次唤醒都渲染（天气随时变化）
+        - 每日一言：今天没渲染过 → 渲染
+        - 日历：日期变了 → 渲染
+        - 二维码/待办：永不自动渲染
+    """
+    template_id = str(template_id).strip().lower() if template_id else ''
+
+    # Canvas 发布的模板：不自动覆盖，保留用户设计的效果
+    # 只有用户手动重新发布时才会更新
+    if device.get('renderSource') == 'canvas':
+        return False
+
+    # 二维码/待办：内容不自动变化，永不自动渲染
+    if template_id in ('qrcode', 'todo'):
+        return False
+
+    # 天气：每次唤醒都渲染（设备醒来就是要拿最新天气）
+    if template_id == 'weather':
+        return True
+
+    last_updated = device.get('activeContentUpdatedAt')
+    now_utc = datetime.utcnow()
+
+    # 每日一言：今天没渲染过 → 渲染
+    if template_id == 'quote':
+        if not last_updated:
+            return True
+        # 有上次更新时间：检查是否跨日
+        last_date = last_updated.date() if hasattr(last_updated, 'date') else None
+        if last_date and last_date == now_utc.date():
+            return False  # 今天已渲染过
+        return True
+
+    # 日历：日期变了 → 渲染
+    if template_id == 'calendar':
+        if not last_updated:
+            return True
+        last_date = last_updated.date() if hasattr(last_updated, 'date') else None
+        if last_date and last_date == now_utc.date():
+            return False  # 今天已渲染过（日期没变）
+        return True
+
+    # 其他未知模板：保守策略，不自动渲染
+    return False
+
 
 def to_epoch_ms(value):
     if not value:
@@ -488,19 +557,19 @@ def add_device():
         data = request.get_json()
         device_id = data.get('deviceId', '').strip().upper()
         device_name = data.get('deviceName', '').strip()
-        
+
         if not device_id:
             return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
-        
+
         clean_id = device_id.replace('-', '').replace(':', '')
-        
+
         import re
         if not re.match(r'^[0-9A-F]{6}$|^[0-9A-F]{12}$', clean_id):
             return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
-        
+
         if devices_collection is None or not owner:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
-        
+
         device = {
             'deviceId': clean_id,
             'deviceName': device_name or clean_id,
@@ -514,7 +583,7 @@ def add_device():
             'createdAt': datetime.utcnow(),
             'updatedAt': datetime.utcnow()
         }
-        
+
         try:
             devices_collection.insert_one(device)
             if pairing_codes_collection is not None:
@@ -533,13 +602,13 @@ def add_device():
             )
             if pairing_codes_collection is not None:
                 pairing_codes_collection.delete_one({'deviceId': clean_id})
-        
+
         print(f'✅ Device added: {clean_id}')
         device.pop('_id', None)
         device['addedAt'] = device['addedAt'].isoformat()
         device['createdAt'] = device['createdAt'].isoformat()
         device['updatedAt'] = device['updatedAt'].isoformat()
-        
+
         return jsonify({'success': True, 'device': device})
     except Exception as e:
         print(f'❌ Error adding device: {e}')
@@ -555,15 +624,15 @@ def delete_device(device_id):
 
         if devices_collection is None or not owner:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
-        
+
         result = devices_collection.delete_one({'deviceId': device_id, 'owner': owner})
-        
+
         if result.deleted_count == 0:
             return jsonify({'success': False, 'error': 'Device not found'}), 404
-        
+
         if device_status_collection is not None:
             device_status_collection.delete_one({'deviceId': device_id})
-        
+
         print(f'✅ Device deleted: {device_id}')
         return jsonify({'success': True, 'message': 'Device deleted'})
     except Exception as e:
@@ -583,7 +652,7 @@ def get_devices_status():
             registered_devices = list(
                 devices_collection.find({'owner': owner}, {'_id': 0})
             )
-        
+
         devices = []
         for device in registered_devices:
             device_id = device['deviceId']
@@ -604,7 +673,7 @@ def get_devices_status():
                 'estimatedNextAutoWakeAt': None,
                 'wakePolicyPending': False
             }
-            
+
             # 检查设备最后活动时间
             if device_status_collection is not None:
                 status = device_status_collection.find_one({'deviceId': device_id})
@@ -640,9 +709,9 @@ def get_devices_status():
                     device_info['uptime_ms'] = status.get('uptime_ms')
                     device_info['freeHeap'] = status.get('freeHeap')
                     device_info['currentSleepSeconds'] = status.get('currentSleepSeconds')
-            
+
             devices.append(device_info)
-        
+
         return jsonify({'success': True, 'devices': devices})
     except Exception as e:
         print(f'❌ Error fetching device status: {e}')
@@ -653,7 +722,7 @@ def get_devices_status():
 @app.route('/api/device/status', methods=['POST'])
 def device_status():
     """设备查询绑定状态（无需登录，设备调用）
-    
+
     返回：
     - claimed: 是否已绑定
     - imageVersion: 最新图片版本号
@@ -663,16 +732,16 @@ def device_status():
     try:
         data = request.get_json() or {}
         device_id = (data.get('deviceId') or '').strip().upper()
-        
+
         if not device_id:
             return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
-        
+
         clean_id = device_id.replace('-', '').replace(':', '')
-        
+
         import re
         if not re.match(r'^[0-9A-F]{6}$|^[0-9A-F]{12}$', clean_id):
             return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
-        
+
         telemetry = {
             'lastSeen': int(time.time() * 1000),
             'updatedAt': datetime.utcnow()
@@ -724,20 +793,50 @@ def device_status():
                 {'$set': telemetry},
                 upsert=True
             )
-        
+
         if devices_collection is None:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
-        
+
         device = devices_collection.find_one({'deviceId': clean_id})
         claimed = device is not None and device.get('claimed', False)
-        
+
         response = {
             'success': True,
             'deviceId': clean_id,
             'claimed': claimed
         }
-        
+
         if claimed and device:
+            # ===== 模板设备按需渲染 =====
+            # 设备唤醒时，如果内容过期则同步渲染新数据，确保设备拿到最新内容
+            template_id = device.get('activeTemplateId')
+            template_config = device.get('templateConfig', {})
+            content_mode = device.get('activeContentMode', 'image')
+
+            if content_mode == 'template' and template_id and isinstance(template_config, dict):
+                if _should_re_render_template(template_id, template_config, device):
+                    try:
+                        print(f'🔄 设备唤醒触发渲染: {clean_id}, 模板={template_id}')
+                        epd_data = render_template(template_id, template_config)
+                        if epd_data:
+                            save_device_image(clean_id, epd_data)
+                            new_version = device.get('imageVersion', 0) + 1
+                            devices_collection.update_one(
+                                {'deviceId': clean_id},
+                                {'$set': {
+                                    'imageVersion': new_version,
+                                    'imageSizeChars': len(epd_data),
+                                    'imageSha256': hashlib.sha256(epd_data.encode('utf-8')).hexdigest(),
+                                    'activeContentUpdatedAt': datetime.utcnow(),
+                                    'updatedAt': datetime.utcnow(),
+                                }}
+                            )
+                            # 重新读取设备信息，使用新版本号
+                            device = devices_collection.find_one({'deviceId': clean_id})
+                            print(f'✅ 唤醒渲染完成: {clean_id}, 新版本={new_version}')
+                    except Exception as e:
+                        print(f'⚠️ 唤醒渲染失败: {clean_id} -> {e}（设备将使用旧数据）')
+
             # 已绑定：返回图片版本和下载URL
             image_version = device.get('imageVersion', 0)
             content_meta = get_device_content_metadata(device)
@@ -754,28 +853,28 @@ def device_status():
                     response['imageSizeChars'] = device.get('imageSizeChars')
                 if device.get('imageSha256') is not None:
                     response['imageSha256'] = device.get('imageSha256')
-            
+
             print(f"📊 设备 {clean_id} 查询状态: claimed=True, imageVersion={image_version}, "
                   f"nextSleepSeconds={content_meta['sleepIntervalSeconds']}")
         else:
             # 未绑定：生成或返回配对码
             response['imageVersion'] = 0
             response['nextSleepSeconds'] = DEFAULT_SLEEP_INTERVAL_SECONDS
-            
+
             pairing_code = None
             expires_at = None
-            
+
             if pairing_codes_collection is not None:
                 pairing_doc = pairing_codes_collection.find_one({'deviceId': clean_id})
                 if pairing_doc:
                     pairing_code = pairing_doc.get('code')
                     expires_at = pairing_doc.get('expiresAt')
-            
+
             if not pairing_code or (expires_at and expires_at < datetime.utcnow()):
                 import random
                 pairing_code = f"{random.randint(100000, 999999)}"
                 expires_at = datetime.utcnow() + timedelta(hours=24)
-                
+
                 if pairing_codes_collection is not None:
                     pairing_codes_collection.update_one(
                         {'deviceId': clean_id},
@@ -788,19 +887,19 @@ def device_status():
                         },
                         upsert=True
                     )
-            
+
             if expires_at:
                 expires_in = int((expires_at - datetime.utcnow()).total_seconds())
                 if expires_in < 0:
                     expires_in = 0
             else:
                 expires_in = 86400
-            
+
             response['pairingCode'] = pairing_code
             response['expiresIn'] = expires_in
-            
+
             print(f'📊 设备 {clean_id} 查询状态: claimed=False, pairingCode={pairing_code}')
-        
+
         return jsonify(response)
     except Exception as e:
         print(f'❌ Error querying device status: {e}')
@@ -815,49 +914,49 @@ def device_claim():
     try:
         user = getattr(request, 'user', None)
         owner = user.get('username') if user else None
-        
+
         if not owner:
             return jsonify({'success': False, 'error': 'Unauthorized'}), 401
-        
+
         data = request.get_json() or {}
         device_id = (data.get('deviceId') or '').strip().upper()
         pairing_code = (data.get('pairingCode') or '').strip()
-        
+
         if not device_id:
             return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
-        
+
         clean_id = device_id.replace('-', '').replace(':', '')
-        
+
         import re
         if not re.match(r'^[0-9A-F]{6}$|^[0-9A-F]{12}$', clean_id):
             return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
-        
+
         if devices_collection is None:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
-        
+
         if pairing_code:
             if pairing_codes_collection is None:
                 return jsonify({'success': False, 'error': 'Pairing code verification unavailable'}), 500
-            
+
             pairing_doc = pairing_codes_collection.find_one({'deviceId': clean_id})
             if not pairing_doc:
                 return jsonify({'success': False, 'error': 'Pairing code not found'}), 404
-            
+
             if pairing_doc.get('code') != pairing_code:
                 return jsonify({'success': False, 'error': 'Invalid pairing code'}), 400
-            
+
             expires_at = pairing_doc.get('expiresAt')
             if expires_at and expires_at < datetime.utcnow():
                 return jsonify({'success': False, 'error': 'Pairing code expired'}), 400
-        
+
         existing_device = devices_collection.find_one({'deviceId': clean_id})
         if existing_device:
             existing_owner = existing_device.get('owner')
             existing_claimed = existing_device.get('claimed', False)
-            
+
             if existing_claimed and existing_owner != owner:
                 return jsonify({'success': False, 'error': 'Device already claimed by another user'}), 403
-            
+
             devices_collection.update_one(
                 {'deviceId': clean_id},
                 {
@@ -883,10 +982,10 @@ def device_claim():
             }
             devices_collection.insert_one(device)
             print(f'✅ New device claimed: {clean_id} by {owner}')
-        
+
         if pairing_codes_collection is not None:
             pairing_codes_collection.delete_one({'deviceId': clean_id})
-        
+
         return jsonify({
             'success': True,
             'message': 'Device claimed successfully',
@@ -907,25 +1006,25 @@ def device_unbind():
     try:
         user = getattr(request, 'user', None)
         owner = user.get('username') if user else None
-        
+
         if not owner:
             return jsonify({'success': False, 'error': 'Unauthorized'}), 401
-        
+
         data = request.get_json() or {}
         device_id = (data.get('deviceId') or '').strip().upper()
-        
+
         if not device_id:
             return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
-        
+
         clean_id = device_id.replace('-', '').replace(':', '')
-        
+
         if devices_collection is None:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
-        
+
         device = devices_collection.find_one({'deviceId': clean_id, 'owner': owner})
         if not device:
             return jsonify({'success': False, 'error': 'Device not found or no permission'}), 404
-        
+
         devices_collection.update_one(
             {'deviceId': clean_id},
             {
@@ -935,12 +1034,12 @@ def device_unbind():
                 }
             }
         )
-        
+
         if pairing_codes_collection is not None:
             pairing_codes_collection.delete_one({'deviceId': clean_id})
-        
+
         print(f'✅ Device unbound: {clean_id} by {owner}')
-        
+
         return jsonify({
             'success': True,
             'message': 'Device unbound successfully',
@@ -996,13 +1095,13 @@ def get_pages(device_id):
                 'updatedAt': 1
             }
         ).sort('updatedAt', -1).limit(limit))
-        
+
         for page in pages:
             if hasattr(page.get('createdAt'), 'isoformat'):
                 page['createdAt'] = page['createdAt'].isoformat()
             if hasattr(page.get('updatedAt'), 'isoformat'):
                 page['updatedAt'] = page['updatedAt'].isoformat()
-        
+
         return jsonify({'success': True, 'pages': pages})
     except Exception as e:
         print(f'❌ Error fetching pages: {e}')
@@ -1020,7 +1119,7 @@ def save_page():
         page_type = data.get('type', 'custom')
         page_data = data.get('data', {})
         thumbnail = data.get('thumbnail', '')
-        
+
         if not device_id:
             return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
 
@@ -1029,12 +1128,12 @@ def save_page():
         user = getattr(request, 'user', None)
         if not ensure_device_owner(clean_id, user):
             return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
-        
+
         if pages_collection is None:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
-        
+
         now = datetime.utcnow()
-        
+
         if page_id:
             result = pages_collection.update_one(
                 {'pageId': page_id, 'deviceId': clean_id},
@@ -1048,12 +1147,12 @@ def save_page():
             )
             if result.matched_count == 0:
                 return jsonify({'success': False, 'error': 'Page not found'}), 404
-            
+
             print(f'✅ Page updated: {page_id}')
         else:
             import uuid
             page_id = str(uuid.uuid4())[:8]
-            
+
             page = {
                 'pageId': page_id,
                 'deviceId': clean_id,
@@ -1066,9 +1165,9 @@ def save_page():
             }
             pages_collection.insert_one(page)
             print(f'✅ Page created: {page_id}')
-        
+
         return jsonify({
-            'success': True, 
+            'success': True,
             'pageId': page_id,
             'message': 'Page saved'
         })
@@ -1083,7 +1182,7 @@ def get_page(page_id):
     try:
         if pages_collection is None:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
-        
+
         page = pages_collection.find_one({'pageId': page_id}, {'_id': 0})
         if not page:
             return jsonify({'success': False, 'error': 'Page not found'}), 404
@@ -1092,12 +1191,12 @@ def get_page(page_id):
         device_id = page.get('deviceId')
         if device_id and not ensure_device_owner(device_id, user):
             return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
-        
+
         if hasattr(page.get('createdAt'), 'isoformat'):
             page['createdAt'] = page['createdAt'].isoformat()
         if hasattr(page.get('updatedAt'), 'isoformat'):
             page['updatedAt'] = page['updatedAt'].isoformat()
-        
+
         return jsonify({'success': True, 'page': page})
     except Exception as e:
         print(f'❌ Error fetching page: {e}')
@@ -1121,13 +1220,13 @@ def delete_page(page_id):
             return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
 
         result = pages_collection.delete_one({'pageId': page_id})
-        
+
         if page_lists_collection is not None:
             page_lists_collection.update_many(
                 {},
                 {'$pull': {'pages': {'pageId': page_id}}}
             )
-        
+
         print(f'✅ Page deleted: {page_id}')
         return jsonify({'success': True, 'message': 'Page deleted'})
     except Exception as e:
@@ -1168,13 +1267,13 @@ def get_page_lists(device_id):
             {'deviceId': {'$in': candidates}},
             {'_id': 0}
         ).sort('updatedAt', -1).limit(limit))
-        
+
         for pl in page_lists:
             if hasattr(pl.get('createdAt'), 'isoformat'):
                 pl['createdAt'] = pl['createdAt'].isoformat()
             if hasattr(pl.get('updatedAt'), 'isoformat'):
                 pl['updatedAt'] = pl['updatedAt'].isoformat()
-        
+
         return jsonify({'success': True, 'pageLists': page_lists})
     except Exception as e:
         print(f'❌ Error fetching page lists: {e}')
@@ -1192,7 +1291,7 @@ def save_page_list():
         pages = data.get('pages', [])
         interval = data.get('interval', 60)
         is_active = data.get('isActive', False)
-        
+
         if not device_id:
             return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
 
@@ -1201,18 +1300,18 @@ def save_page_list():
         user = getattr(request, 'user', None)
         if not ensure_device_owner(clean_id, user):
             return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
-        
+
         if page_lists_collection is None:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
-        
+
         now = datetime.utcnow()
-        
+
         if is_active:
             page_lists_collection.update_many(
                 {'deviceId': clean_id},
                 {'$set': {'isActive': False}}
             )
-        
+
         if list_id:
             result = page_lists_collection.update_one(
                 {'listId': list_id, 'deviceId': clean_id},
@@ -1226,12 +1325,12 @@ def save_page_list():
             )
             if result.matched_count == 0:
                 return jsonify({'success': False, 'error': 'Page list not found'}), 404
-            
+
             print(f'✅ Page list updated: {list_id}')
         else:
             import uuid
             list_id = str(uuid.uuid4())[:8]
-            
+
             page_list = {
                 'listId': list_id,
                 'deviceId': clean_id,
@@ -1244,9 +1343,9 @@ def save_page_list():
             }
             page_lists_collection.insert_one(page_list)
             print(f'✅ Page list created: {list_id}')
-        
+
         return jsonify({
-            'success': True, 
+            'success': True,
             'listId': list_id,
             'message': 'Page list saved'
         })
@@ -1272,7 +1371,7 @@ def delete_page_list(list_id):
             return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
 
         result = page_lists_collection.delete_one({'listId': list_id})
-        
+
         print(f'✅ Page list deleted: {list_id}')
         return jsonify({'success': True, 'message': 'Page list deleted'})
     except Exception as e:
@@ -1291,18 +1390,18 @@ def get_active_page_list(device_id):
 
         if page_lists_collection is None:
             return jsonify({'success': True, 'pageList': None})
-        
+
         page_list = page_lists_collection.find_one(
             {'deviceId': clean_id, 'isActive': True},
             {'_id': 0}
         )
-        
+
         if page_list:
             if hasattr(page_list.get('createdAt'), 'isoformat'):
                 page_list['createdAt'] = page_list['createdAt'].isoformat()
             if hasattr(page_list.get('updatedAt'), 'isoformat'):
                 page_list['updatedAt'] = page_list['updatedAt'].isoformat()
-        
+
         return jsonify({'success': True, 'pageList': page_list})
     except Exception as e:
         print(f'❌ Error fetching active page list: {e}')
@@ -1311,20 +1410,6 @@ def get_active_page_list(device_id):
 # ==================== API: 模板 ====================
 
 TEMPLATES = [
-    {
-        'templateId': 'clock',
-        'name': '时钟',
-        'icon': '🕐',
-        'description': '显示当前时间和日期',
-        'preview': '/templates/clock.png',
-        'defaultData': {
-            'type': 'template',
-            'template': 'clock',
-            'showDate': True,
-            'showWeekday': True,
-            'format24h': True
-        }
-    },
     {
         'templateId': 'weather',
         'name': '天气',
@@ -1411,14 +1496,14 @@ def epd_init():
     data = request.get_json()
     device_id = data.get('deviceId')
     epd_type = data.get('epdType')
-    
+
     if not device_id or epd_type is None:
         return jsonify({'success': False, 'error': 'Missing deviceId or epdType'}), 400
 
     user = getattr(request, 'user', None)
     if not ensure_device_owner(device_id, user):
         return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
-    
+
     clean_id = normalize_device_id(device_id)
     print(f'📱 EPD init recorded for {clean_id}, type={epd_type}')
     return jsonify({'success': True, 'message': 'EPD init recorded (device will apply on next wake)'})
@@ -1431,16 +1516,16 @@ def epd_load():
     device_id = data.get('deviceId')
     image_data = data.get('data')
     content_meta = build_content_metadata(data.get('contentMode'), data.get('templateId'))
-    
+
     if not device_id or not image_data:
         return jsonify({'success': False, 'error': 'Missing deviceId or data'}), 400
 
     user = getattr(request, 'user', None)
     if not ensure_device_owner(device_id, user):
         return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
-    
+
     clean_id = normalize_device_id(device_id)
-    
+
     # 发布阶段就做完整性校验：长度/字符集不符合直接拒绝
     ok, err = validate_epd_text_payload(image_data)
     if not ok:
@@ -1455,7 +1540,7 @@ def epd_load():
     # 持久化保存图片数据
     if not save_device_image(clean_id, image_data):
         return jsonify({'success': False, 'error': 'Failed to save image'}), 500
-    
+
     # 更新图片版本号（递增）
     if devices_collection is not None:
         device = devices_collection.find_one({'deviceId': clean_id})
@@ -1483,16 +1568,16 @@ def epd_load():
             {'deviceId': clean_id},
             update_doc
         )
-        
+
         print(f'✅ 图片已保存: {clean_id}, 版本: {current_version} -> {new_version} '
               f'(matched={result.matched_count}, modified={result.modified_count})')
         print(f'   数据大小: {len(image_data)} 字符 ({len(image_data)/1024:.2f} KB)')
         print(f"   当前内容: {content_meta['activeContentLabel']}, "
               f"唤醒间隔: {content_meta['sleepIntervalSeconds']} 秒")
         print(f'   设备下次唤醒时将自动拉取更新')
-        
+
         return jsonify({
-            'success': True, 
+            'success': True,
             'message': 'Image saved, device will update on next wake',
             'imageVersion': new_version,
             'imageUrl': f'http://{Config.FLASK_HOST}:{Config.FLASK_PORT}/api/epd/raw/{clean_id}?v={new_version}',
@@ -1501,17 +1586,17 @@ def epd_load():
             'activeContentLabel': content_meta['activeContentLabel'],
             'sleepIntervalSeconds': content_meta['sleepIntervalSeconds']
         })
-    
+
     return jsonify({'success': True, 'message': 'Image saved'})
 
 @app.route('/api/epd/raw/<device_id>', methods=['GET'])
 def epd_raw_download(device_id):
     """下载设备的原始图片数据（ESP32通过HTTP下载）
-    
+
     返回 text/plain 格式的 a~p 编码字符串
     """
     clean_id = normalize_device_id(device_id)
-    
+
     image_path = get_device_image_path(clean_id)
     if not image_path.exists():
         print(f'❌ 图片不存在: {clean_id}')
@@ -1559,14 +1644,14 @@ def epd_show():
     """触发设备显示（Deep-sleep架构下此接口仅用于记录）"""
     data = request.get_json()
     device_id = data.get('deviceId')
-    
+
     if not device_id:
         return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
 
     user = getattr(request, 'user', None)
     if not ensure_device_owner(device_id, user):
         return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
-    
+
     clean_id = normalize_device_id(device_id)
     print(f'📺 Show command recorded for {clean_id} (device will display on next wake)')
     return jsonify({'success': True, 'message': 'Show command recorded (device will display on next wake)'})
@@ -1584,13 +1669,13 @@ def process_sixcolor():
         height = data.get('height', 480)
         algorithm = data.get('algorithm', 'floyd_steinberg')
         grad_thresh = data.get('gradThresh', 40)
-        
+
         if not image_data:
             return jsonify({'success': False, 'error': 'Missing imageData'}), 400
-        
+
         if algorithm not in ['floyd_steinberg', 'gradient_blend', 'grayscale_color_map']:
             return jsonify({'success': False, 'error': f'Invalid algorithm: {algorithm}'}), 400
-        
+
         result = process_e6_image_from_base64(
             image_data,
             width,
@@ -1599,12 +1684,205 @@ def process_sixcolor():
             grad_thresh=grad_thresh
         )
         return jsonify(result)
-        
+
     except Exception as e:
         print(f'❌ 6色处理错误: {e}')
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
+
+# ==================== API: 模板数据代理 ====================
+
+@app.route('/api/weather', methods=['GET'])
+def api_weather():
+    """天气数据代理（避免前端跨域）"""
+    city = request.args.get('city', '').strip()
+    if not city:
+        return jsonify({'success': False, 'error': 'Missing city parameter'}), 400
+    data = _fetch_weather(city)
+    if data:
+        return jsonify({'success': True, 'data': data})
+    return jsonify({'success': False, 'error': 'Failed to fetch weather data'}), 502
+
+
+@app.route('/api/quote', methods=['GET'])
+def api_quote():
+    """每日一言代理（避免前端跨域）"""
+    data = _fetch_quote()
+    if data:
+        return jsonify({'success': True, 'data': data})
+    return jsonify({'success': False, 'error': 'Failed to fetch quote'}), 502
+
+
+@app.route('/api/device/template', methods=['POST'])
+@login_required
+def device_set_template():
+    """
+    为设备设置模板配置，并立即渲染保存 EPD 数据。
+    如果前端提供了 imageBase64（Canvas 截图），用它做抖动处理（确保画布=预览=设备三端一致）；
+    否则用后端 Pillow 渲染（定时唤醒自动更新场景）。
+    同时保存 templateConfig 供后续定时任务自动更新。
+    """
+    data = request.get_json()
+    device_id = data.get('deviceId')
+    template_id = data.get('templateId')
+    template_config = data.get('templateConfig', {})
+
+    if not device_id or not template_id:
+        return jsonify({'success': False, 'error': 'Missing deviceId or templateId'}), 400
+
+    user = getattr(request, 'user', None)
+    if not ensure_device_owner(device_id, user):
+        return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
+
+    clean_id = normalize_device_id(device_id)
+    template_id = str(template_id).strip().lower()
+
+    # ===== 渲染逻辑：前端截图优先，后端渲染兜底 =====
+    image_base64 = data.get('imageBase64')
+    preview_image_b64 = None
+    data_4bit_b64 = None
+
+    if image_base64:
+        # 前端提供了 Canvas 截图：用它做 Floyd-Steinberg 抖动处理
+        # 确保画布（mainCanvas）= 预览（processedCanvas）= 设备屏幕 三端一致
+        try:
+            result = process_e6_image_from_base64(image_base64, 800, 480, algorithm='floyd_steinberg')
+            epd_data = _encode_epd_string(np.array(result['colorIndices']).reshape(480, 800))
+            preview_image_b64 = result.get('previewImage')
+            data_4bit_b64 = result.get('data4bit')
+            print(f'✅ 模板通过前端Canvas截图处理: {clean_id}, EPD长度={len(epd_data)}')
+        except Exception as e:
+            print(f'❌ 前端Canvas截图处理失败: {e}')
+            return jsonify({'success': False, 'error': f'Image processing failed: {e}'}), 500
+    else:
+        # 无前端截图时（如定时任务/设备唤醒），后端 Pillow 渲染
+        try:
+            epd_data = render_template(template_id, template_config)
+            if not epd_data:
+                return jsonify({'success': False, 'error': 'Template rendering failed'}), 500
+            print(f'✅ 模板后端渲染完成: {clean_id}, EPD长度={len(epd_data)}')
+        except Exception as e:
+            print(f'❌ 模板渲染失败: {e}')
+            import traceback
+            traceback.print_exc()
+            return jsonify({'success': False, 'error': f'Template rendering failed: {e}'}), 500
+
+    # 保存 EPD 数据
+    if not save_device_image(clean_id, epd_data):
+        return jsonify({'success': False, 'error': 'Failed to save rendered image'}), 500
+
+    # 更新设备记录
+    if devices_collection is not None:
+        # 从 templateConfig 中读取用户自定义唤醒间隔
+        custom_interval = template_config.get('sleepIntervalSeconds') if isinstance(template_config, dict) else None
+        content_meta = build_content_metadata('template', template_id, custom_interval)
+        device = devices_collection.find_one({'deviceId': clean_id})
+        current_version = device.get('imageVersion', 0) if device else 0
+        new_version = current_version + 1
+        now = datetime.utcnow()
+
+        update_fields = {
+            'imageVersion': new_version,
+            'imageSizeChars': len(epd_data),
+            'imageSha256': hashlib.sha256(epd_data.encode('utf-8')).hexdigest(),
+            'activeContentMode': content_meta['activeContentMode'],
+            'activeContentLabel': content_meta['activeContentLabel'],
+            'activeTemplateId': template_id,
+            'sleepIntervalSeconds': content_meta['sleepIntervalSeconds'],
+            'templateConfig': template_config,
+            'renderSource': 'canvas' if image_base64 else 'pillow',
+            'activeContentUpdatedAt': now,
+            'updatedAt': now,
+        }
+
+        devices_collection.update_one(
+            {'deviceId': clean_id},
+            {'$set': update_fields}
+        )
+
+        print(f'✅ 模板已设置并渲染: {clean_id}, 模板={template_id}, 版本={new_version}')
+        response_data = {
+            'success': True,
+            'message': 'Template set and rendered',
+            'imageVersion': new_version,
+            'imageUrl': f'http://{Config.FLASK_HOST}:{Config.FLASK_PORT}/api/epd/raw/{clean_id}?v={new_version}',
+            'activeContentLabel': content_meta['activeContentLabel'],
+            'sleepIntervalSeconds': content_meta['sleepIntervalSeconds'],
+        }
+        # 返回抖动后的预览图和4bit数据，让前端更新 processedCanvas
+        if preview_image_b64:
+            response_data['previewImage'] = preview_image_b64
+        if data_4bit_b64:
+            response_data['data4bit'] = data_4bit_b64
+        return jsonify(response_data)
+
+    return jsonify({'success': True, 'message': 'Template rendered and saved'})
+
+
+# ==================== 定时任务：模板自动重渲染 ====================
+
+def scheduled_template_render():
+    """兜底定时任务：为所有配置了模板的设备检查并重渲染过期内容
+
+    此任务作为安全兜底机制（2小时触发一次），主要渲染时机已改为设备唤醒时按需渲染。
+    只渲染真正过期的内容，避免浪费API调用。
+    """
+    if devices_collection is None:
+        return
+
+    try:
+        # 查找所有已配置模板且 claimed=True 的设备
+        cursor = devices_collection.find({
+            'claimed': True,
+            'activeContentMode': 'template',
+            'activeTemplateId': {'$exists': True, '$ne': None},
+            'templateConfig': {'$exists': True},
+        }, {'_id': 0, 'deviceId': 1, 'activeTemplateId': 1, 'templateConfig': 1,
+            'imageVersion': 1, 'activeContentUpdatedAt': 1})
+
+        count = 0
+        skipped = 0
+        for device in cursor:
+            device_id = device['deviceId']
+            template_id = device.get('activeTemplateId')
+            config = device.get('templateConfig', {})
+
+            # 使用统一的判断逻辑
+            if not _should_re_render_template(template_id, config, device):
+                skipped += 1
+                continue
+
+            try:
+                epd_data = render_template(template_id, config)
+                if not epd_data:
+                    continue
+
+                if not save_device_image(device_id, epd_data):
+                    continue
+
+                new_version = device.get('imageVersion', 0) + 1
+                devices_collection.update_one(
+                    {'deviceId': device_id},
+                    {'$set': {
+                        'imageVersion': new_version,
+                        'imageSizeChars': len(epd_data),
+                        'imageSha256': hashlib.sha256(epd_data.encode('utf-8')).hexdigest(),
+                        'activeContentUpdatedAt': datetime.utcnow(),
+                        'updatedAt': datetime.utcnow(),
+                    }}
+                )
+                count += 1
+                print(f'🔄 兜底渲染完成: {device_id}, 模板={template_id}, 新版本={new_version}')
+            except Exception as e:
+                print(f'⚠️ 兜底渲染失败: {device_id} -> {e}')
+                continue
+
+        if count > 0 or skipped > 0:
+            print(f'🔄 兜底渲染任务完成: 渲染 {count} 个，跳过 {skipped} 个')
+    except Exception as e:
+        print(f'❌ 兜底渲染任务异常: {e}')
+
 
 # ==================== 健康检查 ====================
 
@@ -1612,7 +1890,7 @@ def process_sixcolor():
 def health_check():
     """健康检查"""
     mongo_ok = mongo_client is not None
-    
+
     return jsonify({
         'success': True,
         'status': 'healthy' if mongo_ok else 'degraded',
@@ -1629,8 +1907,21 @@ def init_app():
     print('📡 Architecture: Deep-sleep + HTTP Pull (No MQTT)')
     print(f'💾 MongoDB: {redact_uri_secret(Config.MONGODB_URI)} / db={Config.MONGODB_DB}')
     print(f'📁 Image Storage: {DATA_DIR}\n')
-    
+
     connect_mongodb()
+
+    # 启动兜底定时任务：每2小时检查并渲染需要更新的模板（主要渲染时机已改为设备唤醒时按需渲染）
+    if not scheduler.running:
+        scheduler.add_job(
+            scheduled_template_render,
+            'interval',
+            hours=2,
+            id='template_render_job',
+            replace_existing=True,
+            max_instances=1
+        )
+        scheduler.start()
+        print('⏰ APScheduler started: template render backup every 2 hours\n')
 
 # 初始化
 init_app()

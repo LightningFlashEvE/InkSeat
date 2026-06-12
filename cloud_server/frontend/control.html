@@ -1003,6 +1003,74 @@
                             <!-- 模板将动态加载 -->
                         </div>
                     </div>
+
+                    <!-- 天气模板配置 -->
+                    <div id="weatherTemplateConfig" class="panel-section hidden">
+                        <h4>天气设置</h4>
+                        <div class="form-group">
+                            <label>城市名称</label>
+                            <input type="text" id="weatherCityInput" placeholder="如：北京、上海、广州">
+                        </div>
+                        <div class="form-group">
+                            <label>唤醒频率</label>
+                            <select id="weatherWakeInterval" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-size:0.9em;">
+                                <option value="3600">每 1 小时</option>
+                                <option value="10800">每 3 小时</option>
+                                <option value="21600" selected>每 6 小时（默认）</option>
+                                <option value="43200">每 12 小时</option>
+                                <option value="86400">每 24 小时</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" onclick="fetchWeatherAndPreview()" style="width:100%">
+                            🌤️ 获取天气并预览
+                        </button>
+                    </div>
+
+                    <!-- 每日一言模板配置 -->
+                    <div id="quoteTemplateConfig" class="panel-section hidden">
+                        <h4>每日一言</h4>
+                        <p style="font-size:0.85em;color:var(--text-light)">
+                            内容自动从网络获取，无需手动配置。
+                        </p>
+                        <div class="form-group" style="margin-top:10px">
+                            <label>唤醒频率</label>
+                            <select id="quoteWakeInterval" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-size:0.9em;">
+                                <option value="3600">每 1 小时</option>
+                                <option value="10800">每 3 小时</option>
+                                <option value="21600">每 6 小时</option>
+                                <option value="43200">每 12 小时</option>
+                                <option value="86400" selected>每 24 小时（默认）</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" onclick="fetchQuoteAndPreview()" style="width:100%;margin-top:10px">
+                            💬 获取一言并预览
+                        </button>
+                    </div>
+
+                    <!-- 二维码模板配置 -->
+                    <div id="qrcodeTemplateConfig" class="panel-section hidden">
+                        <h4>二维码设置</h4>
+                        <div class="form-group">
+                            <label>二维码内容（URL / 文本）</label>
+                            <input type="text" id="qrcodeContentInput" placeholder="https://example.com">
+                        </div>
+                        <div class="form-group">
+                            <label>标题（显示在二维码下方）</label>
+                            <input type="text" id="qrcodeTitleInput" placeholder="扫码访问">
+                        </div>
+                        <div class="form-group">
+                            <label>唤醒频率</label>
+                            <select id="qrcodeWakeInterval" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-size:0.9em;">
+                                <option value="3600">每 1 小时</option>
+                                <option value="21600">每 6 小时</option>
+                                <option value="43200" selected>每 12 小时（默认）</option>
+                                <option value="86400">每 24 小时</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary" onclick="renderQRCodePreview()" style="width:100%">
+                            📱 生成二维码并预览
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -1148,8 +1216,9 @@
     <input type="hidden" id="width" value="800">
     <input type="hidden" id="height" value="480">
 
-    <script src="auth.js"></script>
-    <script src="app.js?v=20241220"></script>
-    <script src="editor.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+    <script src="auth.js?v=20250612a"></script>
+    <script src="app.js?v=20250612e"></script>
+    <script src="editor.js?v=20250612a"></script>
 </body>
 </html>

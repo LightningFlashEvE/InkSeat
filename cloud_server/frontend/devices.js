@@ -70,24 +70,24 @@ async function loadDevices() {
 async function addDevice() {
     const deviceIdInput = document.getElementById('newDeviceId');
     const deviceNameInput = document.getElementById('deviceName');
-    
+
     let deviceId = deviceIdInput.value.trim().toUpperCase();
     const deviceName = deviceNameInput.value.trim() || deviceId;
-    
+
     if (!deviceId) {
         log('请输入设备ID或MAC地址', 'error');
         return;
     }
-    
+
     // 去掉可能的分隔符
     deviceId = deviceId.replace(/[-:]/g, '');
-    
+
     // 验证是否为十六进制
     if (!/^[0-9A-F]+$/.test(deviceId)) {
         log('设备ID格式错误，请输入十六进制MAC地址（6位或12位）', 'error');
         return;
     }
-    
+
     // 根据长度验证
     if (deviceId.length === 6) {
         log(`识别为短设备码: ${deviceId}`, 'info');
@@ -97,8 +97,8 @@ async function addDevice() {
         log('设备ID格式错误，请输入6位或12位的MAC地址', 'error');
         return;
     }
-    
-    
+
+
     try {
         const response = await fetch(`${API_BASE}/api/devices/add`, {
             method: 'POST',
@@ -111,9 +111,9 @@ async function addDevice() {
                 deviceName: deviceName
             })
         });
-        
+
         const result = await response.json();
-        
+
         if (result.success) {
             log(`设备 ${deviceName} 添加成功`, 'success');
             // 清空输入
@@ -145,7 +145,7 @@ async function removeDevice(deviceId) {
     if (!confirm(`确定要删除设备 ${deviceId} 吗？`)) {
         return;
     }
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/devices/${deviceId}`, {
             method: 'DELETE',
@@ -153,9 +153,9 @@ async function removeDevice(deviceId) {
                 ...authHeaders()
             }
         });
-        
+
         const result = await response.json();
-        
+
         if (result.success) {
             log('设备已删除', 'success');
             delete deviceStatus[deviceId];
@@ -173,7 +173,7 @@ async function removeDevice(deviceId) {
 // 渲染设备列表
 function renderDevices() {
     const container = document.getElementById('devicesContainer');
-    
+
     if (devices.length === 0) {
         container.innerHTML = `
             <div class="empty-state">
@@ -183,10 +183,10 @@ function renderDevices() {
         `;
         return;
     }
-    
+
     container.innerHTML = '<div class="devices-grid"></div>';
     const grid = container.querySelector('.devices-grid');
-    
+
     devices.forEach(device => {
         const status = deviceStatus[device.id] || {};
         const isSleeping = status.sleeping === true;  // 明确检查是否为true
@@ -234,11 +234,6 @@ function renderDevices() {
                     </div>
 
                     <div class="device-info-item">
-                        <span class="device-info-label">IP地址</span>
-                        <span class="device-info-value">${ipText}</span>
-                    </div>
-
-                    <div class="device-info-item">
                         <span class="device-info-label">WiFi信号</span>
                         <span class="device-info-value">${getSignalBars(status.rssi)}</span>
                     </div>
@@ -249,18 +244,13 @@ function renderDevices() {
                     </div>
 
                     <div class="device-info-item">
-                        <span class="device-info-label">剩余内存</span>
-                        <span class="device-info-value">${formatMemory(status.freeHeap)}</span>
-                    </div>
-
-                    <div class="device-info-item">
                         <span class="device-info-label">唤醒间隔</span>
                         <span class="device-info-value">${formatSleepInterval(status.sleepIntervalSeconds || status.currentSleepSeconds)}</span>
                     </div>
                 ` : '';
-        
+
         // 调试日志（如需开启，可在此添加受控开关；不要保留硬编码设备ID）
-        
+
         // 确定显示状态：睡眠 > 在线 > 离线
         let statusText, statusColor, statusClass;
         if (isSleeping) {
@@ -276,11 +266,11 @@ function renderDevices() {
             statusColor = '#dc3545';  // 红色表示离线
             statusClass = 'status-offline';
         }
-        
+
         const card = document.createElement('div');
         card.className = 'device-card';
         card.onclick = () => openDevice(device.id);
-        
+
         card.innerHTML = `
             <div class="device-status">
                 <span class="status-dot ${statusClass}"></span>
@@ -288,15 +278,15 @@ function renderDevices() {
                     ${statusText}
                 </span>
             </div>
-            
+
             <div class="device-id">${device.name}</div>
-            
+
             <div class="device-info">
                 <div class="device-info-item">
                     <span class="device-info-label">设备ID</span>
                     <span class="device-info-value">${device.id}</span>
                 </div>
-                
+
                 ${isSleeping ? `
                     <div class="device-info-item">
                         <span class="device-info-label">状态</span>
@@ -317,13 +307,13 @@ function renderDevices() {
                     </div>
                     ${telemetryHtml}
                 `}
-                
+
                 <div class="device-info-item">
                     <span class="device-info-label">添加时间</span>
                     <span class="device-info-value">${formatDate(device.addedAt)}</span>
                 </div>
             </div>
-            
+
             <div class="device-actions" onclick="event.stopPropagation()">
                 <button class="btn btn-success btn-small" onclick="openDevice('${device.id}')">
                     📱 管理设备
@@ -333,7 +323,7 @@ function renderDevices() {
                 </button>
             </div>
         `;
-        
+
         grid.appendChild(card);
     });
 }
@@ -350,7 +340,7 @@ let isPolling = false;  // 防止并发请求
 function startPolling() {
     // 立即执行一次
     pollDeviceStatus();
-    
+
     // 每2秒轮询一次（从5秒优化为2秒，提升响应速度）
     if (pollingInterval) {
         clearInterval(pollingInterval);
@@ -370,7 +360,7 @@ async function pollDeviceStatus() {
     if (isPolling) {
         return;
     }
-    
+
     isPolling = true;
     try {
         const response = await fetch(`${API_BASE}/api/devices`, {
@@ -407,7 +397,7 @@ async function pollDeviceStatus() {
                         wakePolicyPending: device.wakePolicyPending,
                         lastSeen: device.lastSeen
                     };
-                    
+
                     // 调试：打印睡眠设备的状态
                     if (newStatus.sleeping || (oldStatus && oldStatus.sleeping)) {
                         console.log(`[设备状态] ${device.deviceId}:`, {
@@ -418,10 +408,10 @@ async function pollDeviceStatus() {
                             deviceData: device
                         });
                     }
-                    
+
                     // 检查是否有变化，避免不必要的重渲染
                     // 注意：sleeping状态变化必须触发重渲染，因为会影响显示
-                    if (!oldStatus || 
+                    if (!oldStatus ||
                         oldStatus.online !== newStatus.online ||
                         oldStatus.sleeping !== newStatus.sleeping ||  // 检查睡眠状态变化
                         oldStatus.lastSeen !== newStatus.lastSeen ||  // lastSeen变化也可能影响状态
@@ -443,10 +433,10 @@ async function pollDeviceStatus() {
                         oldStatus.wakePolicyPending !== newStatus.wakePolicyPending) {
                         hasChanges = true;
                     }
-                    
+
                     deviceStatus[device.deviceId] = newStatus;
                 });
-                
+
                 // 只在有变化时重新渲染，提升性能
                 if (hasChanges) {
                     renderDevices();
@@ -463,22 +453,22 @@ async function pollDeviceStatus() {
 // 工具函数：格式化信号强度
 function getSignalBars(rssi) {
     if (rssi === undefined || rssi === null) return '未上报';
-    
+
     let bars = 0;
     if (rssi > -50) bars = 4;
     else if (rssi > -60) bars = 3;
     else if (rssi > -70) bars = 2;
     else if (rssi > -80) bars = 1;
-    
+
     const html = '<span class="signal-strength">';
     let result = html;
-    
+
     for (let i = 1; i <= 4; i++) {
         const height = i * 3 + 5;
         const active = i <= bars ? 'active' : '';
         result += `<span class="signal-bar ${active}" style="height: ${height}px"></span>`;
     }
-    
+
     result += `</span> ${rssi} dBm`;
     return result;
 }
@@ -486,12 +476,12 @@ function getSignalBars(rssi) {
 // 工具函数：格式化运行时间
 function formatUptime(ms) {
     if (ms === undefined || ms === null) return '未上报';
-    
+
     const seconds = Math.floor(ms / 1000);
     const minutes = Math.floor(seconds / 60);
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
-    
+
     if (days > 0) return `${days}天 ${hours % 24}小时`;
     if (hours > 0) return `${hours}小时 ${minutes % 60}分钟`;
     if (minutes > 0) return `${minutes}分钟`;
@@ -501,7 +491,7 @@ function formatUptime(ms) {
 // 工具函数：格式化内存
 function formatMemory(bytes) {
     if (bytes === undefined || bytes === null) return '未上报';
-    
+
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';

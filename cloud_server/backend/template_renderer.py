@@ -1,0 +1,551 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+模板渲染引擎 - 将模板配置渲染为 EPD 六色图片数据
+
+支持模板：
+- weather:  天气（依赖 Open-Meteo API）
+- quote:    每日一言（依赖 yiyan.codeever.cn）
+- qrcode:   二维码（本地生成）
+- todo:     待办事项（占位）
+- calendar: 日历（本地日期）
+"""
+
+from __future__ import annotations
+
+import io
+import os
+import json
+import base64
+import urllib.parse
+from datetime import datetime
+from typing import Optional, Dict, Any
+
+import requests
+
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np
+
+from six_color_epd import process_e6_image, E6_IDX2RGB
+
+# ==================== 字体配置 ====================
+# 优先使用系统中文字体，保证中文显示
+def _get_font(size: int) -> ImageFont.FreeTypeFont:
+    """获取支持中文的字体"""
+    candidates = [
+        "C:/Windows/Fonts/simhei.ttf",     # 黑体
+        "C:/Windows/Fonts/simsun.ttc",     # 宋体
+        "C:/Windows/Fonts/msyh.ttc",       # 微软雅黑
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/System/Library/Fonts/PingFang.ttc",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def _get_font_bold(size: int) -> ImageFont.FreeTypeFont:
+    """获取粗体字体"""
+    candidates = [
+        "C:/Windows/Fonts/simhei.ttf",
+        "C:/Windows/Fonts/msyhbd.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return _get_font(size)
+
+
+# ==================== EPD 数据编码 ====================
+def _encode_epd_string(color_indices: np.ndarray) -> str:
+    """将颜色索引数组编码为 a~p 字符串（与前端一致：低4位在前，高4位在后）"""
+    height, width = color_indices.shape
+    packed_width = (width + 1) // 2
+    chars = []
+    for y in range(height):
+        for x in range(0, width, 2):
+            idx1 = int(color_indices[y, x]) & 0xF
+            idx2 = (int(color_indices[y, x + 1]) & 0xF) if x + 1 < width else 0x1
+            packed = (idx1 << 4) | idx2
+            # 与前端一致：低nibble先，高nibble后
+            chars.append(chr(97 + (packed & 0x0F)))
+            chars.append(chr(97 + ((packed >> 4) & 0x0F)))
+    return ''.join(chars)
+
+
+def _pil_to_epd_string(img: Image.Image, algorithm: str = 'floyd_steinberg') -> str:
+    """PIL Image -> EPD a~p 编码字符串"""
+    result = process_e6_image(img, target_size=(800, 480), algorithm=algorithm)
+    return _encode_epd_string(result['color_indices'])
+
+
+# ==================== 通用绘制工具 ====================
+def _create_base_canvas(bg_color: tuple = (255, 255, 255)) -> tuple[Image.Image, ImageDraw.ImageDraw]:
+    """创建 800x480 白色画布"""
+    img = Image.new('RGB', (800, 480), bg_color)
+    draw = ImageDraw.Draw(img)
+    return img, draw
+
+
+def _draw_text_centered(draw: ImageDraw.ImageDraw, text: str, x: int, y: int, font: ImageFont.FreeTypeFont,
+                        fill: tuple = (0, 0, 0), anchor: str = "mm") -> None:
+    """居中绘制文字（使用 anchor 模式，Pillow >= 8.0）"""
+    try:
+        draw.text((x, y), text, font=font, fill=fill, anchor=anchor)
+    except Exception:
+        # 旧版 Pillow 不支持 anchor
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        draw.text((x - tw // 2, y - th // 2), text, font=font, fill=fill)
+
+
+# ==================== 天气模板 ====================
+QWEATHER_KEY = os.environ.get('QWEATHER_KEY', '').strip()
+if not QWEATHER_KEY:
+    print('⚠️ 警告: 环境变量 QWEATHER_KEY 未设置，天气模板将无法获取数据。请在 .env 中配置。')
+
+
+def _fetch_weather(city: str) -> Optional[Dict[str, Any]]:
+    """通过和风天气(QWeather)获取天气数据（带重试，使用 requests）"""
+    import time
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    REQUEST_TIMEOUT = 5  # 单次请求超时5秒（和风天气国内通常<0.3s）
+
+    for attempt in range(2):  # 最多重试2次
+        try:
+            # 1. 城市搜索：城市名 -> 城市ID
+            geo_url = f"https://geoapi.qweather.com/v2/city/lookup?location={urllib.parse.quote(city)}&key={QWEATHER_KEY}"
+            resp = requests.get(geo_url, headers=headers, timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            geo_data = resp.json()
+
+            if geo_data.get('code') != '200':
+                print(f'⚠️ 城市搜索失败: {geo_data.get("code")}')
+                return None
+
+            locations = geo_data.get('location', [])
+            if not locations:
+                return None
+
+            city_id = locations[0]['id']
+            city_name = locations[0].get('name', city)
+
+            # 2. 实时天气
+            now_url = f"https://devapi.qweather.com/v7/weather/now?location={city_id}&key={QWEATHER_KEY}"
+            resp = requests.get(now_url, headers=headers, timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            now_data = resp.json()
+
+            if now_data.get('code') != '200':
+                print(f'⚠️ 实时天气失败: {now_data.get("code")}')
+                return None
+
+            now = now_data.get('now', {})
+
+            # 3. 3天预报（获取今日最高/最低温）
+            forecast_url = f"https://devapi.qweather.com/v7/weather/3d?location={city_id}&key={QWEATHER_KEY}"
+            resp = requests.get(forecast_url, headers=headers, timeout=REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            forecast_data = resp.json()
+
+            daily = forecast_data.get('daily', [])
+            today = daily[0] if daily else {}
+
+            return {
+                'city': city_name,
+                'temperature': now.get('temp'),
+                'weather_code': now.get('icon'),
+                'weatherText': now.get('text'),
+                'wind_speed': now.get('windScale'),
+                'humidity': now.get('humidity'),
+                'temp_max': today.get('tempMax'),
+                'temp_min': today.get('tempMin'),
+            }
+        except Exception as e:
+            print(f'⚠️ 获取天气失败 (attempt {attempt + 1}/2): {e}')
+            if attempt < 1:
+                time.sleep(0.5)  # 短暂等待后重试
+    return None
+
+
+def _weather_code_to_text(code: Optional[str]) -> str:
+    """和风天气直接返回中文天气文本，无需额外映射"""
+    return code or '未知'
+
+
+def render_weather(config: Dict[str, Any]) -> str:
+    """渲染天气模板，返回 EPD a~p 字符串"""
+    img = _render_weather_image(config)
+    return _pil_to_epd_string(img)
+
+
+# ==================== 每日一言模板 ====================
+def _fetch_quote() -> Optional[Dict[str, str]]:
+    """从 yiyan.codeever.cn 获取一言（带重试，使用 requests）"""
+    import time
+    url = 'https://yiyan.codeever.cn/api'
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    for attempt in range(3):
+        try:
+            resp = requests.get(url, headers=headers, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            # 接口返回格式: {"code": 200, "data": {"content": "...", "from": "..."}}
+            inner = data.get('data', {})
+            return {
+                'content': inner.get('content', inner.get('hitokoto', '')),
+                'origin': inner.get('origin', inner.get('from', '')),
+                'author': inner.get('author', ''),
+            }
+        except Exception as e:
+            print(f'⚠️ 获取一言失败 (attempt {attempt + 1}/3): {e}')
+            if attempt < 2:
+                time.sleep(1)
+    return None
+
+
+def render_quote(config: Dict[str, Any]) -> str:
+    """渲染每日一言模板，返回 EPD a~p 字符串"""
+    img = _render_quote_image(config)
+    return _pil_to_epd_string(img)
+
+
+# ==================== 二维码模板 ====================
+def render_qrcode(config: Dict[str, Any]) -> str:
+    """渲染二维码模板，返回 EPD a~p 字符串"""
+    img = _render_qrcode_image(config)
+    return _pil_to_epd_string(img)
+
+
+# ==================== 日历模板 ====================
+def render_calendar(config: Dict[str, Any]) -> str:
+    """渲染日历模板，返回 EPD a~p 字符串"""
+    img = _render_calendar_image(config)
+    return _pil_to_epd_string(img)
+
+
+# ==================== 代办事项模板（占位） ====================
+def render_todo(config: Dict[str, Any]) -> str:
+    """渲染代办事项模板（占位），返回 EPD a~p 字符串"""
+    img = _render_todo_image(config)
+    return _pil_to_epd_string(img)
+
+
+# ==================== 模板渲染（返回 PIL Image） ====================
+
+def _render_weather_image(config: Dict[str, Any]) -> Image.Image:
+    """渲染天气模板，返回 PIL Image"""
+    city = config.get('city', '')
+    if not city:
+        city = '北京'
+
+    weather = _fetch_weather(city)
+    img, draw = _create_base_canvas((255, 255, 255))
+
+    font_title = _get_font(36)
+    font_temp = _get_font_bold(120)
+    font_info = _get_font(32)
+    font_small = _get_font(24)
+
+    if weather:
+        date_str = datetime.now().strftime('%m月%d日')
+        _draw_text_centered(draw, f"{weather['city']}  {date_str}", 400, 50, font_title, (0, 0, 0))
+
+        temp = weather.get('temperature')
+        if temp is not None:
+            _draw_text_centered(draw, f"{int(temp)}°", 400, 200, font_temp, (0, 0, 255))
+
+        weather_text = weather.get('weatherText') or weather.get('weather_code') or '未知'
+        _draw_text_centered(draw, weather_text, 400, 310, font_info, (255, 0, 0))
+
+        info_parts = []
+        if weather.get('humidity') is not None:
+            info_parts.append(f"湿度 {weather['humidity']}%")
+        if weather.get('wind_speed') is not None:
+            info_parts.append(f"风速 {weather['wind_speed']}km/h")
+        if weather.get('temp_max') is not None and weather.get('temp_min') is not None:
+            info_parts.append(f"{int(weather['temp_min'])}°~{int(weather['temp_max'])}°")
+
+        if info_parts:
+            info_text = '  |  '.join(info_parts)
+            _draw_text_centered(draw, info_text, 400, 400, font_small, (0, 0, 0))
+    else:
+        _draw_text_centered(draw, f"{city}", 400, 150, font_title, (0, 0, 0))
+        _draw_text_centered(draw, "天气数据获取失败", 400, 260, font_info, (255, 0, 0))
+        _draw_text_centered(draw, "请检查城市名称", 400, 320, font_small, (0, 0, 0))
+
+    return img
+
+
+def _render_quote_image(config: Dict[str, Any]) -> Image.Image:
+    """渲染每日一言模板，返回 PIL Image"""
+    quote = _fetch_quote()
+    img, draw = _create_base_canvas((255, 255, 255))
+
+    font_content = _get_font(36)
+    font_source = _get_font(28)
+
+    if quote and quote.get('content'):
+        content = quote['content']
+        max_width = 720
+        lines = []
+        current_line = ''
+        for char in content:
+            test_line = current_line + char
+            bbox = draw.textbbox((0, 0), test_line, font=font_content)
+            if bbox[2] - bbox[0] > max_width and current_line:
+                lines.append(current_line)
+                current_line = char
+            else:
+                current_line = test_line
+        if current_line:
+            lines.append(current_line)
+
+        line_height = 50
+        total_height = len(lines) * line_height
+        start_y = (480 - total_height) // 2 - 30
+
+        for i, line in enumerate(lines):
+            _draw_text_centered(draw, line, 400, start_y + i * line_height, font_content, (0, 0, 0))
+
+        source_parts = []
+        if quote.get('author'):
+            source_parts.append(quote['author'])
+        if quote.get('origin'):
+            source_parts.append(f"《{quote['origin']}》")
+        if source_parts:
+            source_text = '  '.join(source_parts)
+            _draw_text_centered(draw, source_text, 400, 420, font_source, (0, 0, 0))
+    else:
+        fallback_quotes = [
+            "千里之行，始于足下。 —— 老子",
+            "学而不思则罔，思而不学则殆。 —— 孔子",
+            "天行健，君子以自强不息。 —— 周易",
+            "不积跬步，无以至千里。 —— 荀子",
+            "知者不惑，仁者不忧，勇者不惧。 —— 论语",
+        ]
+        import random
+        text = random.choice(fallback_quotes)
+        _draw_text_centered(draw, text, 400, 240, font_content, (0, 0, 0))
+
+    return img
+
+
+def _render_qrcode_image(config: Dict[str, Any]) -> Image.Image:
+    """渲染二维码模板，返回 PIL Image"""
+    content = config.get('content', '')
+    title = config.get('title', '')
+
+    img, draw = _create_base_canvas((255, 255, 255))
+
+    if content:
+        try:
+            import qrcode
+            qr = qrcode.QRCode(
+                version=None,
+                error_correction=qrcode.constants.ERROR_CORRECT_M,
+                box_size=10,
+                border=2,
+            )
+            qr.add_data(content)
+            qr.make(fit=True)
+            qr_img = qr.make_image(fill_color="black", back_color="white").convert('RGB')
+
+            qr_size = 320
+            qr_img = qr_img.resize((qr_size, qr_size), Image.LANCZOS)
+            x = (800 - qr_size) // 2
+            y = (480 - qr_size) // 2 - 30
+            img.paste(qr_img, (x, y))
+        except Exception as e:
+            print(f'⚠️ 生成二维码失败: {e}')
+            _draw_text_centered(draw, "二维码生成失败", 400, 240, _get_font(32), (255, 0, 0))
+    else:
+        _draw_text_centered(draw, "请在设置中配置二维码内容", 400, 240, _get_font(32), (0, 0, 0))
+
+    if title:
+        font_title = _get_font(36)
+        _draw_text_centered(draw, title, 400, 430, font_title, (0, 0, 0))
+
+    return img
+
+
+def _render_calendar_image(config: Dict[str, Any]) -> Image.Image:
+    """渲染日历模板，返回 PIL Image"""
+    img, draw = _create_base_canvas((255, 255, 255))
+
+    now = datetime.now()
+    year = now.year
+    month = now.month
+    day = now.day
+    weekday = now.weekday()
+    weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+
+    font_year = _get_font(36)
+    font_month = _get_font_bold(80)
+    font_day = _get_font_bold(200)
+    font_weekday = _get_font(48)
+
+    draw.text((60, 40), f"{year}年", font=font_year, fill=(0, 0, 0))
+    draw.text((60, 100), f"{month}月", font=font_month, fill=(0, 0, 0))
+
+    _draw_text_centered(draw, str(day), 500, 220, font_day, (0, 0, 255))
+    _draw_text_centered(draw, weekdays[weekday], 500, 380, font_weekday, (255, 0, 0))
+
+    return img
+
+
+def _render_todo_image(config: Dict[str, Any]) -> Image.Image:
+    """渲染代办事项模板（占位），返回 PIL Image"""
+    img, draw = _create_base_canvas((255, 255, 255))
+
+    font_title = _get_font_bold(48)
+    font_hint = _get_font(32)
+
+    _draw_text_centered(draw, "待办事项", 400, 180, font_title, (0, 0, 0))
+    _draw_text_centered(draw, "功能开发中...", 400, 280, font_hint, (0, 0, 0))
+
+    return img
+
+
+# 渲染器映射（返回 PIL Image 的版本）
+TEMPLATE_IMAGE_RENDERERS = {
+    'weather': _render_weather_image,
+    'quote': _render_quote_image,
+    'qrcode': _render_qrcode_image,
+    'calendar': _render_calendar_image,
+    'todo': _render_todo_image,
+}
+
+
+def render_template_image(template_id: str, config: Dict[str, Any]) -> Optional[Image.Image]:
+    """
+    渲染指定模板，返回 PIL Image 对象（800x480 RGB）
+
+    参数:
+        template_id: 模板ID
+        config: 模板配置数据
+
+    返回:
+        PIL.Image (800x480 RGB)，失败返回 None
+    """
+    template_id = str(template_id).strip().lower() if template_id else ''
+    renderer = TEMPLATE_IMAGE_RENDERERS.get(template_id)
+    if not renderer:
+        print(f'❌ 未知模板: {template_id}')
+        return None
+
+    try:
+        print(f'🎨 渲染模板图像: {template_id}, config={config}')
+        img = renderer(config)
+        if img:
+            # 确保尺寸正确
+            if img.size != (800, 480):
+                img = img.resize((800, 480), Image.LANCZOS)
+            print(f'✅ 模板图像渲染成功: {template_id}, size={img.size}')
+            return img
+        else:
+            print(f'❌ 模板图像渲染返回空: {template_id}')
+            return None
+    except Exception as e:
+        print(f'❌ 模板图像渲染异常: {template_id} -> {e}')
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+# ==================== 主渲染入口（向后兼容） ====================
+TEMPLATE_RENDERERS = {
+    'weather': render_weather,
+    'quote': render_quote,
+    'qrcode': render_qrcode,
+    'calendar': render_calendar,
+    'todo': render_todo,
+}
+
+
+def render_template(template_id: str, config: Dict[str, Any]) -> Optional[str]:
+    """
+    渲染指定模板，返回 EPD a~p 编码字符串
+
+    参数:
+        template_id: 模板ID
+        config: 模板配置数据
+
+    返回:
+        EPD 编码字符串 (384000 字符)，失败返回 None
+    """
+    template_id = str(template_id).strip().lower() if template_id else ''
+    renderer = TEMPLATE_RENDERERS.get(template_id)
+    if not renderer:
+        print(f'❌ 未知模板: {template_id}')
+        return None
+
+    try:
+        print(f'🎨 渲染模板: {template_id}, config={config}')
+        result = renderer(config)
+        if result and len(result) == 384000:
+            print(f'✅ 模板渲染成功: {template_id}, {len(result)} 字符')
+            return result
+        else:
+            print(f'❌ 模板渲染结果长度异常: {len(result) if result else 0}')
+            return None
+    except Exception as e:
+        print(f'❌ 模板渲染异常: {template_id} -> {e}')
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def _render_template_with_preview(template_id: str, config: Dict[str, Any]) -> dict:
+    """
+    渲染指定模板，一次性返回：原始图 + 抖动预览图 + 4bit数据 + EPD编码字符串
+
+    用于前端发布时，确保 mainCanvas 显示后端渲染的原始排版，
+    processedCanvas 显示 Floyd-Steinberg 抖动后的效果。
+
+    返回:
+        {
+            'originalImage': str (Base64 PNG, 原始渲染图),
+            'previewImage': str (Base64 PNG, 抖动后预览图),
+            'data4bit': str (Base64, 4bit打包数据),
+            'epdData': str (a~p 编码字符串, 384000字符)
+        }
+    """
+    # 1. 渲染原始 PIL Image（只渲染一次）
+    img = render_template_image(template_id, config)
+    if not img:
+        return {}
+
+    # 2. 原始图 → Base64（用于前端 mainCanvas 显示排版）
+    orig_buffer = io.BytesIO()
+    img.save(orig_buffer, format='PNG')
+    original_b64 = base64.b64encode(orig_buffer.getvalue()).decode('utf-8')
+
+    # 3. 原始图 → Floyd-Steinberg 抖动处理
+    result = process_e6_image(img, target_size=(800, 480), algorithm='floyd_steinberg')
+
+    # 抖动后预览图 → Base64
+    preview_buffer = io.BytesIO()
+    result['preview_image'].save(preview_buffer, format='PNG')
+    preview_b64 = base64.b64encode(preview_buffer.getvalue()).decode('utf-8')
+
+    # 4bit 数据 → Base64
+    data_4bit_b64 = base64.b64encode(result['data_4bit']).decode('utf-8')
+
+    # 4. 颜色索引 → EPD a~p 编码字符串（用于保存到文件供设备拉取）
+    epd_data = _encode_epd_string(result['color_indices'])
+
+    return {
+        'originalImage': original_b64,
+        'previewImage': preview_b64,
+        'data4bit': data_4bit_b64,
+        'epdData': epd_data,
+    }

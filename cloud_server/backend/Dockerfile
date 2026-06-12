@@ -10,7 +10,7 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
 
-COPY app.py config.py six_color_epd.py ./
+COPY app.py config.py six_color_epd.py template_renderer.py ./
 
 EXPOSE 5000
 

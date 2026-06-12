@@ -16,25 +16,25 @@ var currentPageId = null;
 var currentTemplateId = null;
 
 // 注意：以下变量在 app.js 中已定义，这里不再声明
-// currentMode, sourceImage, textItems, mixedTextItems, 
+// currentMode, sourceImage, textItems, mixedTextItems,
 // selectedTextId, selectedMixedTextId, imageScale, mixedImageScale,
 // cropX, cropY, mixedCropX, mixedCropY, processedImageData, redChannelData
 
 // ==================== 初始化 ====================
 document.addEventListener('DOMContentLoaded', async () => {
     console.log('[Editor] 开始初始化...');
-    
+
     try {
         // 从URL获取设备ID
         const params = new URLSearchParams(window.location.search);
         deviceId = params.get('deviceId') || '';
-        
+
         const deviceIdInput = document.getElementById('deviceId');
         if (deviceIdInput) deviceIdInput.value = deviceId;
-        
+
         const deviceNameDisplay = document.getElementById('deviceNameDisplay');
         const statusDot = document.getElementById('statusDot');
-        
+
         if (deviceId) {
             if (deviceNameDisplay) deviceNameDisplay.textContent = deviceId;
             if (statusDot) statusDot.classList.add('online');
@@ -42,7 +42,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (deviceNameDisplay) deviceNameDisplay.textContent = '未选择设备';
             if (statusDot) statusDot.classList.add('offline');
         }
-        
+
         // 初始化
         await loadTemplates();
         await loadPages();
@@ -50,7 +50,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         initProcessOptions();
         updateResolution();
         initCanvasEvents();  // 绑定画布事件
-        
+
         console.log('[Editor] 初始化完成');
         log('系统初始化完成');
     } catch (error) {
@@ -79,7 +79,7 @@ async function loadTemplates() {
 function renderTemplateGrid() {
     const grid = document.getElementById('templateGrid');
     if (!grid) return;
-    
+
     grid.innerHTML = templates.map(t => `
         <div class="template-card" onclick="selectTemplate('${t.templateId}')">
             <div class="icon">${t.icon}</div>
@@ -92,7 +92,7 @@ function renderTemplateGrid() {
 function renderModalTemplateGrid() {
     const grid = document.getElementById('modalTemplateGrid');
     if (!grid) return;
-    
+
     grid.innerHTML = templates.map(t => `
         <div class="template-card" onclick="createPageFromTemplate('${t.templateId}')">
             <div class="icon">${t.icon}</div>
@@ -116,30 +116,76 @@ function selectTemplate(templateId) {
 }
 
 function applyTemplate(template) {
-    // 统一用 renderCanvas 渲染，避免“加载模板页面后白屏/不显示”
+    // 统一用 renderCanvas 渲染，避免"加载模板页面后白屏/不显示"
     currentMode = 'template';
     currentTemplateId = template.templateId;
     renderCanvas();
+    updateTemplateConfigVisibility(template.templateId);
     log(`已应用模板: ${template.name}`, 'success');
 }
+
+function getCurrentTemplateConfig() {
+    const templateId = currentTemplateId;
+    if (!templateId) return {};
+    if (templateId === 'weather') {
+        return {
+            city: document.getElementById('weatherCityInput')?.value?.trim() || '',
+            sleepIntervalSeconds: parseInt(document.getElementById('weatherWakeInterval')?.value || '21600', 10),
+        };
+    }
+    if (templateId === 'qrcode') {
+        return {
+            content: document.getElementById('qrcodeContentInput')?.value?.trim() || '',
+            title: document.getElementById('qrcodeTitleInput')?.value?.trim() || '',
+            sleepIntervalSeconds: parseInt(document.getElementById('qrcodeWakeInterval')?.value || '43200', 10),
+        };
+    }
+    if (templateId === 'quote') {
+        return {
+            sleepIntervalSeconds: parseInt(document.getElementById('quoteWakeInterval')?.value || '86400', 10),
+        };
+    }
+    // todo 等模板暂无配置
+    return {};
+}
+
+function updateTemplateConfigVisibility(templateId) {
+    // 显示/隐藏各模板的配置面板
+    const configs = {
+        'weather': 'weatherTemplateConfig',
+        'quote': 'quoteTemplateConfig',
+        'qrcode': 'qrcodeTemplateConfig',
+    };
+    for (const [id, elId] of Object.entries(configs)) {
+        const el = document.getElementById(elId);
+        if (el) el.classList.toggle('hidden', id !== templateId);
+    }
+}
+
+// 模板数据缓存（天气、名言等）
+var templateWeatherData = null;
+var templateQuoteData = null;
+var _weatherCacheCity = '';
+var _weatherCacheTime = 0;
+var _WEATHER_CACHE_TTL = 5 * 60 * 1000; // 5分钟缓存
 
 function renderClockTemplate(ctx, width, height) {
     const now = new Date();
     const timeStr = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     const dateStr = now.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' });
     const weekDay = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][now.getDay()];
-    
+
     // 时间
     ctx.font = 'bold 120px Arial';
     ctx.fillStyle = 'black';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(timeStr, width / 2, height / 2 - 50);
-    
+
     // 日期
     ctx.font = '36px Arial';
     ctx.fillText(dateStr, width / 2, height / 2 + 60);
-    
+
     // 星期
     ctx.font = '28px Arial';
     ctx.fillStyle = 'red';
@@ -151,37 +197,37 @@ function renderCalendarTemplate(ctx, width, height) {
     const year = now.getFullYear();
     const month = now.getMonth();
     const day = now.getDate();
-    
+
     // 标题
     ctx.font = 'bold 48px Arial';
     ctx.fillStyle = 'black';
     ctx.textAlign = 'center';
     ctx.fillText(`${year}年${month + 1}月`, width / 2, 60);
-    
+
     // 星期标题
     const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
     ctx.font = '24px Arial';
     const cellWidth = (width - 80) / 7;
     const startX = 40;
-    
+
     weekDays.forEach((d, i) => {
         ctx.fillStyle = (i === 0 || i === 6) ? 'red' : 'black';
         ctx.fillText(d, startX + cellWidth * i + cellWidth / 2, 120);
     });
-    
+
     // 日期网格
     const firstDay = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
-    
+
     ctx.font = '28px Arial';
     let row = 0;
     for (let d = 1; d <= daysInMonth; d++) {
         const col = (firstDay + d - 1) % 7;
         if (d > 1 && col === 0) row++;
-        
+
         const x = startX + cellWidth * col + cellWidth / 2;
         const y = 170 + row * 50;
-        
+
         if (d === day) {
             ctx.beginPath();
             ctx.arc(x, y, 20, 0, Math.PI * 2);
@@ -196,46 +242,236 @@ function renderCalendarTemplate(ctx, width, height) {
 }
 
 function renderQuoteTemplate(ctx, width, height) {
-    const quotes = [
-        { text: '千里之行，始于足下', author: '老子' },
-        { text: '学而不思则罔，思而不学则殆', author: '孔子' },
-        { text: '天行健，君子以自强不息', author: '周易' },
-        { text: '不积跬步，无以至千里', author: '荀子' },
-        { text: '知之者不如好之者，好之者不如乐之者', author: '孔子' }
-    ];
-    
-    const quote = quotes[Math.floor(Math.random() * quotes.length)];
-    
-    // 引号装饰
+    // 优先使用从 API 获取的数据
+    const quote = templateQuoteData;
+
+    if (!quote || !quote.content) {
+        // 回退：显示提示
+        ctx.font = '32px Arial';
+        ctx.fillStyle = 'black';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('点击「获取一言并预览」加载内容', width / 2, height / 2);
+        return;
+    }
+
+    // 清空画布
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, width, height);
+
+    // 引号装饰（黄色，与白色背景形成对比）
     ctx.font = '120px Georgia';
-    ctx.fillStyle = '#ddd';
+    ctx.fillStyle = 'yellow';
     ctx.textAlign = 'left';
-    ctx.fillText('"', 60, 150);
-    
-    // 引文
-    ctx.font = '48px Arial';
+    ctx.fillText('"', 60, 130);
+
+    // 内容自动换行
+    const content = quote.content;
+    const maxWidth = width - 120;
+    const lineHeight = 56;
+    ctx.font = '36px Arial';
     ctx.fillStyle = 'black';
     ctx.textAlign = 'center';
-    ctx.fillText(quote.text, width / 2, height / 2);
-    
-    // 作者
-    ctx.font = '28px Arial';
-    ctx.fillStyle = 'red';
-    ctx.fillText(`—— ${quote.author}`, width / 2, height / 2 + 80);
+    ctx.textBaseline = 'middle';
+
+    const lines = [];
+    let currentLine = '';
+    for (let i = 0; i < content.length; i++) {
+        const testLine = currentLine + content[i];
+        const metrics = ctx.measureText(testLine);
+        if (metrics.width > maxWidth && currentLine) {
+            lines.push(currentLine);
+            currentLine = content[i];
+        } else {
+            currentLine = testLine;
+        }
+    }
+    if (currentLine) lines.push(currentLine);
+
+    const totalHeight = lines.length * lineHeight;
+    const startY = (height - totalHeight) / 2;
+
+    lines.forEach((line, i) => {
+        ctx.fillText(line, width / 2, startY + i * lineHeight + lineHeight / 2);
+    });
+
+    // 来源
+    const sourceParts = [];
+    if (quote.author) sourceParts.push(quote.author);
+    if (quote.origin) sourceParts.push(`《${quote.origin}》`);
+    if (sourceParts.length > 0) {
+        ctx.font = '26px Arial';
+        ctx.fillStyle = 'black';
+        ctx.fillText(sourceParts.join('  '), width / 2, startY + totalHeight + 40);
+    }
 }
 
 function renderQRCodeTemplate(ctx, width, height) {
+    const content = document.getElementById('qrcodeContentInput')?.value?.trim() || '';
+    const title = document.getElementById('qrcodeTitleInput')?.value?.trim() || '';
+
+    if (!content) {
+        ctx.font = '32px Arial';
+        ctx.fillStyle = 'black';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('请在右侧配置二维码内容', width / 2, height / 2);
+        return;
+    }
+
+    // 使用 qrcode-generator 库生成
+    try {
+        const typeNumber = 0;
+        const errorCorrectionLevel = 'M';
+        const qr = qrcode(typeNumber, errorCorrectionLevel);
+        qr.addData(content);
+        qr.make();
+
+        const cellSize = 8;
+        const qrSize = qr.getModuleCount() * cellSize;
+        const x = (width - qrSize) / 2;
+        const y = title ? (height - qrSize) / 2 - 20 : (height - qrSize) / 2;
+
+        for (let r = 0; r < qr.getModuleCount(); r++) {
+            for (let c = 0; c < qr.getModuleCount(); c++) {
+                ctx.fillStyle = qr.isDark(r, c) ? 'black' : 'white';
+                ctx.fillRect(x + c * cellSize, y + r * cellSize, cellSize, cellSize);
+            }
+        }
+
+        if (title) {
+            ctx.font = '32px Arial';
+            ctx.fillStyle = 'black';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillText(title, width / 2, y + qrSize + 20);
+        }
+    } catch (e) {
+        console.error('QR generation error:', e);
+        ctx.font = '32px Arial';
+        ctx.fillStyle = 'red';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('二维码生成失败', width / 2, height / 2);
+    }
+}
+
+function renderWeatherTemplate(ctx, width, height) {
+    const data = templateWeatherData;
+
+    if (!data) {
+        ctx.font = '32px Arial';
+        ctx.fillStyle = 'black';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('点击「获取天气并预览」加载内容', width / 2, height / 2);
+        return;
+    }
+
+    // 背景
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, width, height);
+
+    // 城市 + 日期
+    const dateStr = new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
     ctx.font = '36px Arial';
-    ctx.fillStyle = '#888';
+    ctx.fillStyle = 'black';
     ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('请在设置中配置二维码内容', width / 2, height / 2);
+    ctx.textBaseline = 'top';
+    ctx.fillText(`${data.city || ''}  ${dateStr}`, width / 2, 40);
+
+    // 温度（大号）
+    if (data.temperature !== undefined && data.temperature !== null) {
+        ctx.font = 'bold 120px Arial';
+        ctx.fillStyle = 'blue';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${Math.round(data.temperature)}°`, width / 2, height / 2 - 30);
+    }
+
+    // 天气状况
+    ctx.font = '40px Arial';
+    ctx.fillStyle = 'red';
+    ctx.fillText(data.weatherText || '', width / 2, height / 2 + 80);
+
+    // 底部信息
+    const infoParts = [];
+    if (data.humidity !== undefined) infoParts.push(`湿度 ${data.humidity}%`);
+    if (data.wind_speed !== undefined) infoParts.push(`风速 ${data.wind_speed}km/h`);
+    if (data.temp_min !== undefined && data.temp_max !== undefined) {
+        infoParts.push(`${Math.round(data.temp_min)}°~${Math.round(data.temp_max)}°`);
+    }
+
+    if (infoParts.length > 0) {
+        ctx.font = '24px Arial';
+        ctx.fillStyle = 'black';
+        ctx.fillText(infoParts.join('  |  '), width / 2, height - 60);
+    }
+}
+
+// ==================== 模板数据获取与预览 ====================
+
+async function fetchWeatherAndPreview() {
+    const city = document.getElementById('weatherCityInput')?.value?.trim();
+    if (!city) {
+        log('请输入城市名称', 'error');
+        return;
+    }
+
+    // 5分钟内同一城市不重复请求
+    const now = Date.now();
+    if (city === _weatherCacheCity && templateWeatherData && (now - _weatherCacheTime) < _WEATHER_CACHE_TTL) {
+        log('天气数据来自缓存，5分钟内有效', 'info');
+        renderCanvas();
+        return;
+    }
+
+    log('正在获取天气数据...');
+    try {
+        const resp = await fetch(`${API_BASE}/api/weather?city=${encodeURIComponent(city)}`);
+        const result = await resp.json();
+        if (result.success && result.data) {
+            templateWeatherData = result.data;
+            _weatherCacheCity = city;
+            _weatherCacheTime = Date.now();
+            // 后端已返回 weatherText（和风天气中文文本），无需前端映射
+            renderCanvas();
+            log(`天气已更新: ${result.data.city} ${Math.round(result.data.temperature)}°`, 'success');
+        } else {
+            log('获取天气失败', 'error');
+        }
+    } catch (e) {
+        console.error(e);
+        log('获取天气出错，请检查网络', 'error');
+    }
+}
+
+async function fetchQuoteAndPreview() {
+    log('正在获取每日一言...');
+    try {
+        const resp = await fetch(`${API_BASE}/api/quote`);
+        const result = await resp.json();
+        if (result.success && result.data) {
+            templateQuoteData = result.data;
+            renderCanvas();
+            log('每日一言已更新', 'success');
+        } else {
+            log('获取一言失败', 'error');
+        }
+    } catch (e) {
+        console.error(e);
+        log('获取一言出错', 'error');
+    }
+}
+
+function renderQRCodePreview() {
+    renderCanvas();
+    log('二维码已更新', 'success');
 }
 
 // ==================== 页面管理 ====================
 async function loadPages() {
     if (!deviceId) return;
-    
+
     try {
         // 限制列表数量，避免历史数据过多时卡顿
         const response = await fetch(`${API_BASE}/api/pages/list/${deviceId}?limit=200`, {
@@ -254,7 +490,7 @@ async function loadPages() {
 function renderPageList() {
     const list = document.getElementById('pageList');
     if (!list) return;
-    
+
     if (pages.length === 0) {
         list.innerHTML = `
             <div class="empty-state" style="text-align: center; padding: 40px 20px; color: var(--text-light);">
@@ -265,13 +501,13 @@ function renderPageList() {
         `;
         return;
     }
-    
+
     list.innerHTML = pages.map(page => `
-        <div class="page-item ${page.pageId === currentPageId ? 'active' : ''}" 
+        <div class="page-item ${page.pageId === currentPageId ? 'active' : ''}"
              onclick="selectPage('${page.pageId}')" data-page-id="${page.pageId}">
             <div class="page-thumb">
-                ${page.thumbnail ? 
-                    `<img src="${page.thumbnail}" alt="">` : 
+                ${page.thumbnail ?
+                    `<img src="${page.thumbnail}" alt="">` :
                     `<span class="icon">${getPageIcon(page.type)}</span>`
                 }
             </div>
@@ -329,7 +565,7 @@ async function selectPage(pageId) {
 function loadPageToCanvas(page) {
     // 根据页面类型加载到画布
     const data = page.data || {};
-    
+
     // 切换到对应模式
     if (page.type && page.type !== currentMode) {
         // app.js 的 switchMode 仅支持 image/text/mixed；模板模式在 editor.js 内渲染
@@ -339,7 +575,7 @@ function loadPageToCanvas(page) {
             switchMode(page.type);
         }
     }
-    
+
     // 模板页面：根据 data.template 渲染（否则会被 renderCanvas 清空导致白屏）
     if ((page.type === 'template' || currentMode === 'template') && data.template) {
         const template = getLoadedTemplate(data.template);
@@ -373,14 +609,14 @@ function loadPageToCanvas(page) {
         };
         img.src = data.imageData;
     }
-    
+
     // 加载文字数据
     if (data.textItems) {
         textItems = data.textItems;
     } else {
         textItems = [];
     }
-    
+
     if (data.mixedTextItems) {
         mixedTextItems = data.mixedTextItems;
     } else {
@@ -396,11 +632,11 @@ async function savePage() {
         log('请先选择设备', 'error');
         return;
     }
-    
+
     // 获取画布缩略图和完整画布数据
     const canvas = document.getElementById('mainCanvas');
     const thumbnail = canvas.toDataURL('image/jpeg', 0.5);
-    
+
     // 收集页面数据
     // - 非模板：保存 imageData（base64）+ 文字叠加
     // - 模板：只保存 templateId（避免大 base64 导致“保存很慢/请求很大”）
@@ -408,7 +644,8 @@ async function savePage() {
     if (currentMode === 'template') {
         pageData = {
             mode: currentMode,
-            template: currentTemplateId || null
+            template: currentTemplateId || null,
+            templateConfig: getCurrentTemplateConfig()
         };
     } else {
         // PNG base64 体积很大（800x480也可能上 MB），会导致“保存半天/加载很慢”
@@ -421,13 +658,13 @@ async function savePage() {
             mixedTextItems: mixedTextItems || []
         };
     }
-    
-    const pageName = currentPageId ? 
+
+    const pageName = currentPageId ?
         (pages.find(p => p.pageId === currentPageId)?.name || '未命名页面') :
         prompt('请输入页面名称:', '未命名页面');
-    
+
     if (!pageName) return;
-    
+
     try {
         log('正在保存页面...', 'info');
         const response = await fetch(`${API_BASE}/api/pages/save`, {
@@ -442,7 +679,7 @@ async function savePage() {
                 thumbnail
             })
         });
-        
+
         const result = await response.json();
         if (result.success) {
             currentPageId = result.pageId;
@@ -458,7 +695,7 @@ async function savePage() {
 
 async function deletePage(pageId) {
     if (!confirm('确定要删除这个页面吗？')) return;
-    
+
     try {
         // 先本地移除，提升交互体验（避免必须刷新才消失）
         pages = (pages || []).filter(p => p.pageId !== pageId);
@@ -469,7 +706,7 @@ async function deletePage(pageId) {
             method: 'DELETE',
             headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
         });
-        
+
         const result = await response.json();
         if (result.success) {
             await loadPages();
@@ -489,7 +726,7 @@ async function deletePage(pageId) {
 async function duplicatePage(pageId) {
     const page = pages.find(p => p.pageId === pageId);
     if (!page) return;
-    
+
     try {
         // 列表接口已做轻量化（不再返回 page.data），复制前先拉取完整页面
         const detailResp = await fetch(`${API_BASE}/api/pages/${pageId}`, {
@@ -513,7 +750,7 @@ async function duplicatePage(pageId) {
                 thumbnail: src.thumbnail || page.thumbnail || ''
             })
         });
-        
+
         const result = await response.json();
         if (result.success) {
             await loadPages();
@@ -542,21 +779,21 @@ async function createPageFromTemplate(templateId) {
         return;
     }
     const pageName = document.getElementById('newPageName').value.trim() || template.name;
-    
+
     hideNewPageModal();
-    
+
     // 创建新页面
     currentPageId = null;
-    
+
     // 切换到对应模式
     switchMode('template');
     applyTemplate(template);
-    
+
     // 自动保存
     try {
         const canvas = document.getElementById('mainCanvas');
         const thumbnail = canvas.toDataURL('image/jpeg', 0.5);
-        
+
         const response = await fetch(`${API_BASE}/api/pages/save`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...(typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}) },
@@ -568,7 +805,7 @@ async function createPageFromTemplate(templateId) {
                 thumbnail
             })
         });
-        
+
         const result = await response.json();
         if (result.success) {
             currentPageId = result.pageId;
@@ -592,7 +829,7 @@ function hidePageListModal() {
 
 async function loadPageLists() {
     if (!deviceId) return;
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/page-lists/list/${deviceId}`, {
             headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
@@ -610,7 +847,7 @@ async function loadPageLists() {
 function renderPageListsModal() {
     const container = document.getElementById('pageListsContainer');
     const allPagesContainer = document.getElementById('allPagesContainer');
-    
+
     if (pageLists.length === 0) {
         container.innerHTML = `
             <div style="padding: 30px; text-align: center; color: var(--text-light);">
@@ -619,7 +856,7 @@ function renderPageListsModal() {
         `;
     } else {
         container.innerHTML = pageLists.map(pl => `
-            <div style="padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer; 
+            <div style="padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer;
                         ${pl.isActive ? 'background: #ebf4ff;' : ''}"
                  onclick="selectPageList('${pl.listId}')">
                 <div style="display: flex; align-items: center; gap: 10px;">
@@ -633,14 +870,14 @@ function renderPageListsModal() {
             </div>
         `).join('');
     }
-    
+
     // 所有页面
     allPagesContainer.innerHTML = pages.map(page => `
         <div style="padding: 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center;">
             <span style="margin-right: 10px;">${getPageIcon(page.type)}</span>
             <span style="flex: 1;">${page.name}</span>
-            <button onclick="addPageToList('${page.pageId}')" 
-                    style="background: var(--primary); color: white; border: none; 
+            <button onclick="addPageToList('${page.pageId}')"
+                    style="background: var(--primary); color: white; border: none;
                            padding: 4px 10px; border-radius: 4px; cursor: pointer;">+</button>
         </div>
     `).join('') || '<div style="padding: 30px; text-align: center; color: var(--text-light);">暂无页面</div>';
@@ -649,7 +886,7 @@ function renderPageListsModal() {
 async function createPageList() {
     const name = prompt('请输入页面列表名称:', '新页面列表');
     if (!name) return;
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/page-lists/save`, {
             method: 'POST',
@@ -662,7 +899,7 @@ async function createPageList() {
                 isActive: pageLists.length === 0
             })
         });
-        
+
         const result = await response.json();
         if (result.success) {
             await loadPageLists();
@@ -679,9 +916,9 @@ async function deployToDevice() {
         log('请先选择设备', 'error');
         return;
     }
-    
+
     log('开始部署到设备...');
-    
+
     // 处理并上传当前页面
     await processImage();
     await uploadToDevice();
@@ -692,7 +929,7 @@ function switchPanel(panelId) {
     document.querySelectorAll('.panel-tab').forEach(tab => {
         tab.classList.toggle('active', tab.dataset.panel === panelId);
     });
-    
+
     document.getElementById('editPanel').classList.toggle('hidden', panelId !== 'edit');
     document.getElementById('processPanel').classList.toggle('hidden', panelId !== 'process');
 }
@@ -700,30 +937,30 @@ function switchPanel(panelId) {
 // ==================== 模式切换 ====================
 function switchMode(mode) {
     currentMode = mode;
-    
+
     // 更新按钮状态
     document.querySelectorAll('.mode-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.mode === mode);
     });
-    
+
     // 显示对应控件
     const imageControls = document.getElementById('imageModeControls');
     const textControls = document.getElementById('textModeControls');
     const mixedControls = document.getElementById('mixedModeControls');
     const templateControls = document.getElementById('templateModeControls');
-    
+
     if (imageControls) imageControls.classList.toggle('hidden', mode !== 'image');
     if (textControls) textControls.classList.toggle('hidden', mode !== 'text');
     if (mixedControls) mixedControls.classList.toggle('hidden', mode !== 'mixed');
     if (templateControls) templateControls.classList.toggle('hidden', mode !== 'template');
-    
+
     // 初始化画布
     if (mode === 'text') {
         if (typeof initTextCanvas === 'function') initTextCanvas();
     } else if (mode === 'mixed') {
         if (typeof initMixedCanvas === 'function') initMixedCanvas();
     }
-    
+
     // 确保画布样式在所有模式下一致
     const canvas = document.getElementById('mainCanvas');
     if (canvas) {
@@ -732,7 +969,7 @@ function switchMode(mode) {
         canvas.style.width = 'auto';
         canvas.style.aspectRatio = '800 / 480';
     }
-    
+
     renderCanvas();
     log(`切换到${mode === 'image' ? '图片' : mode === 'text' ? '文字' : mode === 'mixed' ? '图文' : '模板'}模式`);
 }
@@ -742,11 +979,11 @@ function initDropZones() {
     // 图片模式拖拽区
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
-    
+
     if (dropZone && fileInput) {
         // 点击选择文件
         dropZone.onclick = () => fileInput.click();
-        
+
         // 拖拽事件
         dropZone.ondragover = (e) => {
             e.preventDefault();
@@ -760,7 +997,7 @@ function initDropZones() {
                 handleImageFile(e.dataTransfer.files[0]);
             }
         };
-        
+
         // 文件选择
         fileInput.onchange = (e) => {
             if (e.target.files.length > 0) {
@@ -768,14 +1005,14 @@ function initDropZones() {
             }
         };
     }
-    
+
     // 混合模式拖拽区
     const mixedDropZone = document.getElementById('mixedDropZone');
     const mixedFileInput = document.getElementById('mixedFileInput');
-    
+
     if (mixedDropZone && mixedFileInput) {
         mixedDropZone.onclick = () => mixedFileInput.click();
-        
+
         mixedDropZone.ondragover = (e) => {
             e.preventDefault();
             mixedDropZone.classList.add('dragover');
@@ -788,7 +1025,7 @@ function initDropZones() {
                 handleMixedFile(e.dataTransfer.files[0]);
             }
         };
-        
+
         mixedFileInput.onchange = (e) => {
             if (e.target.files.length > 0) {
                 handleMixedFile(e.target.files[0]);
@@ -803,22 +1040,22 @@ function handleImageFile(file) {
         log('请选择图片文件', 'error');
         return;
     }
-    
+
     log(`加载图片: ${file.name}`);
-    
+
     const reader = new FileReader();
     reader.onload = (e) => {
         const img = new Image();
         img.onload = () => {
             sourceImage = img;
-            
+
             // 新版界面：自动适应屏幕
             if (typeof fitToScreen === 'function') {
                 fitToScreen();
             } else {
                 renderCanvas();
             }
-            
+
             log(`图片加载成功: ${img.width}×${img.height}`, 'success');
         };
         img.src = e.target.result;
@@ -831,7 +1068,7 @@ function handleMixedFile(file) {
         log('请选择图片文件', 'error');
         return;
     }
-    
+
     const reader = new FileReader();
     reader.onload = (e) => {
         const img = new Image();
@@ -861,35 +1098,35 @@ function initProcessOptions() {
 function updateResolution() {
     const epdTypeEl = document.getElementById('epdType');
     if (!epdTypeEl) return;
-    
+
     const epdType = parseInt(epdTypeEl.value);
     // 固定为7.3寸E6：800×480
     const [width, height] = [800, 480];
-    
+
     const widthEl = document.getElementById('width');
     const heightEl = document.getElementById('height');
     if (widthEl) widthEl.value = width;
     if (heightEl) heightEl.value = height;
-    
+
     // 新版UI元素
     const resDisplay = document.getElementById('resolutionDisplay');
     const canvasInfo = document.getElementById('canvasInfo');
     if (resDisplay) resDisplay.textContent = `${width}×${height}`;
     if (canvasInfo) canvasInfo.textContent = `画布: ${width}×${height}`;
-    
+
     // 更新画布大小
     const mainCanvas = document.getElementById('mainCanvas');
     if (mainCanvas) {
         mainCanvas.width = width;
         mainCanvas.height = height;
     }
-    
+
     const processedCanvas = document.getElementById('processedCanvas');
     if (processedCanvas) {
         processedCanvas.width = width;
         processedCanvas.height = height;
     }
-    
+
     renderCanvas();
     log(`分辨率已设置为: ${width}×${height}`);
 }
@@ -933,28 +1170,28 @@ function fitToScreen() {
         log('请先选择图片', 'error');
         return;
     }
-    
+
     const width = parseInt(document.getElementById('width').value);
     const height = parseInt(document.getElementById('height').value);
-    
+
     // 计算缩放比例
     const scaleX = width / sourceImage.width;
     const scaleY = height / sourceImage.height;
     imageScale = Math.max(scaleX, scaleY);
-    
+
     // 更新UI
     const sliderValue = Math.round(imageScale * 100);
     const slider = document.getElementById('scaleSlider');
     const input = document.getElementById('scaleInput');
     if (slider) slider.value = Math.min(300, Math.max(10, sliderValue));
     if (input) input.value = sliderValue;
-    
+
     // 居中
     const srcWidth = width / imageScale;
     const srcHeight = height / imageScale;
     cropX = Math.max(0, (sourceImage.width - srcWidth) / 2);
     cropY = Math.max(0, (sourceImage.height - srcHeight) / 2);
-    
+
     renderCanvas();
     log(`已适应屏幕，缩放: ${sliderValue}%`, 'success');
 }
@@ -964,25 +1201,25 @@ function fitMixedToScreen() {
         log('请先选择图片', 'error');
         return;
     }
-    
+
     const width = parseInt(document.getElementById('width').value);
     const height = parseInt(document.getElementById('height').value);
-    
+
     const scaleX = width / sourceImage.width;
     const scaleY = height / sourceImage.height;
     mixedImageScale = Math.max(scaleX, scaleY);
-    
+
     const sliderValue = Math.round(mixedImageScale * 100);
     const slider = document.getElementById('mixedScaleSlider');
     const input = document.getElementById('mixedScaleInput');
     if (slider) slider.value = Math.min(300, Math.max(10, sliderValue));
     if (input) input.value = sliderValue;
-    
+
     const srcWidth = width / mixedImageScale;
     const srcHeight = height / mixedImageScale;
     mixedCropX = Math.max(0, (sourceImage.width - srcWidth) / 2);
     mixedCropY = Math.max(0, (sourceImage.height - srcHeight) / 2);
-    
+
     renderCanvas();
     log(`已适应屏幕，缩放: ${sliderValue}%`, 'success');
 }
@@ -991,12 +1228,12 @@ function resetCrop() {
     imageScale = 1;
     cropX = 0;
     cropY = 0;
-    
+
     const slider = document.getElementById('scaleSlider');
     const input = document.getElementById('scaleInput');
     if (slider) slider.value = 100;
     if (input) input.value = 100;
-    
+
     renderCanvas();
     log('已重置裁剪');
 }
@@ -1017,7 +1254,7 @@ function initCanvasEvents() {
         console.warn('[Editor] mainCanvas not found');
         return;
     }
-    
+
     // 获取画布坐标的辅助函数
     function getCanvasCoords(e) {
         const rect = canvas.getBoundingClientRect();
@@ -1028,7 +1265,7 @@ function initCanvasEvents() {
             y: (e.clientY - rect.top) * scaleY
         };
     }
-    
+
     // 检测点击的文字项
     function findClickedTextItem(x, y, items, selectedIdVar) {
         const ctx = canvas.getContext('2d');
@@ -1036,12 +1273,12 @@ function initCanvasEvents() {
             const item = items[i];
             ctx.font = `${item.size}px Arial, sans-serif`;
             const metrics = ctx.measureText(item.text);
-            
+
             // 改进检测区域：文字的实际渲染区域
             const textWidth = metrics.width;
             const textHeight = item.size;
             const padding = 5; // 增加点击区域
-            
+
             if (x >= item.x - padding && x <= item.x + textWidth + padding &&
                 y >= item.y - padding && y <= item.y + textHeight + padding) {
                 return item;
@@ -1049,19 +1286,19 @@ function initCanvasEvents() {
         }
         return null;
     }
-    
+
     canvas.onmousedown = function(e) {
         e.preventDefault();
         e.stopPropagation();
-        
+
         const coords = getCanvasCoords(e);
         const x = coords.x;
         const y = coords.y;
-        
+
         if (currentMode === 'text') {
             // 文字模式：检查点击了哪个文字
             const clickedItem = findClickedTextItem(x, y, textItems);
-            
+
             if (clickedItem) {
                 selectedTextId = clickedItem.id;
                 canvasDragState.isDragging = true;
@@ -1076,11 +1313,11 @@ function initCanvasEvents() {
                 renderCanvas();
                 if (typeof updateTextItemsList === 'function') updateTextItemsList();
             }
-            
+
         } else if (currentMode === 'mixed') {
             // 图文模式：检查点击了哪个文字
             const clickedItem = findClickedTextItem(x, y, mixedTextItems);
-            
+
             if (clickedItem) {
                 selectedMixedTextId = clickedItem.id;
                 canvasDragState.isDragging = true;
@@ -1112,7 +1349,7 @@ function initCanvasEvents() {
                 renderCanvas();
                 if (typeof updateMixedTextItemsList === 'function') updateMixedTextItemsList();
             }
-            
+
         } else if (currentMode === 'image' && sourceImage) {
             // 图片模式：拖动图片
             canvasDragState.isDragging = true;
@@ -1120,15 +1357,15 @@ function initCanvasEvents() {
             canvasDragState.dragStartY = y;
         }
     };
-    
+
     canvas.onmousemove = function(e) {
         if (!canvasDragState.isDragging) return;
         e.preventDefault();
-        
+
         const coords = getCanvasCoords(e);
         const x = coords.x;
         const y = coords.y;
-        
+
         if (currentMode === 'text' && selectedTextId) {
             const item = textItems.find(t => t.id === selectedTextId);
             if (item) {
@@ -1151,11 +1388,11 @@ function initCanvasEvents() {
                 }
             } else if (sourceImage) {
                 // 拖动图片
-                const scale = (typeof window.mixedImageScale !== 'undefined' && window.mixedImageScale > 0) ? window.mixedImageScale : 
+                const scale = (typeof window.mixedImageScale !== 'undefined' && window.mixedImageScale > 0) ? window.mixedImageScale :
                               (typeof mixedImageScale !== 'undefined' && mixedImageScale > 0) ? mixedImageScale : 1;
                 const dx = (x - canvasDragState.dragStartX) / scale;
                 const dy = (y - canvasDragState.dragStartY) / scale;
-                
+
                 // 使用全局变量或局部变量
                 if (typeof window.mixedCropX !== 'undefined') {
                     window.mixedCropX = Math.max(0, Math.min(sourceImage.width - canvas.width / scale, window.mixedCropX - dx));
@@ -1164,7 +1401,7 @@ function initCanvasEvents() {
                     mixedCropX = Math.max(0, Math.min(sourceImage.width - canvas.width / scale, mixedCropX - dx));
                     mixedCropY = Math.max(0, Math.min(sourceImage.height - canvas.height / scale, mixedCropY - dy));
                 }
-                
+
                 canvasDragState.dragStartX = x;
                 canvasDragState.dragStartY = y;
                 renderCanvas();
@@ -1180,32 +1417,32 @@ function initCanvasEvents() {
             renderCanvas();
         }
     };
-    
+
     canvas.onmouseup = function(e) {
         e.preventDefault();
         canvasDragState.isDragging = false;
     };
-    
+
     canvas.onmouseleave = function(e) {
         // 不在这里停止拖动，允许鼠标移出画布后继续拖动
     };
-    
+
     // 全局鼠标事件，确保即使鼠标移出画布也能继续拖动
     document.addEventListener('mousemove', function(e) {
         if (!canvasDragState.isDragging) return;
-        
+
         const canvas = document.getElementById('mainCanvas');
         if (!canvas) return;
-        
+
         const rect = canvas.getBoundingClientRect();
         const scaleX = canvas.width / rect.width;
         const scaleY = canvas.height / rect.height;
         const x = (e.clientX - rect.left) * scaleX;
         const y = (e.clientY - rect.top) * scaleY;
-        
+
         // 限制在画布范围内
         if (x < 0 || x > canvas.width || y < 0 || y > canvas.height) return;
-        
+
         if (currentMode === 'text' && selectedTextId) {
             const item = textItems.find(t => t.id === selectedTextId);
             if (item) {
@@ -1228,11 +1465,11 @@ function initCanvasEvents() {
                 }
             } else if (sourceImage) {
                 // 拖动图片
-                const scale = (typeof window.mixedImageScale !== 'undefined' && window.mixedImageScale > 0) ? window.mixedImageScale : 
+                const scale = (typeof window.mixedImageScale !== 'undefined' && window.mixedImageScale > 0) ? window.mixedImageScale :
                               (typeof mixedImageScale !== 'undefined' && mixedImageScale > 0) ? mixedImageScale : 1;
                 const dx = (x - canvasDragState.dragStartX) / scale;
                 const dy = (y - canvasDragState.dragStartY) / scale;
-                
+
                 // 使用全局变量或局部变量
                 if (typeof window.mixedCropX !== 'undefined') {
                     window.mixedCropX = Math.max(0, Math.min(sourceImage.width - canvas.width / scale, window.mixedCropX - dx));
@@ -1241,18 +1478,18 @@ function initCanvasEvents() {
                     mixedCropX = Math.max(0, Math.min(sourceImage.width - canvas.width / scale, mixedCropX - dx));
                     mixedCropY = Math.max(0, Math.min(sourceImage.height - canvas.height / scale, mixedCropY - dy));
                 }
-                
+
                 canvasDragState.dragStartX = x;
                 canvasDragState.dragStartY = y;
                 renderCanvas();
             }
         }
     });
-    
+
     document.addEventListener('mouseup', function(e) {
         canvasDragState.isDragging = false;
     });
-    
+
     // 设置鼠标样式
     canvas.style.cursor = 'grab';
     console.log('[Editor] 画布事件已绑定');
@@ -1262,13 +1499,13 @@ function initCanvasEvents() {
 function renderCanvas() {
     const canvas = document.getElementById('mainCanvas');
     if (!canvas) return;
-    
+
     const ctx = canvas.getContext('2d');
-    
+
     // 清空画布
     ctx.fillStyle = 'white';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
+
     if (currentMode === 'image' && sourceImage) {
         // 绘制图片
         const srcWidth = canvas.width / imageScale;
@@ -1279,13 +1516,13 @@ function renderCanvas() {
         const bgColor = document.getElementById('textBgColor')?.value || 'white';
         ctx.fillStyle = bgColor;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        
+
         textItems.forEach(item => {
             ctx.font = `${item.size}px Arial, sans-serif`;
             ctx.fillStyle = item.color;
             ctx.textBaseline = 'top';
             ctx.fillText(item.text, item.x, item.y);
-            
+
             if (item.id === selectedTextId) {
                 const metrics = ctx.measureText(item.text);
                 ctx.strokeStyle = '#667eea';
@@ -1299,23 +1536,23 @@ function renderCanvas() {
         // 绘制图片和文字
         if (sourceImage) {
             // 优先使用全局变量，然后是局部变量
-            const scale = (typeof window.mixedImageScale !== 'undefined' && window.mixedImageScale > 0) ? window.mixedImageScale : 
+            const scale = (typeof window.mixedImageScale !== 'undefined' && window.mixedImageScale > 0) ? window.mixedImageScale :
                           (typeof mixedImageScale !== 'undefined' && mixedImageScale > 0) ? mixedImageScale : 1;
-            const cropX = (typeof window.mixedCropX !== 'undefined') ? window.mixedCropX : 
+            const cropX = (typeof window.mixedCropX !== 'undefined') ? window.mixedCropX :
                           (typeof mixedCropX !== 'undefined') ? mixedCropX : 0;
-            const cropY = (typeof window.mixedCropY !== 'undefined') ? window.mixedCropY : 
+            const cropY = (typeof window.mixedCropY !== 'undefined') ? window.mixedCropY :
                           (typeof mixedCropY !== 'undefined') ? mixedCropY : 0;
             const srcWidth = canvas.width / scale;
             const srcHeight = canvas.height / scale;
             ctx.drawImage(sourceImage, cropX, cropY, srcWidth, srcHeight, 0, 0, canvas.width, canvas.height);
         }
-        
+
         mixedTextItems.forEach(item => {
             ctx.font = `${item.size}px Arial, sans-serif`;
             ctx.fillStyle = item.color;
             ctx.textBaseline = 'top';
             ctx.fillText(item.text, item.x, item.y);
-            
+
             if (item.id === selectedMixedTextId) {
                 const metrics = ctx.measureText(item.text);
                 ctx.strokeStyle = '#667eea';
@@ -1342,17 +1579,28 @@ function renderTemplateCanvas(ctx, width, height) {
     }
 
     switch (templateId) {
-        case 'clock':
-            renderClockTemplate(ctx, width, height);
-            break;
         case 'calendar':
             renderCalendarTemplate(ctx, width, height);
+            break;
+        case 'weather':
+            renderWeatherTemplate(ctx, width, height);
             break;
         case 'quote':
             renderQuoteTemplate(ctx, width, height);
             break;
         case 'qrcode':
             renderQRCodeTemplate(ctx, width, height);
+            break;
+        case 'todo':
+            // 代办事项占位
+            ctx.font = 'bold 48px Arial';
+            ctx.fillStyle = 'black';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('待办事项', width / 2, height / 2 - 40);
+            ctx.font = '28px Arial';
+            ctx.fillStyle = 'black';
+            ctx.fillText('功能开发中...', width / 2, height / 2 + 30);
             break;
         default:
             break;
@@ -1382,7 +1630,7 @@ function previewPage() {
                 return;
             }
         }
-        
+
         // 先处理图片/内容
         if (typeof processImage === 'function') {
             processImage();
@@ -1390,17 +1638,17 @@ function previewPage() {
             log('处理函数未找到', 'error');
             return;
         }
-        
+
         // 检查处理是否成功（检查 processedCanvas 是否有内容）
         const processedCanvas = document.getElementById('processedCanvas');
         if (!processedCanvas) {
             log('找不到预览画布', 'error');
             return;
         }
-        
+
         // 切换到处理面板显示预览
         switchPanel('process');
-        
+
         // 确保画布可见
         if (processedCanvas.width > 0 && processedCanvas.height > 0) {
             log('预览已生成', 'success');
