@@ -10,7 +10,6 @@ window.editorInitialized = true;
 // 以下变量是 editor.js 独有的，不与 app.js 冲突
 var deviceId = '';
 var pages = [];
-var pageLists = [];
 var templates = [];
 var currentPageId = null;
 var currentTemplateId = null;
@@ -176,18 +175,18 @@ function renderClockTemplate(ctx, width, height) {
     const weekDay = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'][now.getDay()];
 
     // 时间
-    ctx.font = 'bold 120px Arial';
+    ctx.font = epdCanvasFont(120, '700');
     ctx.fillStyle = 'black';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(timeStr, width / 2, height / 2 - 50);
 
     // 日期
-    ctx.font = '36px Arial';
+    ctx.font = epdCanvasFont(36, '600');
     ctx.fillText(dateStr, width / 2, height / 2 + 60);
 
     // 星期
-    ctx.font = '28px Arial';
+    ctx.font = epdCanvasFont(28, '600');
     ctx.fillStyle = 'red';
     ctx.fillText(weekDay, width / 2, height / 2 + 110);
 }
@@ -199,14 +198,14 @@ function renderCalendarTemplate(ctx, width, height) {
     const day = now.getDate();
 
     // 标题
-    ctx.font = 'bold 48px Arial';
+    ctx.font = epdCanvasFont(48, '700');
     ctx.fillStyle = 'black';
     ctx.textAlign = 'center';
     ctx.fillText(`${year}年${month + 1}月`, width / 2, 60);
 
     // 星期标题
     const weekDays = ['日', '一', '二', '三', '四', '五', '六'];
-    ctx.font = '24px Arial';
+    ctx.font = epdCanvasFont(24, '600');
     const cellWidth = (width - 80) / 7;
     const startX = 40;
 
@@ -219,7 +218,7 @@ function renderCalendarTemplate(ctx, width, height) {
     const firstDay = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
 
-    ctx.font = '28px Arial';
+    ctx.font = epdCanvasFont(28, '600');
     let row = 0;
     for (let d = 1; d <= daysInMonth; d++) {
         const col = (firstDay + d - 1) % 7;
@@ -247,7 +246,7 @@ function renderQuoteTemplate(ctx, width, height) {
 
     if (!quote || !quote.content) {
         // 回退：显示提示
-        ctx.font = '32px Arial';
+        ctx.font = epdCanvasFont(32, '600');
         ctx.fillStyle = 'black';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -260,16 +259,16 @@ function renderQuoteTemplate(ctx, width, height) {
     ctx.fillRect(0, 0, width, height);
 
     // 引号装饰（黄色，与白色背景形成对比）
-    ctx.font = '120px Georgia';
+    ctx.font = epdCanvasFont(120, '700');
     ctx.fillStyle = 'yellow';
     ctx.textAlign = 'left';
     ctx.fillText('"', 60, 130);
 
     // 内容自动换行
     const content = quote.content;
-    const maxWidth = width - 120;
-    const lineHeight = 56;
-    ctx.font = '36px Arial';
+    const maxWidth = width - 80;
+    const lineHeight = 60;
+    ctx.font = epdCanvasFont(44, '700');
     ctx.fillStyle = 'black';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -289,7 +288,7 @@ function renderQuoteTemplate(ctx, width, height) {
     if (currentLine) lines.push(currentLine);
 
     const totalHeight = lines.length * lineHeight;
-    const startY = (height - totalHeight) / 2;
+    const startY = Math.max(86, (height - totalHeight) / 2 - 18);
 
     lines.forEach((line, i) => {
         ctx.fillText(line, width / 2, startY + i * lineHeight + lineHeight / 2);
@@ -300,7 +299,7 @@ function renderQuoteTemplate(ctx, width, height) {
     if (quote.author) sourceParts.push(quote.author);
     if (quote.origin) sourceParts.push(`《${quote.origin}》`);
     if (sourceParts.length > 0) {
-        ctx.font = '26px Arial';
+        ctx.font = epdCanvasFont(30, '600');
         ctx.fillStyle = 'black';
         ctx.fillText(sourceParts.join('  '), width / 2, startY + totalHeight + 40);
     }
@@ -311,7 +310,7 @@ function renderQRCodeTemplate(ctx, width, height) {
     const title = document.getElementById('qrcodeTitleInput')?.value?.trim() || '';
 
     if (!content) {
-        ctx.font = '32px Arial';
+        ctx.font = epdCanvasFont(32, '600');
         ctx.fillStyle = 'black';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -340,7 +339,7 @@ function renderQRCodeTemplate(ctx, width, height) {
         }
 
         if (title) {
-            ctx.font = '32px Arial';
+            ctx.font = epdCanvasFont(32, '600');
             ctx.fillStyle = 'black';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'top';
@@ -348,7 +347,7 @@ function renderQRCodeTemplate(ctx, width, height) {
         }
     } catch (e) {
         console.error('QR generation error:', e);
-        ctx.font = '32px Arial';
+        ctx.font = epdCanvasFont(32, '600');
         ctx.fillStyle = 'red';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -360,7 +359,7 @@ function renderWeatherTemplate(ctx, width, height) {
     const data = templateWeatherData;
 
     if (!data) {
-        ctx.font = '32px Arial';
+        ctx.font = epdCanvasFont(32, '600');
         ctx.fillStyle = 'black';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -374,7 +373,7 @@ function renderWeatherTemplate(ctx, width, height) {
 
     // 城市 + 日期
     const dateStr = new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
-    ctx.font = '36px Arial';
+    ctx.font = epdCanvasFont(36, '600');
     ctx.fillStyle = 'black';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
@@ -382,14 +381,14 @@ function renderWeatherTemplate(ctx, width, height) {
 
     // 温度（大号）
     if (data.temperature !== undefined && data.temperature !== null) {
-        ctx.font = 'bold 120px Arial';
+        ctx.font = epdCanvasFont(120, '700');
         ctx.fillStyle = 'blue';
         ctx.textBaseline = 'middle';
-        ctx.fillText(`${Math.round(data.temperature)}°`, width / 2, height / 2 - 30);
+        ctx.fillText(`${Math.round(data.temperature)}°C`, width / 2, height / 2 - 30);
     }
 
     // 天气状况
-    ctx.font = '40px Arial';
+    ctx.font = epdCanvasFont(40, '700');
     ctx.fillStyle = 'red';
     ctx.fillText(data.weatherText || '', width / 2, height / 2 + 80);
 
@@ -398,11 +397,11 @@ function renderWeatherTemplate(ctx, width, height) {
     if (data.humidity !== undefined) infoParts.push(`湿度 ${data.humidity}%`);
     if (data.wind_speed !== undefined) infoParts.push(`风速 ${data.wind_speed}km/h`);
     if (data.temp_min !== undefined && data.temp_max !== undefined) {
-        infoParts.push(`${Math.round(data.temp_min)}°~${Math.round(data.temp_max)}°`);
+        infoParts.push(`${Math.round(data.temp_min)}°C~${Math.round(data.temp_max)}°C`);
     }
 
     if (infoParts.length > 0) {
-        ctx.font = '24px Arial';
+        ctx.font = epdCanvasFont(24, '600');
         ctx.fillStyle = 'black';
         ctx.fillText(infoParts.join('  |  '), width / 2, height - 60);
     }
@@ -435,7 +434,7 @@ async function fetchWeatherAndPreview() {
             _weatherCacheTime = Date.now();
             // 后端已返回 weatherText（和风天气中文文本），无需前端映射
             renderCanvas();
-            log(`天气已更新: ${result.data.city} ${Math.round(result.data.temperature)}°`, 'success');
+            log(`天气已更新: ${result.data.city} ${Math.round(result.data.temperature)}°C`, 'success');
         } else {
             log('获取天气失败', 'error');
         }
@@ -817,99 +816,6 @@ async function createPageFromTemplate(templateId) {
     }
 }
 
-// ==================== 页面列表管理 ====================
-function showPageListModal() {
-    document.getElementById('pageListModal').classList.add('show');
-    loadPageLists();
-}
-
-function hidePageListModal() {
-    document.getElementById('pageListModal').classList.remove('show');
-}
-
-async function loadPageLists() {
-    if (!deviceId) return;
-
-    try {
-        const response = await fetch(`${API_BASE}/api/page-lists/list/${deviceId}`, {
-            headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
-        });
-        const result = await response.json();
-        if (result.success) {
-            pageLists = result.pageLists;
-            renderPageListsModal();
-        }
-    } catch (e) {
-        console.error('Failed to load page lists:', e);
-    }
-}
-
-function renderPageListsModal() {
-    const container = document.getElementById('pageListsContainer');
-    const allPagesContainer = document.getElementById('allPagesContainer');
-
-    if (pageLists.length === 0) {
-        container.innerHTML = `
-            <div style="padding: 30px; text-align: center; color: var(--text-light);">
-                暂无页面列表
-            </div>
-        `;
-    } else {
-        container.innerHTML = pageLists.map(pl => `
-            <div style="padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer;
-                        ${pl.isActive ? 'background: #ebf4ff;' : ''}"
-                 onclick="selectPageList('${pl.listId}')">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    ${pl.isActive ? '⭐' : '📋'}
-                    <span style="flex: 1; font-weight: 500;">${pl.name}</span>
-                    <span style="font-size: 0.85em; color: var(--text-light);">${pl.pages?.length || 0} 页</span>
-                </div>
-                <div style="font-size: 0.8em; color: var(--text-light); margin-top: 5px;">
-                    间隔: ${pl.interval} 分钟
-                </div>
-            </div>
-        `).join('');
-    }
-
-    // 所有页面
-    allPagesContainer.innerHTML = pages.map(page => `
-        <div style="padding: 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center;">
-            <span style="margin-right: 10px;">${getPageIcon(page.type)}</span>
-            <span style="flex: 1;">${page.name}</span>
-            <button onclick="addPageToList('${page.pageId}')"
-                    style="background: var(--primary); color: white; border: none;
-                           padding: 4px 10px; border-radius: 4px; cursor: pointer;">+</button>
-        </div>
-    `).join('') || '<div style="padding: 30px; text-align: center; color: var(--text-light);">暂无页面</div>';
-}
-
-async function createPageList() {
-    const name = prompt('请输入页面列表名称:', '新页面列表');
-    if (!name) return;
-
-    try {
-        const response = await fetch(`${API_BASE}/api/page-lists/save`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...(typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}) },
-            body: JSON.stringify({
-                deviceId,
-                name,
-                pages: [],
-                interval: 60,
-                isActive: pageLists.length === 0
-            })
-        });
-
-        const result = await response.json();
-        if (result.success) {
-            await loadPageLists();
-            log('页面列表已创建', 'success');
-        }
-    } catch (e) {
-        log('创建失败', 'error');
-    }
-}
-
 // ==================== 部署 ====================
 async function deployToDevice() {
     if (!deviceId) {
@@ -1271,7 +1177,7 @@ function initCanvasEvents() {
         const ctx = canvas.getContext('2d');
         for (let i = items.length - 1; i >= 0; i--) {
             const item = items[i];
-            ctx.font = `${item.size}px Arial, sans-serif`;
+            ctx.font = epdCanvasFont(item.size);
             const metrics = ctx.measureText(item.text);
 
             // 改进检测区域：文字的实际渲染区域
@@ -1518,7 +1424,7 @@ function renderCanvas() {
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         textItems.forEach(item => {
-            ctx.font = `${item.size}px Arial, sans-serif`;
+            ctx.font = epdCanvasFont(item.size);
             ctx.fillStyle = item.color;
             ctx.textBaseline = 'top';
             ctx.fillText(item.text, item.x, item.y);
@@ -1548,7 +1454,7 @@ function renderCanvas() {
         }
 
         mixedTextItems.forEach(item => {
-            ctx.font = `${item.size}px Arial, sans-serif`;
+            ctx.font = epdCanvasFont(item.size);
             ctx.fillStyle = item.color;
             ctx.textBaseline = 'top';
             ctx.fillText(item.text, item.x, item.y);
@@ -1593,12 +1499,12 @@ function renderTemplateCanvas(ctx, width, height) {
             break;
         case 'todo':
             // 代办事项占位
-            ctx.font = 'bold 48px Arial';
+            ctx.font = epdCanvasFont(48, '700');
             ctx.fillStyle = 'black';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText('待办事项', width / 2, height / 2 - 40);
-            ctx.font = '28px Arial';
+            ctx.font = epdCanvasFont(28, '600');
             ctx.fillStyle = 'black';
             ctx.fillText('功能开发中...', width / 2, height / 2 + 30);
             break;

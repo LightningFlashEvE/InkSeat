@@ -42,7 +42,7 @@
 /* 云端API配置 */
 #define CLOUD_API_HOST "8.135.238.216"
 #define CLOUD_API_PORT 8080  // 经 Nginx 代理访问后端
-#define CLOUD_API_TIMEOUT_MS 10000  // HTTP请求超时时间（10秒）
+#define CLOUD_API_TIMEOUT_MS 30000  // 状态查询超时（30秒，允许云端动态模板按需渲染）
 #define CLOUD_DOWNLOAD_TIMEOUT_MS 60000  // 下载超时时间（60秒）
 
 /* 设备ID配置 */

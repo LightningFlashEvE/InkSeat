@@ -13,6 +13,11 @@ let dragStartY = 0;
 // 当前模式：'image'、'text'、'mixed' 或 'template'
 let currentMode = 'image';
 const PUBLISH_TEMPLATE_IDS = new Set(['weather', 'calendar', 'todo', 'quote', 'qrcode']);
+const EPD_CANVAS_FONT_FAMILY = '"Noto Sans CJK SC", "Microsoft YaHei", "SimHei", "Segoe UI Symbol", "Segoe UI Emoji", "Arial Unicode MS", Arial, sans-serif';
+
+function epdCanvasFont(size, weight = '700') {
+    return `${weight} ${size}px ${EPD_CANVAS_FONT_FAMILY}`;
+}
 
 // 文字模式相关变量
 let textItems = [];  // [{id, text, x, y, size, color}]
@@ -146,6 +151,31 @@ function log(message, type = 'info') {
     }
 
     console.log(`[${timestamp}] ${message}`);
+}
+
+function drawBase64PreviewToCanvas(targetCanvas, previewBase64, afterDraw) {
+    if (!targetCanvas || !previewBase64) return;
+    const ctx = targetCanvas.getContext('2d');
+    targetCanvas.width = 800;
+    targetCanvas.height = 480;
+    const previewImg = new Image();
+    previewImg.onload = () => {
+        ctx.clearRect(0, 0, 800, 480);
+        ctx.drawImage(previewImg, 0, 0);
+        if (typeof afterDraw === 'function') {
+            afterDraw(ctx);
+        }
+    };
+    previewImg.src = 'data:image/png;base64,' + previewBase64;
+}
+
+function copyCanvasToCanvas(sourceCanvas, targetCanvas) {
+    if (!sourceCanvas || !targetCanvas || sourceCanvas.width <= 0 || sourceCanvas.height <= 0) return;
+    targetCanvas.width = sourceCanvas.width;
+    targetCanvas.height = sourceCanvas.height;
+    const ctx = targetCanvas.getContext('2d');
+    ctx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+    ctx.drawImage(sourceCanvas, 0, 0);
 }
 
 // 初始化拖拽区域
@@ -816,26 +846,19 @@ async function uploadToDevice() {
             const contentText = respJson.activeContentLabel ? `，内容：${respJson.activeContentLabel}` : '';
             const sleepText = respJson.sleepIntervalSeconds ? `，唤醒间隔：${formatPublishSleepInterval(respJson.sleepIntervalSeconds)}` : '';
 
-            // 更新处理后的预览画布（抖动效果 = 设备实际显示）
+            // 更新画布为后端处理后的 6 色预览（设备实际显示）。
             if (respJson.previewImage) {
                 const processedCanvas = document.getElementById('processedCanvas');
                 if (processedCanvas) {
-                    const pCtx = processedCanvas.getContext('2d');
-                    processedCanvas.width = 800;
-                    processedCanvas.height = 480;
-                    const previewImg = new Image();
-                    previewImg.onload = () => {
-                        pCtx.clearRect(0, 0, 800, 480);
-                        pCtx.drawImage(previewImg, 0, 0);
-                    };
-                    previewImg.src = 'data:image/png;base64,' + respJson.previewImage;
+                    drawBase64PreviewToCanvas(processedCanvas, respJson.previewImage, (pCtx) => {
+                        processedImageData = pCtx.getImageData(0, 0, 800, 480);
+                    });
                 }
+                drawBase64PreviewToCanvas(canvas, respJson.previewImage);
                 if (respJson.data4bit) {
                     window.e6Data4bit = respJson.data4bit;
                 }
             }
-
-            // 不更新 mainCanvas，保持用户设计的原始效果
 
             updateProgress(100);
             hideProgress();
@@ -934,6 +957,7 @@ async function uploadToDevice() {
 
         updateProgress(100);
         hideProgress();
+        copyCanvasToCanvas(document.getElementById('processedCanvas'), document.getElementById('mainCanvas'));
         log(`✅ 已发布到云端${verText}${contentText}${sleepText}（设备下次唤醒会自动更新）`, 'success');
         log('提示：设备无需在线；按键/定时唤醒后才会拉取并刷新墨水屏。', 'info');
 
@@ -1110,7 +1134,7 @@ function renderTextCanvas() {
 
     // 绘制所有文字
     textItems.forEach(item => {
-        ctx.font = `${item.size}px Arial, sans-serif`;
+        ctx.font = epdCanvasFont(item.size);
         ctx.fillStyle = item.color;
         ctx.textBaseline = 'top';
         ctx.fillText(item.text, item.x, item.y);
@@ -1137,7 +1161,7 @@ function addTextItem() {
         return;
     }
 
-    const size = parseInt(document.getElementById('newTextSize')?.value) || 48;
+    const size = parseInt(document.getElementById('newTextSize')?.value) || 64;
     const color = document.getElementById('newTextColor')?.value || 'black';
     const width = parseInt(document.getElementById('width')?.value) || 800;
     const height = parseInt(document.getElementById('height')?.value) || 480;
@@ -1252,7 +1276,7 @@ function bindTextCanvasEvents() {
 
         for (let i = textItems.length - 1; i >= 0; i--) {
             const item = textItems[i];
-            ctx.font = `${item.size}px Arial, sans-serif`;
+            ctx.font = epdCanvasFont(item.size);
             const metrics = ctx.measureText(item.text);
 
             if (x >= item.x && x <= item.x + metrics.width &&
@@ -1544,7 +1568,7 @@ function renderMixedCanvas() {
 
     // 绘制所有文字
     mixedTextItems.forEach(item => {
-        ctx.font = `${item.size}px Arial, sans-serif`;
+        ctx.font = epdCanvasFont(item.size);
         ctx.fillStyle = item.color;
         ctx.textBaseline = 'top';
         ctx.fillText(item.text, item.x, item.y);
@@ -1630,7 +1654,7 @@ function addMixedTextItem() {
         return;
     }
 
-    const size = parseInt(document.getElementById('mixedTextSize')?.value) || 36;
+    const size = parseInt(document.getElementById('mixedTextSize')?.value) || 56;
     const color = document.getElementById('mixedTextColor')?.value || 'black';
     const width = parseInt(document.getElementById('width')?.value) || 800;
     const height = parseInt(document.getElementById('height')?.value) || 480;
@@ -1730,7 +1754,7 @@ function bindMixedCanvasEvents() {
 
         for (let i = mixedTextItems.length - 1; i >= 0; i--) {
             const item = mixedTextItems[i];
-            ctx.font = `${item.size}px Arial, sans-serif`;
+            ctx.font = epdCanvasFont(item.size);
             const metrics = ctx.measureText(item.text);
 
             if (x >= item.x && x <= item.x + metrics.width &&

@@ -787,9 +787,6 @@
             <button class="btn btn-light" onclick="window.location.href='index.html'">
                 ⬅️ 返回
             </button>
-            <button class="btn btn-light" onclick="showPageListModal()">
-                📋 页面列表
-            </button>
         </div>
     </div>
 
@@ -901,7 +898,7 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>大小</label>
-                                <input type="number" id="newTextSize" value="48" min="12" max="200">
+                                <input type="number" id="newTextSize" value="64" min="24" max="200">
                             </div>
                             <div class="form-group">
                                 <label>颜色</label>
@@ -968,7 +965,7 @@
                         <div class="form-row">
                             <div class="form-group">
                                 <label>大小</label>
-                                <input type="number" id="mixedTextSize" value="36">
+                                <input type="number" id="mixedTextSize" value="56" min="24" max="200">
                             </div>
                             <div class="form-group">
                                 <label>颜色</label>
@@ -1153,40 +1150,6 @@
         </div>
     </div>
 
-    <!-- 页面列表管理模态框 -->
-    <div class="modal-overlay" id="pageListModal">
-        <div class="modal" style="max-width: 800px;">
-            <div class="modal-header">
-                <h3>页面列表管理</h3>
-                <button class="modal-close" onclick="hidePageListModal()">×</button>
-            </div>
-            <div class="modal-body">
-                <p style="color: var(--text-light); margin-bottom: 15px;">
-                    创建页面列表，设备可以循环显示列表中的页面
-                </p>
-                <div style="display: flex; gap: 20px;">
-                    <div style="flex: 1;">
-                        <h4 style="margin-bottom: 10px;">页面列表</h4>
-                        <div id="pageListsContainer" style="border: 1px solid var(--border); border-radius: 8px; min-height: 200px;">
-                            <!-- 页面列表将动态加载 -->
-                        </div>
-                        <button class="btn btn-primary" onclick="createPageList()" style="margin-top: 10px;">+ 新建列表</button>
-                    </div>
-                    <div style="flex: 1;">
-                        <h4 style="margin-bottom: 10px;">所有页面</h4>
-                        <div id="allPagesContainer" style="border: 1px solid var(--border); border-radius: 8px; min-height: 200px;">
-                            <!-- 所有页面将动态加载 -->
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn btn-secondary" onclick="hidePageListModal()">关闭</button>
-                <button class="btn btn-success" onclick="savePageLists()">保存</button>
-            </div>
-        </div>
-    </div>
-
     <!-- 发布前提醒模态框 -->
     <div class="modal-overlay" id="publishAlertModal">
         <div class="modal" style="max-width: 420px;">
@@ -1218,7 +1181,7 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
     <script src="auth.js?v=20250612a"></script>
-    <script src="app.js?v=20250612e"></script>
-    <script src="editor.js?v=20250612a"></script>
+    <script src="app.js?v=20250615a"></script>
+    <script src="editor.js?v=20250615c"></script>
 </body>
 </html>

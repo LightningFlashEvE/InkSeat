@@ -194,13 +194,9 @@ function renderDevices() {
         const isOnline = status.online === true;
         const hasTelemetry = !!(
             status.lastSeen ||
-            status.lastManualWake ||
-            status.lastAutoWake ||
             status.ip ||
             status.remoteIp ||
             status.rssi !== undefined ||
-            status.uptime_ms !== undefined ||
-            status.freeHeap !== undefined ||
             status.currentSleepSeconds !== undefined ||
             status.sleepIntervalSeconds !== undefined ||
             status.activeContentLabel ||
@@ -224,23 +220,8 @@ function renderDevices() {
                     </div>
 
                     <div class="device-info-item">
-                        <span class="device-info-label">手动唤醒</span>
-                        <span class="device-info-value">${formatDateTime(status.lastManualWake)}</span>
-                    </div>
-
-                    <div class="device-info-item">
-                        <span class="device-info-label">自动唤醒</span>
-                        <span class="device-info-value">${formatDateTime(status.lastAutoWake)}</span>
-                    </div>
-
-                    <div class="device-info-item">
                         <span class="device-info-label">WiFi信号</span>
                         <span class="device-info-value">${getSignalBars(status.rssi)}</span>
-                    </div>
-
-                    <div class="device-info-item">
-                        <span class="device-info-label">运行时间</span>
-                        <span class="device-info-value">${formatUptime(status.uptime_ms)}</span>
                     </div>
 
                     <div class="device-info-item">
@@ -287,26 +268,7 @@ function renderDevices() {
                     <span class="device-info-value">${device.id}</span>
                 </div>
 
-                ${isSleeping ? `
-                    <div class="device-info-item">
-                        <span class="device-info-label">状态</span>
-                        <span class="device-info-value" style="color: #ffc107;">💤 Deep-sleep 模式</span>
-                    </div>
-                    ${telemetryHtml}
-                ` : isOnline ? `
-                    ${telemetryHtml || `
-                        <div class="device-info-item">
-                            <span class="device-info-label">状态</span>
-                            <span class="device-info-value">等待设备上报信息</span>
-                        </div>
-                    `}
-                ` : `
-                    <div class="device-info-item">
-                        <span class="device-info-label">状态</span>
-                        <span class="device-info-value" style="color: #dc3545;">设备离线</span>
-                    </div>
-                    ${telemetryHtml}
-                `}
+                ${telemetryHtml}
 
                 <div class="device-info-item">
                     <span class="device-info-label">添加时间</span>
@@ -384,10 +346,6 @@ async function pollDeviceStatus() {
                         remoteIp: device.remoteIp,
                         lastWakeType: device.lastWakeType,
                         lastWakeCause: device.lastWakeCause,
-                        lastManualWake: device.lastManualWake,
-                        lastAutoWake: device.lastAutoWake,
-                        uptime_ms: device.uptime_ms,
-                        freeHeap: device.freeHeap,
                         currentSleepSeconds: device.currentSleepSeconds,
                         sleepIntervalSeconds: device.sleepIntervalSeconds,
                         activeContentMode: device.activeContentMode,
@@ -420,10 +378,6 @@ async function pollDeviceStatus() {
                         oldStatus.remoteIp !== newStatus.remoteIp ||
                         oldStatus.lastWakeType !== newStatus.lastWakeType ||
                         oldStatus.lastWakeCause !== newStatus.lastWakeCause ||
-                        oldStatus.lastManualWake !== newStatus.lastManualWake ||
-                        oldStatus.lastAutoWake !== newStatus.lastAutoWake ||
-                        oldStatus.uptime_ms !== newStatus.uptime_ms ||
-                        oldStatus.freeHeap !== newStatus.freeHeap ||
                         oldStatus.currentSleepSeconds !== newStatus.currentSleepSeconds ||
                         oldStatus.sleepIntervalSeconds !== newStatus.sleepIntervalSeconds ||
                         oldStatus.activeContentMode !== newStatus.activeContentMode ||
@@ -473,30 +427,6 @@ function getSignalBars(rssi) {
     return result;
 }
 
-// 工具函数：格式化运行时间
-function formatUptime(ms) {
-    if (ms === undefined || ms === null) return '未上报';
-
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-
-    if (days > 0) return `${days}天 ${hours % 24}小时`;
-    if (hours > 0) return `${hours}小时 ${minutes % 60}分钟`;
-    if (minutes > 0) return `${minutes}分钟`;
-    return `${seconds}秒`;
-}
-
-// 工具函数：格式化内存
-function formatMemory(bytes) {
-    if (bytes === undefined || bytes === null) return '未上报';
-
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-}
-
 function formatSleepInterval(seconds) {
     if (seconds === undefined || seconds === null) return '默认 12小时';
     if (seconds <= 0) return '默认 12小时';
@@ -523,11 +453,6 @@ function formatDate(timestamp) {
         hour: '2-digit',
         minute: '2-digit'
     });
-}
-
-function formatDateTime(timestamp) {
-    if (!timestamp) return '未上报';
-    return formatDate(timestamp);
 }
 
 function formatWakeSummary(status) {

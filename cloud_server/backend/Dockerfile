@@ -5,6 +5,11 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+# 安装中文和常用符号字体，避免模板在 Docker 环境中退回默认小字体或缺字。
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends fonts-noto-cjk fonts-noto-core && \
+    rm -rf /var/lib/apt/lists/*
+
 # 升级 pip 并使用阿里云镜像源（适合阿里云服务器）
 COPY requirements.txt .
 RUN pip install --upgrade pip && \
@@ -15,4 +20,3 @@ COPY app.py config.py six_color_epd.py template_renderer.py ./
 EXPOSE 5000
 
 CMD ["python", "app.py"]
-

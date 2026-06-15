@@ -143,6 +143,7 @@ cd /opt/esp32-cloud/cloud_server
 # 首次部署或更新代码后：
 cd /opt/esp32-cloud/cloud_server  # 或 <your-project>/cloud_server
 git pull  # 拉取最新代码
+# 后端镜像会安装中文/符号字体；模板或字体相关更新后必须无缓存重建
 docker compose build --no-cache  # 重新构建镜像
 docker compose up -d --force-recreate  # 强制重新创建容器
 
@@ -326,6 +327,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
    - 点击"处理并预览"查看效果
    - 点击 **“发布”**
    - 图片会保存到云端，设备下次唤醒后自动拉取并刷新
+   - 发布成功后，主画布会回填后端处理后的 6 色预览；设备实际显示应以这张预览为准
 
 ## Flash存储说明
 
@@ -469,10 +471,10 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 
 - 设备不保持常驻连接，不常驻 loop
 - 唤醒后执行一次性 HTTP 拉取流程，完成后立即回到 Deep-sleep
-- 默认定时唤醒间隔为 12 小时；云端可在 `/api/device/status` 响应中返回 `nextSleepSeconds`，设备持久化到 NVS 并在下一次入睡时使用，适配时钟、天气、日历等模板的不同刷新频率。当前内置模板为时钟、天气、日历、待办、每日一言、二维码；计数器和空白页不再作为内置模板入口。
+- 默认定时唤醒间隔为 12 小时；云端可在 `/api/device/status` 响应中返回 `nextSleepSeconds`，设备持久化到 NVS 并在下一次入睡时使用，适配时钟、天气、日历等模板的不同刷新频率。动态模板在设备唤醒查询状态时按需重渲染；天气每次唤醒刷新，每日一言在按键手动唤醒时强制换一句，定时唤醒按 `Asia/Shanghai` 日期刷新，日历也按 `Asia/Shanghai` 日期刷新；固件状态查询超时默认为 30 秒。当前内置模板为时钟、天气、日历、待办、每日一言、二维码；计数器和空白页不再作为内置模板入口。
 - 墨水屏断电仍保持画面，因此无需常供电刷新
 - 墨水屏 `BUSY` 等待带超时保护：初始化/上电/断电阶段默认 10 秒，显示刷新阶段默认 180 秒。超时会打印错误并退出当前显示流程，避免新板调试时因屏幕异常永久卡死。
-- 每次设备查询 `/api/device/status` 时会同步上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`、`wakeType`、`wakeCause`、`currentSleepSeconds`，后端在设备列表中返回这些字段供前端显示；设备卡片会显示当前内容、唤醒间隔、预计自动唤醒时间、最后唤醒时间，并分别记录最后一次手动唤醒和自动唤醒时间。
+- 每次设备查询 `/api/device/status` 时会同步上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`、`wakeType`、`wakeCause`、`currentSleepSeconds`，后端在设备列表中返回这些字段；设备卡片显示当前内容、唤醒间隔、预计自动唤醒时间和最后唤醒时间。
 - 只有图片实际刷新完成后才保存本地 `imgVer`；如果下载成功但显示失败，下次唤醒会继续重试同一版本。
 
 ## 扩展功能
@@ -494,7 +496,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 ### 可扩展功能
 
 1. **OTA升级**：可扩展为唤醒后通过 HTTP 检查并拉取固件更新
-2. **定时任务**：支持定时推送图片到设备
+2. **模板按需刷新**：设备手动或定时唤醒后检查天气、日历、每日一言等动态模板并拉取最新图片
 3. **批量控制**：支持同时向多个设备推送图片
 4. **图片历史**：保存用户上传的图片，支持快速重新发送
 5. **更多图片处理选项**：

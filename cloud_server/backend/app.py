@@ -13,10 +13,11 @@ import time
 import threading
 import hashlib
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
@@ -29,12 +30,7 @@ import io
 
 from config import Config
 from six_color_epd import process_e6_image_from_base64
-from template_renderer import render_template, _fetch_weather, _fetch_quote, _encode_epd_string
-
-# ==================== APScheduler 定时任务 ====================
-from apscheduler.schedulers.background import BackgroundScheduler
-
-scheduler = BackgroundScheduler()
+from template_renderer import render_template_with_preview, _fetch_weather, _fetch_quote, _encode_epd_string
 
 # ==================== Flask 应用初始化 ====================
 app = Flask(__name__)
@@ -47,6 +43,11 @@ EPD_HEIGHT = 480
 EPD_EXPECTED_CHARS = EPD_WIDTH * EPD_HEIGHT  # 384000
 EPD_ALLOWED_CHARS = set('abcdefghijklmnop')
 DEFAULT_SLEEP_INTERVAL_SECONDS = 12 * 60 * 60
+TEMPLATE_DAY_TIMEZONE = os.environ.get('TEMPLATE_DAY_TIMEZONE', 'Asia/Shanghai')
+try:
+    TEMPLATE_DAY_TZ = ZoneInfo(TEMPLATE_DAY_TIMEZONE)
+except Exception:
+    TEMPLATE_DAY_TZ = timezone(timedelta(hours=8))
 TEMPLATE_SLEEP_INTERVAL_SECONDS = {
     'weather': 6 * 60 * 60,
     'calendar': 24 * 60 * 60,
@@ -111,56 +112,87 @@ def get_device_content_metadata(device):
     custom_interval = template_config.get('sleepIntervalSeconds') if isinstance(template_config, dict) else None
     return build_content_metadata(device.get('activeContentMode'), device.get('activeTemplateId'), custom_interval)
 
-def _should_re_render_template(template_id: str, config: dict, device: dict) -> bool:
+def get_template_local_date(value):
+    """Return the calendar date used by daily templates."""
+    if not value:
+        return None
+    if hasattr(value, 'tzinfo'):
+        dt = value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(TEMPLATE_DAY_TZ).date()
+    return None
+
+def _should_re_render_template(template_id: str, config: dict, device: dict, wake_type: str = '') -> bool:
     """判断模板设备是否需要重渲染内容。
 
     按需渲染逻辑（设备唤醒时调用）：
-    - Canvas 发布的模板：不自动覆盖（用户设计的排版不能被 Pillow 替换）
-    - Pillow 渲染的模板：
-        - 天气：每次唤醒都渲染（天气随时变化）
-        - 每日一言：今天没渲染过 → 渲染
-        - 日历：日期变了 → 渲染
-        - 二维码/待办：永不自动渲染
+    - 动态模板优先：天气每次渲染，每日一言手动唤醒强制刷新、定时唤醒按日期刷新
+    - 二维码/待办：永不自动渲染
+    - 其他 Canvas 发布内容：不自动覆盖用户设计
     """
     template_id = str(template_id).strip().lower() if template_id else ''
-
-    # Canvas 发布的模板：不自动覆盖，保留用户设计的效果
-    # 只有用户手动重新发布时才会更新
-    if device.get('renderSource') == 'canvas':
-        return False
+    wake_type = str(wake_type or '').strip().lower()
+    render_source = device.get('renderSource')
 
     # 二维码/待办：内容不自动变化，永不自动渲染
     if template_id in ('qrcode', 'todo'):
+        print(f'🛑 _should_re_render: 模板={template_id}, renderSource={render_source} → 永不自动渲染')
         return False
 
     # 天气：每次唤醒都渲染（设备醒来就是要拿最新天气）
     if template_id == 'weather':
+        print(f'🔄 _should_re_render: 模板={template_id}, renderSource={render_source} → 需要渲染（天气实时更新）')
         return True
 
     last_updated = device.get('activeContentUpdatedAt')
-    now_utc = datetime.utcnow()
+    today = datetime.now(TEMPLATE_DAY_TZ).date()
 
     # 每日一言：今天没渲染过 → 渲染
     if template_id == 'quote':
+        if wake_type == 'manual':
+            print(f'🔄 _should_re_render: 模板={template_id}, wakeType=manual → 需要渲染（手动唤醒）')
+            return True
         if not last_updated:
+            print(f'🔄 _should_re_render: 模板={template_id}, renderSource={render_source} → 需要渲染（无上次记录）')
             return True
         # 有上次更新时间：检查是否跨日
-        last_date = last_updated.date() if hasattr(last_updated, 'date') else None
-        if last_date and last_date == now_utc.date():
+        last_date = get_template_local_date(last_updated)
+        if last_date and last_date == today:
+            print(f'🛑 _should_re_render: 模板={template_id}, renderSource={render_source} → 跳过（今天已渲染，{TEMPLATE_DAY_TIMEZONE}）')
             return False  # 今天已渲染过
+        print(f'🔄 _should_re_render: 模板={template_id}, renderSource={render_source} → 需要渲染（跨日，{last_date} -> {today}）')
         return True
 
     # 日历：日期变了 → 渲染
     if template_id == 'calendar':
         if not last_updated:
+            print(f'🔄 _should_re_render: 模板={template_id}, renderSource={render_source} → 需要渲染（无上次记录）')
             return True
-        last_date = last_updated.date() if hasattr(last_updated, 'date') else None
-        if last_date and last_date == now_utc.date():
+        last_date = get_template_local_date(last_updated)
+        if last_date and last_date == today:
+            print(f'🛑 _should_re_render: 模板={template_id}, renderSource={render_source} → 跳过（今天已渲染，{TEMPLATE_DAY_TIMEZONE}）')
             return False  # 今天已渲染过（日期没变）
+        print(f'🔄 _should_re_render: 模板={template_id}, renderSource={render_source} → 需要渲染（跨日，{last_date} -> {today}）')
         return True
 
+    # 其他 Canvas 发布内容：不自动覆盖，保留用户设计的效果
+    if render_source == 'canvas':
+        print(f'🛑 _should_re_render: 模板={template_id}, renderSource=canvas → 跳过（保留用户设计）')
+        return False
+
     # 其他未知模板：保守策略，不自动渲染
+    print(f'🛑 _should_re_render: 模板={template_id}, renderSource={render_source} → 跳过（未知模板）')
     return False
+
+
+def render_template_epd_data(template_id: str, config: dict) -> str:
+    """Render template through the full preview/data pipeline and return EPD data only."""
+    result = render_template_with_preview(template_id, config)
+    epd_data = result.get('epdData') if isinstance(result, dict) else None
+    if not epd_data or len(epd_data) != EPD_EXPECTED_CHARS:
+        raise ValueError(f'Template rendering failed or invalid length: {len(epd_data) if epd_data else 0}')
+    return epd_data
 
 
 def to_epoch_ms(value):
@@ -196,7 +228,6 @@ users_collection = None
 devices_collection = None
 device_status_collection = None
 pages_collection = None
-page_lists_collection = None
 pairing_codes_collection = None
 
 # ==================== 图片持久化存储目录 ====================
@@ -264,7 +295,7 @@ def redact_uri_secret(uri: str) -> str:
 def connect_mongodb(max_retries: int = 10, retry_delay_seconds: int = 2):
     """连接 MongoDB"""
     global mongo_client, db, users_collection, devices_collection, device_status_collection
-    global pages_collection, page_lists_collection, pairing_codes_collection
+    global pages_collection, pairing_codes_collection
     for attempt in range(1, max_retries + 1):
         try:
             mongo_client = MongoClient(Config.MONGODB_URI, serverSelectionTimeoutMS=5000)
@@ -275,7 +306,6 @@ def connect_mongodb(max_retries: int = 10, retry_delay_seconds: int = 2):
             devices_collection = db['devices']
             device_status_collection = db['device_status']
             pages_collection = db['pages']
-            page_lists_collection = db['page_lists']
             pairing_codes_collection = db['pairing_codes']
 
             # 创建索引
@@ -293,10 +323,6 @@ def connect_mongodb(max_retries: int = 10, retry_delay_seconds: int = 2):
             pages_collection.create_index([('deviceId', 1), ('name', 1)])
             # 列表页按 updatedAt 排序：需要索引避免全表扫描（数据大时会非常慢）
             pages_collection.create_index([('deviceId', 1), ('updatedAt', -1)])
-
-            page_lists_collection.create_index('deviceId')
-            page_lists_collection.create_index([('deviceId', 1), ('isActive', 1)])
-            page_lists_collection.create_index([('deviceId', 1), ('updatedAt', -1)])
 
             pairing_codes_collection.create_index('deviceId', unique=True)
             pairing_codes_collection.create_index('expiresAt', expireAfterSeconds=0)
@@ -814,10 +840,10 @@ def device_status():
             content_mode = device.get('activeContentMode', 'image')
 
             if content_mode == 'template' and template_id and isinstance(template_config, dict):
-                if _should_re_render_template(template_id, template_config, device):
+                if _should_re_render_template(template_id, template_config, device, wake_type):
                     try:
                         print(f'🔄 设备唤醒触发渲染: {clean_id}, 模板={template_id}')
-                        epd_data = render_template(template_id, template_config)
+                        epd_data = render_template_epd_data(template_id, template_config)
                         if epd_data:
                             save_device_image(clean_id, epd_data)
                             new_version = device.get('imageVersion', 0) + 1
@@ -827,6 +853,7 @@ def device_status():
                                     'imageVersion': new_version,
                                     'imageSizeChars': len(epd_data),
                                     'imageSha256': hashlib.sha256(epd_data.encode('utf-8')).hexdigest(),
+                                    'renderSource': 'pillow',
                                     'activeContentUpdatedAt': datetime.utcnow(),
                                     'updatedAt': datetime.utcnow(),
                                 }}
@@ -1219,192 +1246,12 @@ def delete_page(page_id):
         if device_id and not ensure_device_owner(device_id, user):
             return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
 
-        result = pages_collection.delete_one({'pageId': page_id})
-
-        if page_lists_collection is not None:
-            page_lists_collection.update_many(
-                {},
-                {'$pull': {'pages': {'pageId': page_id}}}
-            )
+        pages_collection.delete_one({'pageId': page_id})
 
         print(f'✅ Page deleted: {page_id}')
         return jsonify({'success': True, 'message': 'Page deleted'})
     except Exception as e:
         print(f'❌ Error deleting page: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-# ==================== API: 页面列表管理 ====================
-
-@app.route('/api/page-lists/list/<device_id>', methods=['GET'])
-@login_required
-def get_page_lists(device_id):
-    """获取设备的所有页面列表"""
-    try:
-        user = getattr(request, 'user', None)
-        clean_id = normalize_device_id(device_id)
-        if not ensure_device_owner(clean_id, user):
-            return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
-
-        if page_lists_collection is None:
-            return jsonify({'success': True, 'pageLists': []})
-
-        # 兼容历史数据：deviceId 可能未规范化写入
-        candidates = list({
-            (device_id or '').strip(),
-            (device_id or '').strip().upper(),
-            normalize_device_id(device_id),
-        })
-        candidates = [c for c in candidates if c]
-
-        limit = request.args.get('limit', '200')
-        try:
-            limit = int(limit)
-        except Exception:
-            limit = 200
-        limit = max(1, min(limit, 500))
-
-        page_lists = list(page_lists_collection.find(
-            {'deviceId': {'$in': candidates}},
-            {'_id': 0}
-        ).sort('updatedAt', -1).limit(limit))
-
-        for pl in page_lists:
-            if hasattr(pl.get('createdAt'), 'isoformat'):
-                pl['createdAt'] = pl['createdAt'].isoformat()
-            if hasattr(pl.get('updatedAt'), 'isoformat'):
-                pl['updatedAt'] = pl['updatedAt'].isoformat()
-
-        return jsonify({'success': True, 'pageLists': page_lists})
-    except Exception as e:
-        print(f'❌ Error fetching page lists: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/page-lists/save', methods=['POST'])
-@login_required
-def save_page_list():
-    """保存页面列表"""
-    try:
-        data = request.get_json()
-        device_id = data.get('deviceId')
-        list_id = data.get('listId')
-        list_name = data.get('name', '默认页面列表')
-        pages = data.get('pages', [])
-        interval = data.get('interval', 60)
-        is_active = data.get('isActive', False)
-
-        if not device_id:
-            return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
-
-        clean_id = normalize_device_id(device_id)
-
-        user = getattr(request, 'user', None)
-        if not ensure_device_owner(clean_id, user):
-            return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
-
-        if page_lists_collection is None:
-            return jsonify({'success': False, 'error': 'Database not connected'}), 500
-
-        now = datetime.utcnow()
-
-        if is_active:
-            page_lists_collection.update_many(
-                {'deviceId': clean_id},
-                {'$set': {'isActive': False}}
-            )
-
-        if list_id:
-            result = page_lists_collection.update_one(
-                {'listId': list_id, 'deviceId': clean_id},
-                {'$set': {
-                    'name': list_name,
-                    'pages': pages,
-                    'interval': interval,
-                    'isActive': is_active,
-                    'updatedAt': now
-                }}
-            )
-            if result.matched_count == 0:
-                return jsonify({'success': False, 'error': 'Page list not found'}), 404
-
-            print(f'✅ Page list updated: {list_id}')
-        else:
-            import uuid
-            list_id = str(uuid.uuid4())[:8]
-
-            page_list = {
-                'listId': list_id,
-                'deviceId': clean_id,
-                'name': list_name,
-                'pages': pages,
-                'interval': interval,
-                'isActive': is_active,
-                'createdAt': now,
-                'updatedAt': now
-            }
-            page_lists_collection.insert_one(page_list)
-            print(f'✅ Page list created: {list_id}')
-
-        return jsonify({
-            'success': True,
-            'listId': list_id,
-            'message': 'Page list saved'
-        })
-    except Exception as e:
-        print(f'❌ Error saving page list: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/page-lists/<list_id>', methods=['DELETE'])
-@login_required
-def delete_page_list(list_id):
-    """删除页面列表"""
-    try:
-        if page_lists_collection is None:
-            return jsonify({'success': False, 'error': 'Database not connected'}), 500
-
-        page_list = page_lists_collection.find_one({'listId': list_id})
-        if not page_list:
-            return jsonify({'success': False, 'error': 'Page list not found'}), 404
-
-        user = getattr(request, 'user', None)
-        device_id = page_list.get('deviceId')
-        if device_id and not ensure_device_owner(device_id, user):
-            return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
-
-        result = page_lists_collection.delete_one({'listId': list_id})
-
-        print(f'✅ Page list deleted: {list_id}')
-        return jsonify({'success': True, 'message': 'Page list deleted'})
-    except Exception as e:
-        print(f'❌ Error deleting page list: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/page-lists/active/<device_id>', methods=['GET'])
-@login_required
-def get_active_page_list(device_id):
-    """获取设备当前激活的页面列表"""
-    try:
-        user = getattr(request, 'user', None)
-        clean_id = normalize_device_id(device_id)
-        if not ensure_device_owner(clean_id, user):
-            return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
-
-        if page_lists_collection is None:
-            return jsonify({'success': True, 'pageList': None})
-
-        page_list = page_lists_collection.find_one(
-            {'deviceId': clean_id, 'isActive': True},
-            {'_id': 0}
-        )
-
-        if page_list:
-            if hasattr(page_list.get('createdAt'), 'isoformat'):
-                page_list['createdAt'] = page_list['createdAt'].isoformat()
-            if hasattr(page_list.get('updatedAt'), 'isoformat'):
-                page_list['updatedAt'] = page_list['updatedAt'].isoformat()
-
-        return jsonify({'success': True, 'pageList': page_list})
-    except Exception as e:
-        print(f'❌ Error fetching active page list: {e}')
         return jsonify({'success': False, 'error': str(e)}), 500
 
 # ==================== API: 模板 ====================
@@ -1721,7 +1568,7 @@ def device_set_template():
     为设备设置模板配置，并立即渲染保存 EPD 数据。
     如果前端提供了 imageBase64（Canvas 截图），用它做抖动处理（确保画布=预览=设备三端一致）；
     否则用后端 Pillow 渲染（定时唤醒自动更新场景）。
-    同时保存 templateConfig 供后续定时任务自动更新。
+    同时保存 templateConfig，供设备后续唤醒时按需更新。
     """
     data = request.get_json()
     device_id = data.get('deviceId')
@@ -1738,7 +1585,7 @@ def device_set_template():
     clean_id = normalize_device_id(device_id)
     template_id = str(template_id).strip().lower()
 
-    # ===== 渲染逻辑：前端截图优先，后端渲染兜底 =====
+    # ===== 渲染逻辑：前端截图优先，无截图时后端渲染 =====
     image_base64 = data.get('imageBase64')
     preview_image_b64 = None
     data_4bit_b64 = None
@@ -1756,11 +1603,14 @@ def device_set_template():
             print(f'❌ 前端Canvas截图处理失败: {e}')
             return jsonify({'success': False, 'error': f'Image processing failed: {e}'}), 500
     else:
-        # 无前端截图时（如定时任务/设备唤醒），后端 Pillow 渲染
+        # 无前端截图时，后端 Pillow 渲染
         try:
-            epd_data = render_template(template_id, template_config)
-            if not epd_data:
+            render_result = render_template_with_preview(template_id, template_config)
+            epd_data = render_result.get('epdData')
+            if not epd_data or len(epd_data) != EPD_EXPECTED_CHARS:
                 return jsonify({'success': False, 'error': 'Template rendering failed'}), 500
+            preview_image_b64 = render_result.get('previewImage')
+            data_4bit_b64 = render_result.get('data4bit')
             print(f'✅ 模板后端渲染完成: {clean_id}, EPD长度={len(epd_data)}')
         except Exception as e:
             print(f'❌ 模板渲染失败: {e}')
@@ -1820,70 +1670,6 @@ def device_set_template():
     return jsonify({'success': True, 'message': 'Template rendered and saved'})
 
 
-# ==================== 定时任务：模板自动重渲染 ====================
-
-def scheduled_template_render():
-    """兜底定时任务：为所有配置了模板的设备检查并重渲染过期内容
-
-    此任务作为安全兜底机制（2小时触发一次），主要渲染时机已改为设备唤醒时按需渲染。
-    只渲染真正过期的内容，避免浪费API调用。
-    """
-    if devices_collection is None:
-        return
-
-    try:
-        # 查找所有已配置模板且 claimed=True 的设备
-        cursor = devices_collection.find({
-            'claimed': True,
-            'activeContentMode': 'template',
-            'activeTemplateId': {'$exists': True, '$ne': None},
-            'templateConfig': {'$exists': True},
-        }, {'_id': 0, 'deviceId': 1, 'activeTemplateId': 1, 'templateConfig': 1,
-            'imageVersion': 1, 'activeContentUpdatedAt': 1})
-
-        count = 0
-        skipped = 0
-        for device in cursor:
-            device_id = device['deviceId']
-            template_id = device.get('activeTemplateId')
-            config = device.get('templateConfig', {})
-
-            # 使用统一的判断逻辑
-            if not _should_re_render_template(template_id, config, device):
-                skipped += 1
-                continue
-
-            try:
-                epd_data = render_template(template_id, config)
-                if not epd_data:
-                    continue
-
-                if not save_device_image(device_id, epd_data):
-                    continue
-
-                new_version = device.get('imageVersion', 0) + 1
-                devices_collection.update_one(
-                    {'deviceId': device_id},
-                    {'$set': {
-                        'imageVersion': new_version,
-                        'imageSizeChars': len(epd_data),
-                        'imageSha256': hashlib.sha256(epd_data.encode('utf-8')).hexdigest(),
-                        'activeContentUpdatedAt': datetime.utcnow(),
-                        'updatedAt': datetime.utcnow(),
-                    }}
-                )
-                count += 1
-                print(f'🔄 兜底渲染完成: {device_id}, 模板={template_id}, 新版本={new_version}')
-            except Exception as e:
-                print(f'⚠️ 兜底渲染失败: {device_id} -> {e}')
-                continue
-
-        if count > 0 or skipped > 0:
-            print(f'🔄 兜底渲染任务完成: 渲染 {count} 个，跳过 {skipped} 个')
-    except Exception as e:
-        print(f'❌ 兜底渲染任务异常: {e}')
-
-
 # ==================== 健康检查 ====================
 
 @app.route('/api/health', methods=['GET'])
@@ -1909,19 +1695,6 @@ def init_app():
     print(f'📁 Image Storage: {DATA_DIR}\n')
 
     connect_mongodb()
-
-    # 启动兜底定时任务：每2小时检查并渲染需要更新的模板（主要渲染时机已改为设备唤醒时按需渲染）
-    if not scheduler.running:
-        scheduler.add_job(
-            scheduled_template_render,
-            'interval',
-            hours=2,
-            id='template_render_job',
-            replace_existing=True,
-            max_instances=1
-        )
-        scheduler.start()
-        print('⏰ APScheduler started: template render backup every 2 hours\n')
 
 # 初始化
 init_app()

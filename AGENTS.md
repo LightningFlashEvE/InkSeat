@@ -55,6 +55,7 @@ Loader_esp32wf/
 | 需要修改的内容 | 文件 | 位置 |
 |---|---|---|
 | 云端 IP/端口 | `http_update.h` | `CLOUD_API_HOST` / `CLOUD_API_PORT` |
+| 设备状态查询超时 | `http_update.h` | `CLOUD_API_TIMEOUT_MS`（默认 30s，覆盖动态模板按需渲染） |
 | Deep-sleep 间隔 | `http_update.h` | `DEEP_SLEEP_INTERVAL_HOURS`（默认 12h 回退值）/ NVS `slpInt`（云端动态下发秒数） |
 | 设备码模式 | `http_update.h` | `DEVICE_ID_MODE`（默认 2=后6位） |
 | 长按配网阈值 | `Loader_esp32wf.ino` | `WIFI_RECONFIG_HOLD_MS`（冷启动默认 3000ms）/ `WIFI_RECONFIG_POST_WAKE_CONFIRM_MS`（GPIO唤醒后默认 1200ms） |
@@ -185,7 +186,7 @@ ESP32-C3-WROOM-02U 无 PSRAM，**堆最大连续块约 115KB**（实测 `largest
 AP 配网热点 `EPD-XXXXXX` 默认**开放网络**（`PROVISIONING_AP_PSK` 留空）；若需 WPA2 可设 ≥8 字符密码，屏上与二维码会同步显示。开放热点使用最简 `WiFi.softAP(ssid)`，与历史可用版本一致。墨水屏使用 **满屏 AP 配网页** 显示 WiFi 二维码、热点名与 `192.168.4.1`；`wifi_config.h` 的 `DNSServer` 将常见 Captive Portal 探测路径统一返回配网页。自动弹出为 best-effort，须保留 `192.168.4.1` 备用入口。
 
 ### 设备状态遥测
-固件每次调用 `/api/device/status` 时除 `deviceId` 外，还会上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`、`wakeType`、`wakeCause`、`currentSleepSeconds`。后端保存到 `device_status_collection`，并由 `/api/devices` 返回给前端设备卡片显示当前内容、唤醒间隔、预计自动唤醒时间和最后唤醒信息。`wakeType=manual` 更新 `lastManualWake`，`wakeType=auto` 更新 `lastAutoWake`。云端会在响应中返回按 `activeContentMode` / `activeTemplateId` 计算的 `nextSleepSeconds > 0`，设备保存到 NVS `device/slpInt` 并在本次回睡时使用。修改字段名时必须同步 `http_update.h`、`cloud_server/backend/app.py` 和 `cloud_server/frontend/devices.js`。当前内置模板为时钟、天气、日历、待办、每日一言、二维码；计数器和空白页不再作为内置模板入口。
+固件每次调用 `/api/device/status` 时除 `deviceId` 外，还会上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`、`wakeType`、`wakeCause`、`currentSleepSeconds`。后端保存到 `device_status_collection`，并由 `/api/devices` 返回给前端设备卡片显示当前内容、唤醒间隔、预计自动唤醒时间和最后唤醒信息。`wakeType=manual` 更新 `lastManualWake`，`wakeType=auto` 更新 `lastAutoWake`，但设备卡片只汇总显示最后唤醒信息，不单独列出手动/自动唤醒行。云端会在响应中返回按 `activeContentMode` / `activeTemplateId` 计算的 `nextSleepSeconds > 0`，设备保存到 NVS `device/slpInt` 并在本次回睡时使用。动态模板只在设备手动或定时唤醒调用 `/api/device/status` 时按需重渲染；天气每次唤醒刷新，每日一言在 `wakeType=manual` 时强制换一句，定时唤醒按 `Asia/Shanghai` 日历日刷新，日历也按 `Asia/Shanghai` 日历日刷新；固件状态查询超时必须覆盖后端按需渲染耗时，避免设备先超时回睡；后端不再启动后台兜底渲染任务。修改字段名时必须同步 `http_update.h`、`cloud_server/backend/app.py` 和 `cloud_server/frontend/devices.js`。当前内置模板为时钟、天气、日历、待办、每日一言、二维码；计数器和空白页不再作为内置模板入口。
 
 ### 未配网开机显示
 当设备没有本地 WiFi 配置时，`startAPMode()` 内会先渲染并显示 AP 配网页，再启动 `softAP`；Captive Portal Web/DNS 延后到手机拿到 IP 且刷屏结束后。`loop()` 不再补刷 AP 页面，避免重复刷新墨水屏或引入第二条渲染路径。
@@ -210,7 +211,7 @@ AP 配网热点 `EPD-XXXXXX` 默认**开放网络**（`PROVISIONING_AP_PSK` 留�
 | WiFi / HTTPClient / SPIFFS / Preferences / WebServer | 随 ESP32 Arduino 包内置 |
 
 ### 云端
-`flask==3.0.0`、`flask-cors==4.0.0`、`pymongo`（不固定版本）、`python-dotenv==1.0.0`、`gunicorn==21.2.0`、`numpy==1.26.4`、`Pillow==10.3.0`、`opencv-python-headless==4.8.1.78`。Docker 部署同时启动 `mongo:8.2.6` 容器。注意：`paho-mqtt` 已移除，当前架构不使用 MQTT。
+`flask==3.0.0`、`flask-cors==4.0.0`、`pymongo`（不固定版本）、`python-dotenv==1.0.0`、`gunicorn==21.2.0`、`numpy==1.26.4`、`Pillow==10.3.0`、`opencv-python-headless==4.8.1.78`。Docker 部署同时启动 `mongo:8.2.6` 容器。后端 Dockerfile 还会安装 `fonts-noto-cjk` / `fonts-noto-core`，动态模板依赖这些字体渲染中文与常用符号；字体或模板渲染变更后必须重新 `docker compose build --no-cache`，不得依赖 Pillow 默认字体。注意：`paho-mqtt` 已移除，当前架构不使用 MQTT。
 
 ## 11. 参考资料
 
