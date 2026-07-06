@@ -4679,6 +4679,167 @@ html[data-theme="light"] .meeting-donut::after {
     border-color: rgba(32, 90, 110, 0.12) !important;
 }
 
+/* Light theme page-level refinements for nameplate dispatch and template editor. */
+html.theme-light .nameplates-page .brand-mark,
+html[data-theme="light"] .nameplates-page .brand-mark {
+    background: #ffffff !important;
+    color: #0b1720 !important;
+    border-color: rgba(36, 63, 76, 0.18) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88), 0 10px 24px rgba(42, 86, 106, 0.10) !important;
+}
+
+html.theme-light .nameplates-page .brand-name,
+html.theme-light .nameplates-page .hero-title h1,
+html.theme-light .nameplates-page .section-header h2,
+html.theme-light .nameplates-page .nameplate-device-name,
+html.theme-light .nameplates-page .nameplate-preview-row strong,
+html.theme-light .nameplates-page .activity-row strong,
+html.theme-light .control-page .sidebar-header h3,
+html.theme-light .control-page .panel-section h4,
+html.theme-light .control-page .saved-template-row strong,
+html.theme-light .control-page .mode-btn .label,
+html.theme-light .control-page .template-card .name,
+html[data-theme="light"] .nameplates-page .brand-name,
+html[data-theme="light"] .nameplates-page .hero-title h1,
+html[data-theme="light"] .nameplates-page .section-header h2,
+html[data-theme="light"] .nameplates-page .nameplate-device-name,
+html[data-theme="light"] .nameplates-page .nameplate-preview-row strong,
+html[data-theme="light"] .nameplates-page .activity-row strong,
+html[data-theme="light"] .control-page .sidebar-header h3,
+html[data-theme="light"] .control-page .panel-section h4,
+html[data-theme="light"] .control-page .saved-template-row strong,
+html[data-theme="light"] .control-page .mode-btn .label,
+html[data-theme="light"] .control-page .template-card .name {
+    color: #0b1720 !important;
+}
+
+html.theme-light .nameplates-page .brand-sub,
+html.theme-light .nameplates-page .nav-label,
+html.theme-light .nameplates-page .hero-title p,
+html.theme-light .nameplates-page .section-header p,
+html.theme-light .nameplates-page .ai-upload-note,
+html.theme-light .nameplates-page .activity-row span,
+html.theme-light .nameplates-page .nameplate-device-code,
+html.theme-light .control-page .status-item,
+html.theme-light .control-page .toolbar label,
+html.theme-light .control-page .toolbar-group span,
+html.theme-light .control-page .form-group label,
+html.theme-light .control-page .page-type,
+html.theme-light .control-page .saved-template-row span,
+html.theme-light .control-page .crop-note,
+html.theme-light .control-page .filepond--drop-label,
+html[data-theme="light"] .nameplates-page .brand-sub,
+html[data-theme="light"] .nameplates-page .nav-label,
+html[data-theme="light"] .nameplates-page .hero-title p,
+html[data-theme="light"] .nameplates-page .section-header p,
+html[data-theme="light"] .nameplates-page .ai-upload-note,
+html[data-theme="light"] .nameplates-page .activity-row span,
+html[data-theme="light"] .nameplates-page .nameplate-device-code,
+html[data-theme="light"] .control-page .status-item,
+html[data-theme="light"] .control-page .toolbar label,
+html[data-theme="light"] .control-page .toolbar-group span,
+html[data-theme="light"] .control-page .form-group label,
+html[data-theme="light"] .control-page .page-type,
+html[data-theme="light"] .control-page .saved-template-row span,
+html[data-theme="light"] .control-page .crop-note,
+html[data-theme="light"] .control-page .filepond--drop-label {
+    color: rgba(11, 23, 32, 0.62) !important;
+}
+
+html.theme-light .nameplates-page .nav-item,
+html[data-theme="light"] .nameplates-page .nav-item {
+    color: rgba(11, 23, 32, 0.72) !important;
+    background: transparent !important;
+    border-color: transparent !important;
+    box-shadow: none !important;
+}
+
+html.theme-light .nameplates-page .nav-item:hover,
+html[data-theme="light"] .nameplates-page .nav-item:hover {
+    color: #0b1720 !important;
+    background: #eef7fb !important;
+    border-color: rgba(36, 63, 76, 0.14) !important;
+}
+
+html.theme-light .nameplates-page .nav-item.active,
+html[data-theme="light"] .nameplates-page .nav-item.active {
+    color: #176bd8 !important;
+    background: #e7f2ff !important;
+    border-color: rgba(22, 135, 242, 0.40) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.82), 0 10px 24px rgba(42, 86, 106, 0.10) !important;
+}
+
+html.theme-light .nameplates-page .nav-foot,
+html.theme-light .nameplates-page .logout-btn,
+html.theme-light .nameplates-page .nameplate-compose textarea,
+html.theme-light .nameplates-page .nameplate-options input,
+html.theme-light .nameplates-page .nameplate-options select,
+html.theme-light .nameplates-page .ai-upload-box input,
+html.theme-light .nameplates-page .activity-row,
+html.theme-light .nameplates-page .nameplate-preview-list,
+html.theme-light .nameplates-page .nameplate-device-row,
+html.theme-light .nameplates-page .nameplate-device-empty,
+html.theme-light .control-page .top-bar,
+html.theme-light .control-page .toolbar,
+html.theme-light .control-page .status-bar,
+html.theme-light .control-page .filepond--panel-root,
+html.theme-light .control-page .filepond--item-panel,
+html[data-theme="light"] .nameplates-page .nav-foot,
+html[data-theme="light"] .nameplates-page .logout-btn,
+html[data-theme="light"] .nameplates-page .nameplate-compose textarea,
+html[data-theme="light"] .nameplates-page .nameplate-options input,
+html[data-theme="light"] .nameplates-page .nameplate-options select,
+html[data-theme="light"] .nameplates-page .ai-upload-box input,
+html[data-theme="light"] .nameplates-page .activity-row,
+html[data-theme="light"] .nameplates-page .nameplate-preview-list,
+html[data-theme="light"] .nameplates-page .nameplate-device-row,
+html[data-theme="light"] .nameplates-page .nameplate-device-empty,
+html[data-theme="light"] .control-page .top-bar,
+html[data-theme="light"] .control-page .toolbar,
+html[data-theme="light"] .control-page .status-bar,
+html[data-theme="light"] .control-page .filepond--panel-root,
+html[data-theme="light"] .control-page .filepond--item-panel {
+    background: #ffffff !important;
+    border-color: rgba(36, 63, 76, 0.12) !important;
+    color: #0b1720 !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88) !important;
+}
+
+html.theme-light .control-page .main-layout,
+html[data-theme="light"] .control-page .main-layout {
+    background: #f2f7f9 !important;
+    background-image: none !important;
+}
+
+html.theme-light .control-page .canvas-area,
+html[data-theme="light"] .control-page .canvas-area {
+    background: #eef5f7 !important;
+    background-image: none !important;
+}
+
+html.theme-light .control-page .left-sidebar,
+html.theme-light .control-page .right-panel,
+html[data-theme="light"] .control-page .left-sidebar,
+html[data-theme="light"] .control-page .right-panel {
+    background: #ffffff !important;
+    border-color: rgba(36, 63, 76, 0.12) !important;
+    color: #0b1720 !important;
+}
+
+html.theme-light .control-page .filepond--label-action,
+html[data-theme="light"] .control-page .filepond--label-action {
+    color: #176bd8 !important;
+    background-color: transparent !important;
+    text-decoration-color: rgba(23, 107, 216, 0.48) !important;
+}
+
+html.theme-light .control-page .cropper-line,
+html.theme-light .control-page .cropper-point,
+html[data-theme="light"] .control-page .cropper-line,
+html[data-theme="light"] .control-page .cropper-point {
+    background-color: #176bd8 !important;
+}
+
 html:not(.theme-light):not([data-theme="light"]) {
     background: #111315 !important;
     background-image: none !important;
