@@ -20,7 +20,7 @@ var imageFilePond = null;
 var filePondPluginsRegistered = false;
 var imageEditingAssetsPromise = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260706opt2';
+const CONTROL_LAZY_ASSET_VERSION = '20260706role1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_COMPANY_CN = '现象创新（深圳）科技有限公司';
 const NAMEPLATE_COMPANY_EN = 'Pheno Innovations Technology Co., Ltd.';
@@ -856,9 +856,10 @@ function drawNameplateAsset(ctx, key, x, y, width, height) {
     return true;
 }
 
-function drawPhenoFooterNameplate(ctx, width, height, name, style, companyText) {
+function drawPhenoFooterNameplate(ctx, width, height, name, style, roleText, companyText) {
     const accent = style === 'formal_green' ? '#00ff00' : '#ff0000';
     const footerTop = 385;
+    const hasRole = Boolean(roleText);
 
     ctx.fillStyle = accent;
     ctx.fillRect(0, 0, width, footerTop);
@@ -867,10 +868,16 @@ function drawPhenoFooterNameplate(ctx, width, height, name, style, companyText) 
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const nameSize = fitCanvasFontSizeWithWeight(ctx, name, 590, 148, 72, '700');
+    const nameSize = fitCanvasFontSizeWithWeight(ctx, name, 590, hasRole ? 118 : 148, hasRole ? 62 : 72, '700');
     ctx.font = nameplateCanvasFont(nameSize, '700', name);
     ctx.fillStyle = 'white';
-    ctx.fillText(name, width / 2, 184);
+    ctx.fillText(name, width / 2, hasRole ? 155 : 184);
+
+    if (hasRole) {
+        const roleSize = fitCanvasFontSizeWithWeight(ctx, roleText, 590, 48, 28, '400');
+        ctx.font = nameplateCanvasFont(roleSize, '400', roleText);
+        ctx.fillText(roleText, width / 2, 276);
+    }
 
     drawNameplateAsset(ctx, 'blackLogo', 108, 410, 181, 39);
 
@@ -882,8 +889,9 @@ function drawPhenoFooterNameplate(ctx, width, height, name, style, companyText) 
     ctx.fillText(companyText, 326, 433);
 }
 
-function drawPhenoGreenBandNameplate(ctx, width, height, name) {
+function drawPhenoGreenBandNameplate(ctx, width, height, name, roleText) {
     const bandTop = 361;
+    const hasRole = Boolean(roleText);
     ctx.fillStyle = 'white';
     ctx.fillRect(0, 0, width, bandTop);
     ctx.fillStyle = '#00ff00';
@@ -891,10 +899,16 @@ function drawPhenoGreenBandNameplate(ctx, width, height, name) {
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const nameSize = fitCanvasFontSizeWithWeight(ctx, name, 590, 150, 72, '700');
+    const nameSize = fitCanvasFontSizeWithWeight(ctx, name, 590, hasRole ? 118 : 150, hasRole ? 62 : 72, '700');
     ctx.font = nameplateCanvasFont(nameSize, '700', name);
     ctx.fillStyle = 'black';
-    ctx.fillText(name, width / 2, 184);
+    ctx.fillText(name, width / 2, hasRole ? 155 : 184);
+
+    if (hasRole) {
+        const roleSize = fitCanvasFontSizeWithWeight(ctx, roleText, 590, 48, 28, '400');
+        ctx.font = nameplateCanvasFont(roleSize, '400', roleText);
+        ctx.fillText(roleText, width / 2, 276);
+    }
 
     drawNameplateAsset(ctx, 'whiteLogo', 276, 390, 248, 54);
 }
@@ -965,9 +979,9 @@ function renderNameplateTemplate(ctx, width, height) {
     if (style === 'formal_blue') {
         drawPhenoProfileNameplate(ctx, width, height, name, title, subtitle || NAMEPLATE_COMPANY_EN);
     } else if (style === 'plain') {
-        drawPhenoGreenBandNameplate(ctx, width, height, name);
+        drawPhenoGreenBandNameplate(ctx, width, height, name, title);
     } else {
-        drawPhenoFooterNameplate(ctx, width, height, name, style, subtitle || NAMEPLATE_COMPANY_CN);
+        drawPhenoFooterNameplate(ctx, width, height, name, style, title, subtitle || NAMEPLATE_COMPANY_CN);
     }
 }
 

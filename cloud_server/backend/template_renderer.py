@@ -555,14 +555,19 @@ def _draw_left_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str,
 
 
 def _draw_pheno_footer_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, name: str,
-                                 style: str, company_text: str) -> None:
+                                 style: str, role_text: str, company_text: str) -> None:
     accent = (0, 255, 0) if style == 'formal_green' else (255, 0, 0)
     footer_top = 385
+    has_role = bool(role_text)
     draw.rectangle((0, 0, 799, footer_top - 1), fill=accent)
     draw.rectangle((0, footer_top, 799, 479), fill=(255, 255, 255))
 
-    font_name = _fit_single_line_font(draw, name, 590, 148, 72)
-    _draw_text_centered(draw, name, 400, 184, font_name, (255, 255, 255))
+    font_name = _fit_single_line_font(draw, name, 590, 118 if has_role else 148, 62 if has_role else 72)
+    _draw_text_centered(draw, name, 400, 155 if has_role else 184, font_name, (255, 255, 255))
+
+    if has_role:
+        font_role = _fit_single_line_font(draw, role_text, 590, 48, 28, bold=False)
+        _draw_text_centered(draw, role_text, 400, 276, font_role, (255, 255, 255))
 
     _paste_nameplate_asset(img, 'pheno-logo-black.png', 108, 410, 181, 39)
 
@@ -570,13 +575,19 @@ def _draw_pheno_footer_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, na
     _draw_left_text(draw, (326, 433), company_text, font_company, (0, 0, 0), anchor='lm')
 
 
-def _draw_pheno_green_band_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, name: str) -> None:
+def _draw_pheno_green_band_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, name: str,
+                                     role_text: str) -> None:
     band_top = 361
+    has_role = bool(role_text)
     draw.rectangle((0, 0, 799, band_top - 1), fill=(255, 255, 255))
     draw.rectangle((0, band_top, 799, 479), fill=(0, 255, 0))
 
-    font_name = _fit_single_line_font(draw, name, 590, 150, 72)
-    _draw_text_centered(draw, name, 400, 184, font_name, (0, 0, 0))
+    font_name = _fit_single_line_font(draw, name, 590, 118 if has_role else 150, 62 if has_role else 72)
+    _draw_text_centered(draw, name, 400, 155 if has_role else 184, font_name, (0, 0, 0))
+
+    if has_role:
+        font_role = _fit_single_line_font(draw, role_text, 590, 48, 28, bold=False)
+        _draw_text_centered(draw, role_text, 400, 276, font_role, (0, 0, 0))
 
     _paste_nameplate_asset(img, 'pheno-logo-white.png', 276, 390, 248, 54)
 
@@ -642,9 +653,9 @@ def _render_nameplate_image(config: Dict[str, Any]) -> Image.Image:
     if style == 'formal_blue':
         _draw_pheno_profile_nameplate(img, draw, name, title, subtitle or NAMEPLATE_COMPANY_EN)
     elif style == 'plain':
-        _draw_pheno_green_band_nameplate(img, draw, name)
+        _draw_pheno_green_band_nameplate(img, draw, name, title)
     else:
-        _draw_pheno_footer_nameplate(img, draw, name, style, subtitle or NAMEPLATE_COMPANY_CN)
+        _draw_pheno_footer_nameplate(img, draw, name, style, title, subtitle or NAMEPLATE_COMPANY_CN)
 
     return img
 

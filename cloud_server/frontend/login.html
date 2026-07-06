@@ -127,8 +127,8 @@
             color: #38a169;
         }
     </style>
-    <script src="theme.js?v=20260706opt2"></script>
-    <link rel="stylesheet" href="ui.css?v=20260706opt2">
+    <script src="theme.js?v=20260706role1"></script>
+    <link rel="stylesheet" href="ui.css?v=20260706role1">
 </head>
 <body class="login-page">
     <div class="card">
@@ -154,7 +154,7 @@
         <div id="status" class="status">首次使用请先注册账号</div>
     </div>
 
-    <script src="auth.js?v=20260706opt2"></script>
+    <script src="auth.js?v=20260706role1"></script>
     <script>
         function setStatus(msg, type) {
             const el = document.getElementById('status');
@@ -209,7 +209,7 @@
                     setAuth(data.token, data.user);
                     setStatus('登录成功，正在跳转...', 'success');
                     setTimeout(() => {
-                        window.location.href = 'index.html?v=20260706opt2';
+                        window.location.href = 'index.html?v=20260706role1';
                     }, 600);
                 } else {
                     setStatus(data.error || '登录失败', 'error');

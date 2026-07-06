@@ -497,6 +497,6 @@ function logout() {
             localStorage.removeItem('authToken');
             localStorage.removeItem('authUser');
         }
-        window.location.href = 'login.html?v=20260706opt2';
+        window.location.href = 'login.html?v=20260706role1';
     }
 }
