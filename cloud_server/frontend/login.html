@@ -2,8 +2,36 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>用户登录 - ESP32 E-Paper Cloud</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>用户登录</title>
     <link rel="icon" href="data:;base64,=">
+    <script>
+        (function () {
+            try {
+                if (localStorage.getItem('meetingThemeMode') === 'light') {
+                    document.documentElement.classList.add('theme-light');
+                    document.documentElement.dataset.theme = 'light';
+                    document.documentElement.style.colorScheme = 'light';
+                }
+            } catch (e) {}
+        }());
+    </script>
+    <style>
+        html.theme-light,
+        html[data-theme="light"] {
+            background: #eef5f7 !important;
+            color-scheme: light;
+        }
+
+        html.theme-light body,
+        html[data-theme="light"] body {
+            color: #0b1720 !important;
+            background: #eef5f7 !important;
+        }
+    </style>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -99,11 +127,13 @@
             color: #38a169;
         }
     </style>
+    <script src="theme.js?v=20260706opt2"></script>
+    <link rel="stylesheet" href="ui.css?v=20260706opt2">
 </head>
-<body>
+<body class="login-page">
     <div class="card">
         <div class="title">
-            <h1>ESP32 E-Paper 云控制</h1>
+            <h1>会议牌管理</h1>
             <p>登录后管理属于你的设备</p>
         </div>
 
@@ -124,7 +154,7 @@
         <div id="status" class="status">首次使用请先注册账号</div>
     </div>
 
-    <script src="auth.js"></script>
+    <script src="auth.js?v=20260706opt2"></script>
     <script>
         function setStatus(msg, type) {
             const el = document.getElementById('status');
@@ -179,7 +209,7 @@
                     setAuth(data.token, data.user);
                     setStatus('登录成功，正在跳转...', 'success');
                     setTimeout(() => {
-                        window.location.href = 'index.html';
+                        window.location.href = 'index.html?v=20260706opt2';
                     }, 600);
                 } else {
                     setStatus(data.error || '登录失败', 'error');

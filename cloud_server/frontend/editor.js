@@ -12,7 +12,82 @@ var deviceId = '';
 var pages = [];
 var templates = [];
 var currentPageId = null;
-var currentTemplateId = null;
+var currentTemplateId = 'nameplate';
+var activeSavedNameplateTemplateId = '';
+var savedNameplateTemplates = [];
+var imageCropper = null;
+var imageFilePond = null;
+var filePondPluginsRegistered = false;
+var imageEditingAssetsPromise = null;
+const EPD_CROP_ASPECT_RATIO = 800 / 480;
+const CONTROL_LAZY_ASSET_VERSION = '20260706opt2';
+const NAMEPLATE_TEMPLATE_ID = 'nameplate';
+const NAMEPLATE_COMPANY_CN = '现象创新（深圳）科技有限公司';
+const NAMEPLATE_COMPANY_EN = 'Pheno Innovations Technology Co., Ltd.';
+const NAMEPLATE_BRAND_ASSET_PATHS = {
+    blackLogo: `assets/nameplate/pheno-logo-black.png?v=${CONTROL_LAZY_ASSET_VERSION}`,
+    whiteLogo: `assets/nameplate/pheno-logo-white.png?v=${CONTROL_LAZY_ASSET_VERSION}`,
+    mark: `assets/nameplate/pheno-mark-square.png?v=${CONTROL_LAZY_ASSET_VERSION}`,
+};
+const nameplateBrandAssets = {};
+const NAMEPLATE_TEMPLATE_FALLBACK = {
+    templateId: NAMEPLATE_TEMPLATE_ID,
+    name: '会议名牌',
+    icon: 'meeting-nameplate',
+    description: 'Pheno 品牌姓名牌',
+    preview: '/templates/nameplate.png',
+    defaultData: {
+        type: 'template',
+        template: NAMEPLATE_TEMPLATE_ID,
+        name: '',
+        backgroundStyle: 'formal_red',
+        title: '',
+        subtitle: ''
+    }
+};
+const BUILTIN_NAMEPLATE_TEMPLATES = [
+    {
+        templateId: '__builtin_pheno_red',
+        name: 'Pheno 红色底栏',
+        builtin: true,
+        templateConfig: { backgroundStyle: 'formal_red', title: '', subtitle: '', sleepIntervalSeconds: 43200 },
+    },
+    {
+        templateId: '__builtin_pheno_green',
+        name: 'Pheno 绿色底栏',
+        builtin: true,
+        templateConfig: { backgroundStyle: 'formal_green', title: '', subtitle: '', sleepIntervalSeconds: 43200 },
+    },
+    {
+        templateId: '__builtin_pheno_band',
+        name: 'Pheno 绿色横幅',
+        builtin: true,
+        templateConfig: { backgroundStyle: 'plain', title: '', subtitle: '', sleepIntervalSeconds: 43200 },
+    },
+    {
+        templateId: '__builtin_pheno_profile',
+        name: 'Pheno 职务名片',
+        builtin: true,
+        templateConfig: { backgroundStyle: 'formal_blue', title: 'Technical Expert', subtitle: '', sleepIntervalSeconds: 43200 },
+    },
+];
+
+function loadNameplateBrandAssets() {
+    if (typeof Image === 'undefined') return;
+    Object.entries(NAMEPLATE_BRAND_ASSET_PATHS).forEach(([key, src]) => {
+        if (nameplateBrandAssets[key]) return;
+        const img = new Image();
+        img.onload = () => {
+            if (currentMode === 'template' && currentTemplateId === NAMEPLATE_TEMPLATE_ID) {
+                renderCanvas();
+            }
+        };
+        img.src = src;
+        nameplateBrandAssets[key] = img;
+    });
+}
+
+loadNameplateBrandAssets();
 
 // 注意：以下变量在 app.js 中已定义，这里不再声明
 // currentMode, sourceImage, textItems, mixedTextItems,
@@ -20,35 +95,64 @@ var currentTemplateId = null;
 // cropX, cropY, mixedCropX, mixedCropY, processedImageData, redChannelData
 
 // ==================== 初始化 ====================
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
     console.log('[Editor] 开始初始化...');
 
     try {
-        // 从URL获取设备ID
-        const params = new URLSearchParams(window.location.search);
-        deviceId = params.get('deviceId') || '';
+        initEditorShell();
+        runAfterFirstPaint(initEditorDataAndControls);
+    } catch (error) {
+        console.error('[Editor] 初始化错误:', error);
+        log('初始化错误: ' + error.message, 'error');
+    }
+});
 
-        const deviceIdInput = document.getElementById('deviceId');
-        if (deviceIdInput) deviceIdInput.value = deviceId;
+function runAfterFirstPaint(callback) {
+    const raf = typeof window.requestAnimationFrame === 'function'
+        ? window.requestAnimationFrame.bind(window)
+        : (fn) => window.setTimeout(fn, 0);
+    raf(() => window.setTimeout(callback, 0));
+}
 
-        const deviceNameDisplay = document.getElementById('deviceNameDisplay');
-        const statusDot = document.getElementById('statusDot');
+function initEditorShell() {
+    // 从URL获取设备ID
+    const params = new URLSearchParams(window.location.search);
+    deviceId = params.get('deviceId') || '';
 
-        if (deviceId) {
-            if (deviceNameDisplay) deviceNameDisplay.textContent = deviceId;
-            if (statusDot) statusDot.classList.add('online');
-        } else {
-            if (deviceNameDisplay) deviceNameDisplay.textContent = '未选择设备';
-            if (statusDot) statusDot.classList.add('offline');
-        }
+    const deviceIdInput = document.getElementById('deviceId');
+    if (deviceIdInput) deviceIdInput.value = deviceId;
 
-        // 初始化
-        await loadTemplates();
-        await loadPages();
+    const deviceNameDisplay = document.getElementById('deviceNameDisplay');
+    const statusDot = document.getElementById('statusDot');
+
+    if (deviceId) {
+        if (deviceNameDisplay) deviceNameDisplay.textContent = deviceId;
+        if (statusDot) statusDot.classList.add('online');
+    } else {
+        if (deviceNameDisplay) deviceNameDisplay.textContent = '模板设计';
+        if (statusDot) statusDot.classList.add('online');
+    }
+
+    templates = [NAMEPLATE_TEMPLATE_FALLBACK];
+    renderTemplateGrid();
+    renderModalTemplateGrid();
+    updateDeviceBoundControls();
+    ensureNameplateOnlyMode({ silent: true });
+}
+
+async function initEditorDataAndControls() {
+    try {
         initDropZones();
         initProcessOptions();
         updateResolution();
+        updateImageStageVisibility();
         initCanvasEvents();  // 绑定画布事件
+
+        await loadTemplates();
+        ensureNameplateOnlyMode({ silent: true, skipRender: true });
+        await loadSavedNameplateTemplates({ applyFirst: !hasSelectedDevice(), silent: true });
+        await loadPages();
+        updateDeviceBoundControls();
 
         console.log('[Editor] 初始化完成');
         log('系统初始化完成');
@@ -56,7 +160,65 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.error('[Editor] 初始化错误:', error);
         log('初始化错误: ' + error.message, 'error');
     }
-});
+}
+
+function hasSelectedDevice() {
+    const inputValue = document.getElementById('deviceId')?.value?.trim() || '';
+    return Boolean((deviceId || inputValue).trim());
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function escapeJsString(value) {
+    return String(value ?? '')
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r');
+}
+
+function updateDeviceBoundControls() {
+    const selected = hasSelectedDevice();
+    document.body?.classList.toggle('template-design-mode', !selected);
+
+    const deviceNameDisplay = document.getElementById('deviceNameDisplay');
+    const statusDot = document.getElementById('statusDot');
+    if (!selected) {
+        if (deviceNameDisplay) deviceNameDisplay.textContent = '模板设计';
+        if (statusDot) {
+            statusDot.classList.remove('offline');
+            statusDot.classList.add('online');
+        }
+    }
+
+    document.querySelectorAll('[data-requires-device]').forEach(button => {
+        button.disabled = !selected;
+        button.title = selected ? '' : '单台保存/发布请从设备页进入';
+    });
+
+    document.querySelectorAll('[data-requires-device-group]').forEach(group => {
+        group.hidden = !selected;
+    });
+
+    const list = document.getElementById('pageList');
+    if (!selected && list) {
+        list.innerHTML = `
+            <div class="empty-state" style="text-align: center; padding: 40px 20px; color: var(--text-light);">
+                <div style="font-size: 2em; margin-bottom: 10px;">📝</div>
+                <p>模板设计模式</p>
+                <p style="font-size: 0.85em;">批量下发在名单下发页，单台编辑从设备页进入</p>
+            </div>
+        `;
+    }
+}
 
 // ==================== 模板管理 ====================
 async function loadTemplates() {
@@ -66,12 +228,60 @@ async function loadTemplates() {
         });
         const result = await response.json();
         if (result.success) {
-            templates = result.templates;
+            templates = filterNameplateTemplates(result.templates);
             renderTemplateGrid();
             renderModalTemplateGrid();
         }
     } catch (e) {
         console.error('Failed to load templates:', e);
+    }
+
+    if (!templates.length) {
+        templates = [NAMEPLATE_TEMPLATE_FALLBACK];
+        renderTemplateGrid();
+        renderModalTemplateGrid();
+    }
+}
+
+function filterNameplateTemplates(sourceTemplates) {
+    return (Array.isArray(sourceTemplates) ? sourceTemplates : [])
+        .filter(t => t && t.templateId === NAMEPLATE_TEMPLATE_ID)
+        .map(t => ({
+            ...NAMEPLATE_TEMPLATE_FALLBACK,
+            ...t,
+            name: t.name || NAMEPLATE_TEMPLATE_FALLBACK.name,
+            description: NAMEPLATE_TEMPLATE_FALLBACK.description
+        }));
+}
+
+function getNameplateTemplate() {
+    return getLoadedTemplate(NAMEPLATE_TEMPLATE_ID) || NAMEPLATE_TEMPLATE_FALLBACK;
+}
+
+function ensureNameplateOnlyMode(options = {}) {
+    currentMode = 'template';
+    currentTemplateId = NAMEPLATE_TEMPLATE_ID;
+
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === 'template');
+    });
+
+    ['imageModeControls', 'textModeControls', 'mixedModeControls', 'weatherTemplateConfig', 'quoteTemplateConfig', 'qrcodeTemplateConfig'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.classList.add('hidden');
+    });
+
+    const templateControls = document.getElementById('templateModeControls');
+    if (templateControls) templateControls.classList.remove('hidden');
+
+    updateTemplateConfigVisibility(NAMEPLATE_TEMPLATE_ID);
+    updateImageStageVisibility();
+
+    if (!options.skipRender) {
+        renderCanvas();
+    }
+    if (!options.silent) {
+        log('已切换到名牌模板设计', 'success');
     }
 }
 
@@ -81,7 +291,7 @@ function renderTemplateGrid() {
 
     grid.innerHTML = templates.map(t => `
         <div class="template-card" onclick="selectTemplate('${t.templateId}')">
-            <div class="icon">${t.icon}</div>
+            ${renderTemplateIcon(t)}
             <div class="name">${t.name}</div>
             <div class="desc">${t.description}</div>
         </div>
@@ -94,11 +304,23 @@ function renderModalTemplateGrid() {
 
     grid.innerHTML = templates.map(t => `
         <div class="template-card" onclick="createPageFromTemplate('${t.templateId}')">
-            <div class="icon">${t.icon}</div>
+            ${renderTemplateIcon(t)}
             <div class="name">${t.name}</div>
             <div class="desc">${t.description}</div>
         </div>
     `).join('');
+}
+
+function renderTemplateIcon(template) {
+    if (template?.templateId === NAMEPLATE_TEMPLATE_ID || template?.icon === 'meeting-nameplate') {
+        return `
+            <div class="icon nameplate-template-icon" aria-hidden="true">
+                <img src="${NAMEPLATE_BRAND_ASSET_PATHS.mark}" alt="">
+            </div>
+        `;
+    }
+
+    return `<div class="icon">${template?.icon || ''}</div>`;
 }
 
 function getLoadedTemplate(templateId) {
@@ -106,6 +328,9 @@ function getLoadedTemplate(templateId) {
 }
 
 function selectTemplate(templateId) {
+    if (window.MEETING_NAMEPLATE_ONLY && templateId !== NAMEPLATE_TEMPLATE_ID) {
+        templateId = NAMEPLATE_TEMPLATE_ID;
+    }
     const template = getLoadedTemplate(templateId);
     if (template) {
         log(`选择模板: ${template.name}`);
@@ -115,6 +340,9 @@ function selectTemplate(templateId) {
 }
 
 function applyTemplate(template) {
+    if (window.MEETING_NAMEPLATE_ONLY) {
+        template = getNameplateTemplate();
+    }
     // 统一用 renderCanvas 渲染，避免"加载模板页面后白屏/不显示"
     currentMode = 'template';
     currentTemplateId = template.templateId;
@@ -144,8 +372,234 @@ function getCurrentTemplateConfig() {
             sleepIntervalSeconds: parseInt(document.getElementById('quoteWakeInterval')?.value || '86400', 10),
         };
     }
+    if (templateId === 'nameplate') {
+        return {
+            name: document.getElementById('nameplateNameInput')?.value?.trim() || '',
+            title: document.getElementById('nameplateTitleInput')?.value?.trim() || '',
+            subtitle: document.getElementById('nameplateSubtitleInput')?.value?.trim() || '',
+            backgroundStyle: document.getElementById('nameplateStyleSelect')?.value || 'formal_red',
+            sleepIntervalSeconds: parseInt(document.getElementById('nameplateWakeInterval')?.value || '43200', 10),
+        };
+    }
     // todo 等模板暂无配置
     return {};
+}
+
+function getSavableNameplateTemplateConfig() {
+    const config = getCurrentTemplateConfig();
+    return {
+        backgroundStyle: config.backgroundStyle || 'formal_red',
+        title: config.title || '',
+        subtitle: config.subtitle || '',
+        sleepIntervalSeconds: parseInt(config.sleepIntervalSeconds || '43200', 10) || 43200
+    };
+}
+
+function getNameplateTemplateName() {
+    return document.getElementById('nameplateTemplateNameInput')?.value?.trim() || '会议名牌模板';
+}
+
+function applyNameplateTemplateConfig(config, options = {}) {
+    if (!config) return false;
+
+    const styleSelect = document.getElementById('nameplateStyleSelect');
+    const titleInput = document.getElementById('nameplateTitleInput');
+    const subtitleInput = document.getElementById('nameplateSubtitleInput');
+    const wakeSelect = document.getElementById('nameplateWakeInterval');
+
+    if (styleSelect && config.backgroundStyle) styleSelect.value = config.backgroundStyle;
+    if (titleInput && config.title !== undefined) titleInput.value = config.title || '';
+    if (subtitleInput && config.subtitle !== undefined) subtitleInput.value = config.subtitle || '';
+    if (wakeSelect && config.sleepIntervalSeconds) wakeSelect.value = String(config.sleepIntervalSeconds);
+
+    if (options.render !== false) {
+        renderNameplatePreview();
+    }
+    return true;
+}
+
+function normalizeSavedNameplateTemplate(template) {
+    return {
+        templateId: template?.templateId || '',
+        name: template?.name || '会议名牌模板',
+        templateConfig: template?.templateConfig || {},
+        createdAt: template?.createdAt || '',
+        updatedAt: template?.updatedAt || ''
+    };
+}
+
+async function loadSavedNameplateTemplates(options = {}) {
+    const list = document.getElementById('savedTemplateList');
+    if (list) {
+        list.innerHTML = '<div class="saved-template-empty">正在加载模板</div>';
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/api/nameplate/templates`, {
+            headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) {
+            throw new Error(result.error || '模板列表加载失败');
+        }
+
+        savedNameplateTemplates = (result.templates || []).map(normalizeSavedNameplateTemplate);
+        renderSavedNameplateTemplateList();
+
+        if (options.applyFirst && !activeSavedNameplateTemplateId && savedNameplateTemplates.length) {
+            selectSavedNameplateTemplate(savedNameplateTemplates[0].templateId, { silent: options.silent });
+        }
+    } catch (error) {
+        savedNameplateTemplates = [];
+        renderSavedNameplateTemplateList(error.message);
+        if (!options.silent) log('加载保存模板失败: ' + error.message, 'error');
+    }
+}
+
+function renderSavedNameplateTemplateList(errorMessage = '') {
+    const list = document.getElementById('savedTemplateList');
+    if (!list) return;
+
+    const allTemplates = [
+        ...BUILTIN_NAMEPLATE_TEMPLATES,
+        ...savedNameplateTemplates.map(template => ({ ...template, builtin: false })),
+    ];
+
+    if (!allTemplates.length) {
+        list.innerHTML = '<div class="saved-template-empty">暂无模板</div>';
+        return;
+    }
+
+    const rows = allTemplates.map(template => {
+        const config = template.templateConfig || {};
+        const active = template.templateId === activeSavedNameplateTemplateId ? ' active' : '';
+        const meta = [
+            config.title || '无职务',
+            config.subtitle || '默认公司'
+        ].join(' / ');
+        const badge = template.builtin ? '<em>内置</em>' : '<em>已保存</em>';
+        const deleteButton = template.builtin
+            ? ''
+            : `<button type="button" onclick="event.stopPropagation(); deleteSavedNameplateTemplate('${escapeJsString(template.templateId)}')">删除</button>`;
+        return `
+            <div class="saved-template-row${active}" onclick="selectSavedNameplateTemplate('${escapeJsString(template.templateId)}')">
+                <div>
+                    <strong>${escapeHtml(template.name)} ${badge}</strong>
+                    <span>${escapeHtml(meta)}</span>
+                </div>
+                ${deleteButton}
+            </div>
+        `;
+    });
+
+    if (errorMessage) {
+        rows.push(`<div class="saved-template-empty error">已显示内置模板；保存模板加载失败：${escapeHtml(errorMessage)}</div>`);
+    } else if (!savedNameplateTemplates.length) {
+        rows.push('<div class="saved-template-empty">暂无用户保存模板</div>');
+    }
+
+    list.innerHTML = rows.join('');
+}
+
+function selectSavedNameplateTemplate(templateId, options = {}) {
+    const template = [...BUILTIN_NAMEPLATE_TEMPLATES, ...savedNameplateTemplates]
+        .find(item => item.templateId === templateId);
+    if (!template) return false;
+
+    activeSavedNameplateTemplateId = template.templateId;
+    const nameInput = document.getElementById('nameplateTemplateNameInput');
+    if (nameInput) nameInput.value = template.name || '会议名牌模板';
+    applyNameplateTemplateConfig(template.templateConfig, { render: options.render !== false });
+    renderSavedNameplateTemplateList();
+    if (!options.silent) {
+        log(`已载入模板：${template.name}`, 'success');
+    }
+    return true;
+}
+
+function startNewNameplateTemplate() {
+    activeSavedNameplateTemplateId = '';
+    const nameInput = document.getElementById('nameplateTemplateNameInput');
+    const titleInput = document.getElementById('nameplateTitleInput');
+    const subtitleInput = document.getElementById('nameplateSubtitleInput');
+    const styleSelect = document.getElementById('nameplateStyleSelect');
+    const wakeSelect = document.getElementById('nameplateWakeInterval');
+
+    if (nameInput) nameInput.value = '会议名牌模板';
+    if (titleInput) titleInput.value = '';
+    if (subtitleInput) subtitleInput.value = '';
+    if (styleSelect) styleSelect.value = 'formal_red';
+    if (wakeSelect) wakeSelect.value = '43200';
+    renderNameplatePreview();
+    renderSavedNameplateTemplateList();
+    log('已新建空白模板，保存后会加入模板列表', 'info');
+}
+
+async function saveNameplateTemplate(options = {}) {
+    const config = getSavableNameplateTemplateConfig();
+    try {
+        const templateId = options.asNew ? '' : activeSavedNameplateTemplateId;
+        const response = await fetch(`${API_BASE}/api/nameplate/templates`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(typeof getAuthHeaders === 'function' ? getAuthHeaders() : {})
+            },
+            body: JSON.stringify({
+                templateId,
+                name: getNameplateTemplateName(),
+                templateConfig: config
+            })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) {
+            throw new Error(result.error || '保存模板失败');
+        }
+
+        const saved = normalizeSavedNameplateTemplate(result.template);
+        activeSavedNameplateTemplateId = saved.templateId;
+        const index = savedNameplateTemplates.findIndex(item => item.templateId === saved.templateId);
+        if (index >= 0) {
+            savedNameplateTemplates[index] = saved;
+        } else {
+            savedNameplateTemplates.unshift(saved);
+        }
+        renderSavedNameplateTemplateList();
+        renderNameplatePreview();
+        log(`模板已保存：${saved.name}`, 'success');
+    } catch (error) {
+        console.error('保存模板失败:', error);
+        log('保存模板失败: ' + error.message, 'error');
+    }
+}
+
+async function saveNameplateTemplateAsNew() {
+    activeSavedNameplateTemplateId = '';
+    await saveNameplateTemplate({ asNew: true });
+}
+
+async function deleteSavedNameplateTemplate(templateId) {
+    const template = savedNameplateTemplates.find(item => item.templateId === templateId);
+    if (!template) return;
+    if (!confirm(`删除模板「${template.name}」？`)) return;
+
+    try {
+        const response = await fetch(`${API_BASE}/api/nameplate/templates/${encodeURIComponent(templateId)}`, {
+            method: 'DELETE',
+            headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) {
+            throw new Error(result.error || '删除模板失败');
+        }
+        savedNameplateTemplates = savedNameplateTemplates.filter(item => item.templateId !== templateId);
+        if (activeSavedNameplateTemplateId === templateId) activeSavedNameplateTemplateId = '';
+        renderSavedNameplateTemplateList();
+        log(`模板已删除：${template.name}`, 'success');
+    } catch (error) {
+        console.error('删除模板失败:', error);
+        log('删除模板失败: ' + error.message, 'error');
+    }
 }
 
 function updateTemplateConfigVisibility(templateId) {
@@ -154,6 +608,7 @@ function updateTemplateConfigVisibility(templateId) {
         'weather': 'weatherTemplateConfig',
         'quote': 'quoteTemplateConfig',
         'qrcode': 'qrcodeTemplateConfig',
+        'nameplate': 'nameplateTemplateConfig',
     };
     for (const [id, elId] of Object.entries(configs)) {
         const el = document.getElementById(elId);
@@ -355,6 +810,167 @@ function renderQRCodeTemplate(ctx, width, height) {
     }
 }
 
+function renderNameplatePreview() {
+    renderCanvas();
+}
+
+function fitCanvasFontSize(ctx, text, maxWidth, startSize, minSize) {
+    for (let size = startSize; size >= minSize; size -= 2) {
+        ctx.font = epdCanvasFont(size, '700');
+        if (ctx.measureText(text).width <= maxWidth) {
+            return size;
+        }
+    }
+    return minSize;
+}
+
+function fitCanvasFontSizeWithWeight(ctx, text, maxWidth, startSize, minSize, weight = '700') {
+    for (let size = startSize; size >= minSize; size -= 2) {
+        ctx.font = nameplateCanvasFont(size, weight, text);
+        if (ctx.measureText(text).width <= maxWidth) {
+            return size;
+        }
+    }
+    return minSize;
+}
+
+function nameplateCanvasFont(size, weight = '700', text = '') {
+    const family = /[\u4e00-\u9fff]/.test(String(text || ''))
+        ? EPD_CANVAS_FONT_FAMILY
+        : 'Arial, "Helvetica Neue", "Segoe UI", sans-serif';
+    return `${weight} ${size}px ${family}`;
+}
+
+function getLoadedNameplateAsset(key) {
+    const img = nameplateBrandAssets[key];
+    return img && img.complete && img.naturalWidth ? img : null;
+}
+
+function drawNameplateAsset(ctx, key, x, y, width, height) {
+    const img = getLoadedNameplateAsset(key);
+    if (!img) {
+        loadNameplateBrandAssets();
+        return false;
+    }
+    ctx.drawImage(img, x, y, width, height);
+    return true;
+}
+
+function drawPhenoFooterNameplate(ctx, width, height, name, style, companyText) {
+    const accent = style === 'formal_green' ? '#00ff00' : '#ff0000';
+    const footerTop = 385;
+
+    ctx.fillStyle = accent;
+    ctx.fillRect(0, 0, width, footerTop);
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, footerTop, width, height - footerTop);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const nameSize = fitCanvasFontSizeWithWeight(ctx, name, 590, 148, 72, '700');
+    ctx.font = nameplateCanvasFont(nameSize, '700', name);
+    ctx.fillStyle = 'white';
+    ctx.fillText(name, width / 2, 184);
+
+    drawNameplateAsset(ctx, 'blackLogo', 108, 410, 181, 39);
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const companySize = fitCanvasFontSizeWithWeight(ctx, companyText, 390, 25, 18, '700');
+    ctx.font = nameplateCanvasFont(companySize, '700', companyText);
+    ctx.fillStyle = 'black';
+    ctx.fillText(companyText, 326, 433);
+}
+
+function drawPhenoGreenBandNameplate(ctx, width, height, name) {
+    const bandTop = 361;
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, width, bandTop);
+    ctx.fillStyle = '#00ff00';
+    ctx.fillRect(0, bandTop, width, height - bandTop);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const nameSize = fitCanvasFontSizeWithWeight(ctx, name, 590, 150, 72, '700');
+    ctx.font = nameplateCanvasFont(nameSize, '700', name);
+    ctx.fillStyle = 'black';
+    ctx.fillText(name, width / 2, 184);
+
+    drawNameplateAsset(ctx, 'whiteLogo', 276, 390, 248, 54);
+}
+
+function drawPhenoProfileNameplate(ctx, width, height, name, roleText, companyText) {
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, width, height);
+
+    const markSize = 128;
+    const gap = 26;
+    const minMargin = 80;
+    const maxTextWidth = width - minMargin * 2 - markSize - gap;
+    const nameSize = fitCanvasFontSizeWithWeight(ctx, name, maxTextWidth, 96, 58, '700');
+    ctx.font = nameplateCanvasFont(nameSize, '700', name);
+    const nameWidth = ctx.measureText(name).width;
+
+    let roleWidth = 0;
+    let roleSize = 40;
+    if (roleText) {
+        roleSize = fitCanvasFontSizeWithWeight(ctx, roleText, maxTextWidth, 40, 24, '400');
+        ctx.font = nameplateCanvasFont(roleSize, '400', roleText);
+        roleWidth = ctx.measureText(roleText).width;
+    }
+
+    const textWidth = Math.max(nameWidth, roleWidth);
+    const groupWidth = markSize + gap + textWidth;
+    const groupLeft = Math.max(minMargin, Math.round((width - groupWidth) / 2));
+    const markTop = 153;
+    const textLeft = groupLeft + markSize + gap;
+
+    drawNameplateAsset(ctx, 'mark', groupLeft, markTop, markSize, markSize);
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.font = nameplateCanvasFont(nameSize, '700', name);
+    ctx.fillStyle = 'black';
+    ctx.fillText(name, textLeft, 151);
+
+    if (roleText) {
+        ctx.font = nameplateCanvasFont(roleSize, '400', roleText);
+        ctx.fillText(roleText, textLeft, 244);
+    }
+
+    const companySize = fitCanvasFontSizeWithWeight(ctx, companyText, 370, 22, 16, '400');
+    ctx.font = nameplateCanvasFont(companySize, '400', companyText);
+    const companyWidth = ctx.measureText(companyText).width;
+    const textX = Math.round((width - companyWidth) / 2);
+    const lineGap = 20;
+    const lineY = 406;
+    const lineHeight = 16;
+
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, lineY, Math.max(0, textX - lineGap), lineHeight);
+    ctx.fillRect(Math.min(width, textX + companyWidth + lineGap), lineY,
+        Math.max(0, width - (textX + companyWidth + lineGap)), lineHeight);
+
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(companyText, textX, 402);
+}
+
+function renderNameplateTemplate(ctx, width, height) {
+    const name = document.getElementById('nameplateNameInput')?.value?.trim() || '姓名';
+    const title = document.getElementById('nameplateTitleInput')?.value?.trim() || '';
+    const subtitle = document.getElementById('nameplateSubtitleInput')?.value?.trim() || '';
+    const style = document.getElementById('nameplateStyleSelect')?.value || 'formal_red';
+
+    if (style === 'formal_blue') {
+        drawPhenoProfileNameplate(ctx, width, height, name, title, subtitle || NAMEPLATE_COMPANY_EN);
+    } else if (style === 'plain') {
+        drawPhenoGreenBandNameplate(ctx, width, height, name);
+    } else {
+        drawPhenoFooterNameplate(ctx, width, height, name, style, subtitle || NAMEPLATE_COMPANY_CN);
+    }
+}
+
 function renderWeatherTemplate(ctx, width, height) {
     const data = templateWeatherData;
 
@@ -478,12 +1094,17 @@ async function loadPages() {
         });
         const result = await response.json();
         if (result.success) {
-            pages = result.pages;
+            pages = (Array.isArray(result.pages) ? result.pages : []).filter(isNameplatePage);
             renderPageList();
         }
     } catch (e) {
         console.error('Failed to load pages:', e);
     }
+}
+
+function isNameplatePage(page) {
+    const data = page && page.data ? page.data : {};
+    return page && page.type === 'template' && data.template === NAMEPLATE_TEMPLATE_ID;
 }
 
 function renderPageList() {
@@ -527,7 +1148,7 @@ function getPageIcon(type) {
         'image': '🖼️',
         'text': '📝',
         'mixed': '🎨',
-        'template': '📋',
+        'template': '桌牌',
         'custom': '⬜'
     };
     return icons[type] || '📄';
@@ -538,7 +1159,7 @@ function getPageTypeName(type) {
         'image': '图片',
         'text': '文字',
         'mixed': '图文',
-        'template': '模板',
+        'template': '会议名牌',
         'custom': '自定义'
     };
     return names[type] || '页面';
@@ -564,6 +1185,12 @@ async function selectPage(pageId) {
 function loadPageToCanvas(page) {
     // 根据页面类型加载到画布
     const data = page.data || {};
+
+    if (window.MEETING_NAMEPLATE_ONLY && !isNameplatePage(page)) {
+        applyTemplate(getNameplateTemplate());
+        log('当前只支持会议名牌，已切换到名牌模板', 'info');
+        return;
+    }
 
     // 切换到对应模式
     if (page.type && page.type !== currentMode) {
@@ -604,9 +1231,20 @@ function loadPageToCanvas(page) {
         const img = new Image();
         img.onload = () => {
             sourceImage = img;
-            renderCanvas();
+            drawImageCoverToMainCanvas();
+            if (currentMode === 'image') {
+                ensureImageEditingAssets().then((ok) => {
+                    if (ok && initImageCropper(data.imageData)) {
+                        return;
+                    }
+                    renderCanvas();
+                });
+            } else {
+                renderCanvas();
+            }
         };
         img.src = data.imageData;
+        return;
     }
 
     // 加载文字数据
@@ -628,11 +1266,15 @@ function loadPageToCanvas(page) {
 
 async function savePage() {
     if (!deviceId) {
-        log('请先选择设备', 'error');
+        updateDeviceBoundControls();
+        log('模板设计模式不绑定单台设备；如需保存单台草稿，请从设备页进入', 'info');
         return;
     }
 
     // 获取画布缩略图和完整画布数据
+    if (currentMode === 'image') {
+        syncImageCanvasFromCropper();
+    }
     const canvas = document.getElementById('mainCanvas');
     const thumbnail = canvas.toDataURL('image/jpeg', 0.5);
 
@@ -762,6 +1404,11 @@ async function duplicatePage(pageId) {
 
 // ==================== 新建页面 ====================
 function showNewPageModal() {
+    if (!hasSelectedDevice()) {
+        updateDeviceBoundControls();
+        log('模板设计模式不新建单台页面草稿；如需单台编辑，请从设备页进入', 'info');
+        return;
+    }
     document.getElementById('newPageModal').classList.add('show');
     document.getElementById('newPageName').value = '';
     document.getElementById('newPageName').focus();
@@ -772,6 +1419,14 @@ function hideNewPageModal() {
 }
 
 async function createPageFromTemplate(templateId) {
+    if (!hasSelectedDevice()) {
+        updateDeviceBoundControls();
+        log('模板设计模式不新建单台页面草稿；如需单台编辑，请从设备页进入', 'info');
+        return;
+    }
+    if (window.MEETING_NAMEPLATE_ONLY) {
+        templateId = NAMEPLATE_TEMPLATE_ID;
+    }
     const template = getLoadedTemplate(templateId);
     if (!template) {
         log('模板不存在或已移除', 'error');
@@ -819,7 +1474,8 @@ async function createPageFromTemplate(templateId) {
 // ==================== 部署 ====================
 async function deployToDevice() {
     if (!deviceId) {
-        log('请先选择设备', 'error');
+        updateDeviceBoundControls();
+        log('模板设计模式不直接发布；批量下发请到名单下发，单台发布请从设备页进入', 'info');
         return;
     }
 
@@ -840,8 +1496,356 @@ function switchPanel(panelId) {
     document.getElementById('processPanel').classList.toggle('hidden', panelId !== 'process');
 }
 
+// ==================== Cropper / FilePond 图片入口 ====================
+function updateScaleControls(scale) {
+    const percent = Math.round((scale || 1) * 100);
+    const slider = document.getElementById('scaleSlider');
+    const input = document.getElementById('scaleInput');
+    if (slider) slider.value = Math.min(300, Math.max(10, percent));
+    if (input) input.value = percent;
+}
+
+function loadLazyStyle(href, id) {
+    if (document.getElementById(id)) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+        const link = document.createElement('link');
+        link.id = id;
+        link.rel = 'stylesheet';
+        link.href = href;
+        link.onload = resolve;
+        link.onerror = () => reject(new Error(`加载样式失败: ${href}`));
+        document.head.appendChild(link);
+    });
+}
+
+function loadLazyScript(src, id) {
+    if (document.getElementById(id)) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.id = id;
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error(`加载脚本失败: ${src}`));
+        document.body.appendChild(script);
+    });
+}
+
+function ensureImageEditingAssets() {
+    if (imageEditingAssetsPromise) return imageEditingAssetsPromise;
+
+    const v = CONTROL_LAZY_ASSET_VERSION;
+    imageEditingAssetsPromise = Promise.all([
+        loadLazyStyle(`vendor/filepond.min.css?v=${v}`, 'lazy-filepond-css'),
+        loadLazyStyle(`vendor/filepond-plugin-image-preview.min.css?v=${v}`, 'lazy-filepond-preview-css'),
+        loadLazyStyle(`vendor/cropper.min.css?v=${v}`, 'lazy-cropper-css'),
+    ])
+        .then(() => loadLazyScript(`vendor/filepond.min.js?v=${v}`, 'lazy-filepond-js'))
+        .then(() => Promise.all([
+            loadLazyScript(`vendor/filepond-plugin-file-validate-type.min.js?v=${v}`, 'lazy-filepond-validate-js'),
+            loadLazyScript(`vendor/filepond-plugin-image-exif-orientation.min.js?v=${v}`, 'lazy-filepond-exif-js'),
+            loadLazyScript(`vendor/filepond-plugin-image-preview.min.js?v=${v}`, 'lazy-filepond-preview-js'),
+            loadLazyScript(`vendor/cropper.min.js?v=${v}`, 'lazy-cropper-js'),
+        ]))
+        .then(() => true)
+        .catch((error) => {
+            imageEditingAssetsPromise = null;
+            console.error('[Editor] 图片编辑组件加载失败:', error);
+            log('图片编辑组件加载失败，已使用基础上传模式', 'error');
+            return false;
+        });
+
+    return imageEditingAssetsPromise;
+}
+
+async function prepareImageEditingTools() {
+    const ok = await ensureImageEditingAssets();
+    if (!ok) return false;
+    const fileInput = document.getElementById('fileInput');
+    return initImageFilePond(fileInput);
+}
+
+function isImageCropperReady() {
+    return !!(imageCropper && imageCropper.ready && sourceImage && currentMode === 'image');
+}
+
+function updateImageStageVisibility() {
+    const stage = document.getElementById('cropperStage');
+    const canvas = document.getElementById('mainCanvas');
+    const showCropper = !!(imageCropper && sourceImage && currentMode === 'image');
+    if (stage) stage.classList.toggle('hidden', !showCropper);
+    if (canvas) canvas.classList.toggle('hidden', showCropper);
+}
+
+function destroyImageCropper() {
+    if (imageCropper) {
+        imageCropper.destroy();
+        imageCropper = null;
+    }
+    updateImageStageVisibility();
+}
+
+function syncCropperToLegacyState(updateInputs = false) {
+    if (!isImageCropperReady()) return;
+    const data = imageCropper.getData(true);
+    if (!data || data.width <= 0 || data.height <= 0) return;
+
+    cropX = Math.max(0, data.x || 0);
+    cropY = Math.max(0, data.y || 0);
+    imageScale = 800 / data.width;
+
+    if (updateInputs) {
+        updateScaleControls(imageScale);
+    }
+}
+
+function centerCropBoxToImage() {
+    if (!imageCropper || !imageCropper.ready) return;
+    const canvasData = imageCropper.getCanvasData();
+    if (!canvasData || canvasData.width <= 0 || canvasData.height <= 0) return;
+
+    let cropWidth = canvasData.width;
+    let cropHeight = cropWidth / EPD_CROP_ASPECT_RATIO;
+    if (cropHeight > canvasData.height) {
+        cropHeight = canvasData.height;
+        cropWidth = cropHeight * EPD_CROP_ASPECT_RATIO;
+    }
+
+    imageCropper.setCropBoxData({
+        left: canvasData.left + (canvasData.width - cropWidth) / 2,
+        top: canvasData.top + (canvasData.height - cropHeight) / 2,
+        width: cropWidth,
+        height: cropHeight,
+    });
+}
+
+function fitImageCropperToStage() {
+    if (!imageCropper || !imageCropper.ready || !sourceImage) return false;
+    const stage = document.getElementById('cropperStage');
+    if (!stage) return false;
+
+    const rect = stage.getBoundingClientRect();
+    const stageWidth = rect.width;
+    const stageHeight = rect.height;
+    if (stageWidth < 10 || stageHeight < 10) return false;
+
+    if (typeof imageCropper.resize === 'function') {
+        imageCropper.resize();
+    }
+
+    const imageAspect = sourceImage.width / sourceImage.height;
+    let canvasWidth = stageWidth;
+    let canvasHeight = canvasWidth / imageAspect;
+    if (canvasHeight < stageHeight) {
+        canvasHeight = stageHeight;
+        canvasWidth = canvasHeight * imageAspect;
+    }
+
+    imageCropper.setCanvasData({
+        left: (stageWidth - canvasWidth) / 2,
+        top: (stageHeight - canvasHeight) / 2,
+        width: canvasWidth,
+        height: canvasHeight,
+    });
+
+    let cropWidth = stageWidth;
+    let cropHeight = cropWidth / EPD_CROP_ASPECT_RATIO;
+    if (cropHeight > stageHeight) {
+        cropHeight = stageHeight;
+        cropWidth = cropHeight * EPD_CROP_ASPECT_RATIO;
+    }
+
+    imageCropper.setCropBoxData({
+        left: (stageWidth - cropWidth) / 2,
+        top: (stageHeight - cropHeight) / 2,
+        width: cropWidth,
+        height: cropHeight,
+    });
+
+    return true;
+}
+
+function isImageCropperStageFitted() {
+    if (!imageCropper || !imageCropper.ready) return false;
+    const stage = document.getElementById('cropperStage');
+    if (!stage) return false;
+    const rect = stage.getBoundingClientRect();
+    const canvasData = imageCropper.getCanvasData();
+    const cropBoxData = imageCropper.getCropBoxData();
+    return rect.width > 10 &&
+        canvasData.width >= rect.width * 0.95 &&
+        canvasData.height >= rect.height * 0.95 &&
+        cropBoxData.width >= rect.width * 0.9 &&
+        cropBoxData.height >= rect.height * 0.9;
+}
+
+function scheduleImageCropperFit(attempt = 0) {
+    if (!imageCropper || !sourceImage) return;
+    const run = () => {
+        if (!imageCropper || !sourceImage) return;
+        updateImageStageVisibility();
+        const fitted = fitImageCropperToStage();
+        if (fitted) {
+            syncCropperToLegacyState(true);
+            syncImageCanvasFromCropper();
+            updateImageStageVisibility();
+        }
+        if (!isImageCropperStageFitted() && attempt < 10) {
+            window.setTimeout(() => scheduleImageCropperFit(attempt + 1), 60);
+        }
+    };
+
+    if (typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(run);
+    } else {
+        window.setTimeout(run, 0);
+    }
+}
+
+function initImageCropper(imageSrc) {
+    const imageEl = document.getElementById('cropperImage');
+    if (!imageEl || !imageSrc || typeof Cropper === 'undefined') {
+        updateImageStageVisibility();
+        return false;
+    }
+
+    destroyImageCropper();
+    imageEl.onload = () => {
+        imageCropper = new Cropper(imageEl, {
+            aspectRatio: EPD_CROP_ASPECT_RATIO,
+            viewMode: 1,
+            dragMode: 'move',
+            autoCropArea: 1,
+            background: false,
+            responsive: true,
+            restore: false,
+            guides: true,
+            center: true,
+            cropBoxMovable: true,
+            cropBoxResizable: true,
+            toggleDragModeOnDblclick: false,
+            ready() {
+                scheduleImageCropperFit();
+            },
+            crop() {
+                syncCropperToLegacyState(true);
+            },
+        });
+        updateImageStageVisibility();
+        scheduleImageCropperFit();
+    };
+    imageEl.src = imageSrc;
+    window.setTimeout(() => scheduleImageCropperFit(), 120);
+    return true;
+}
+
+function drawImageCoverToMainCanvas() {
+    const canvas = document.getElementById('mainCanvas');
+    if (!canvas || !sourceImage) return false;
+
+    const width = parseInt(document.getElementById('width')?.value || '800', 10);
+    const height = parseInt(document.getElementById('height')?.value || '480', 10);
+    const scale = Math.max(width / sourceImage.width, height / sourceImage.height);
+    const srcWidth = width / scale;
+    const srcHeight = height / scale;
+    const srcX = Math.max(0, (sourceImage.width - srcWidth) / 2);
+    const srcY = Math.max(0, (sourceImage.height - srcHeight) / 2);
+
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(sourceImage, srcX, srcY, srcWidth, srcHeight, 0, 0, width, height);
+
+    imageScale = scale;
+    cropX = srcX;
+    cropY = srcY;
+    updateScaleControls(scale);
+    return true;
+}
+
+function getImageModeRenderCanvas(width = 800, height = 480) {
+    if (!isImageCropperReady()) return null;
+    const cropped = imageCropper.getCroppedCanvas({
+        width,
+        height,
+        fillColor: '#ffffff',
+        imageSmoothingEnabled: true,
+        imageSmoothingQuality: 'high',
+    });
+    return cropped || null;
+}
+
+function syncImageCanvasFromCropper() {
+    const canvas = document.getElementById('mainCanvas');
+    if (!canvas || !isImageCropperReady()) return false;
+
+    const width = parseInt(document.getElementById('width')?.value || '800', 10);
+    const height = parseInt(document.getElementById('height')?.value || '480', 10);
+    const cropped = getImageModeRenderCanvas(width, height);
+    if (!cropped) return false;
+
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(cropped, 0, 0, width, height);
+    return true;
+}
+
+function registerFilePondPlugins() {
+    if (filePondPluginsRegistered || typeof FilePond === 'undefined') return;
+    const plugins = [
+        window.FilePondPluginFileValidateType,
+        window.FilePondPluginImageExifOrientation,
+        window.FilePondPluginImagePreview,
+    ].filter(Boolean);
+    if (plugins.length > 0) {
+        FilePond.registerPlugin(...plugins);
+    }
+    filePondPluginsRegistered = true;
+}
+
+function initImageFilePond(fileInput) {
+    if (!fileInput || typeof FilePond === 'undefined') return false;
+    registerFilePondPlugins();
+
+    if (imageFilePond) {
+        return true;
+    }
+
+    imageFilePond = FilePond.create(fileInput, {
+        allowMultiple: false,
+        allowReorder: false,
+        allowProcess: false,
+        allowRevert: false,
+        credits: false,
+        maxFiles: 1,
+        acceptedFileTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/bmp'],
+        labelIdle: '拖拽图片到这里或 <span class="filepond--label-action">选择文件</span>',
+        labelFileTypeNotAllowed: '仅支持图片文件',
+        fileValidateTypeLabelExpectedTypes: '支持 PNG、JPG、WebP、GIF、BMP',
+    });
+
+    imageFilePond.on('addfile', (error, fileItem) => {
+        if (error) {
+            log('图片加载失败: ' + (error.main || error.message || '文件无效'), 'error');
+            return;
+        }
+        if (fileItem && fileItem.file) {
+            handleImageFile(fileItem.file);
+        }
+    });
+
+    return true;
+}
+
 // ==================== 模式切换 ====================
 function switchMode(mode) {
+    if (window.MEETING_NAMEPLATE_ONLY && mode !== 'template') {
+        mode = 'template';
+    }
     currentMode = mode;
 
     // 更新按钮状态
@@ -859,12 +1863,18 @@ function switchMode(mode) {
     if (textControls) textControls.classList.toggle('hidden', mode !== 'text');
     if (mixedControls) mixedControls.classList.toggle('hidden', mode !== 'mixed');
     if (templateControls) templateControls.classList.toggle('hidden', mode !== 'template');
+    if (mode === 'template' && window.MEETING_NAMEPLATE_ONLY) {
+        currentTemplateId = NAMEPLATE_TEMPLATE_ID;
+        updateTemplateConfigVisibility(NAMEPLATE_TEMPLATE_ID);
+    }
 
     // 初始化画布
     if (mode === 'text') {
         if (typeof initTextCanvas === 'function') initTextCanvas();
     } else if (mode === 'mixed') {
         if (typeof initMixedCanvas === 'function') initMixedCanvas();
+    } else if (mode === 'image') {
+        prepareImageEditingTools();
     }
 
     // 确保画布样式在所有模式下一致
@@ -877,7 +1887,8 @@ function switchMode(mode) {
     }
 
     renderCanvas();
-    log(`切换到${mode === 'image' ? '图片' : mode === 'text' ? '文字' : mode === 'mixed' ? '图文' : '模板'}模式`);
+    updateImageStageVisibility();
+    log(`切换到${mode === 'image' ? '图片' : mode === 'text' ? '文字' : mode === 'mixed' ? '图文' : '会议名牌'}模式`);
 }
 
 // ==================== 拖拽区域初始化 ====================
@@ -887,10 +1898,19 @@ function initDropZones() {
     const fileInput = document.getElementById('fileInput');
 
     if (dropZone && fileInput) {
-        // 点击选择文件
-        dropZone.onclick = () => fileInput.click();
+        // 点击选择文件。增强上传组件只在用户真的进入图片入口时加载。
+        dropZone.onclick = async () => {
+            if (!imageFilePond) {
+                const enhanced = await prepareImageEditingTools();
+                if (enhanced && imageFilePond && typeof imageFilePond.browse === 'function') {
+                    imageFilePond.browse();
+                    return;
+                }
+            }
+            fileInput.click();
+        };
 
-        // 拖拽事件
+        // 拖拽事件保留原生路径，避免首屏加载 FilePond。
         dropZone.ondragover = (e) => {
             e.preventDefault();
             dropZone.classList.add('dragover');
@@ -941,24 +1961,33 @@ function initDropZones() {
 }
 
 // 处理图片文件（新版界面用）
-function handleImageFile(file) {
+async function handleImageFile(file) {
     if (!file.type.startsWith('image/')) {
         log('请选择图片文件', 'error');
         return;
     }
 
     log(`加载图片: ${file.name}`);
+    const hasImageTools = await ensureImageEditingAssets();
 
     const reader = new FileReader();
     reader.onload = (e) => {
         const img = new Image();
         img.onload = () => {
             sourceImage = img;
+            window.e6Data4bit = null;
+            processedImageData = null;
+            drawImageCoverToMainCanvas();
+            updateImageStageVisibility();
 
-            // 新版界面：自动适应屏幕
-            if (typeof fitToScreen === 'function') {
-                fitToScreen();
-            } else {
+            if (!hasImageTools || !initImageCropper(e.target.result)) {
+                // 降级：没有 Cropper 时仍使用原 Canvas 裁剪逻辑。
+                if (typeof fitToScreen === 'function') {
+                    fitToScreen();
+                } else {
+                    renderCanvas();
+                }
+            } else if (currentMode !== 'image') {
                 renderCanvas();
             }
 
@@ -1044,6 +2073,12 @@ function updateScale() {
     if (slider && input) {
         imageScale = parseInt(slider.value) / 100;
         input.value = slider.value;
+        if (isImageCropperReady()) {
+            imageCropper.zoomTo(imageScale);
+            syncCropperToLegacyState(true);
+            syncImageCanvasFromCropper();
+            return;
+        }
         renderCanvas();
     }
 }
@@ -1057,6 +2092,12 @@ function updateScaleFromInput() {
         input.value = value;
         slider.value = Math.min(300, value);
         imageScale = value / 100;
+        if (isImageCropperReady()) {
+            imageCropper.zoomTo(imageScale);
+            syncCropperToLegacyState(true);
+            syncImageCanvasFromCropper();
+            return;
+        }
         renderCanvas();
     }
 }
@@ -1074,6 +2115,16 @@ function updateMixedScale() {
 function fitToScreen() {
     if (!sourceImage) {
         log('请先选择图片', 'error');
+        return;
+    }
+
+    if (isImageCropperReady()) {
+        imageCropper.reset();
+        imageCropper.setAspectRatio(EPD_CROP_ASPECT_RATIO);
+        fitImageCropperToStage();
+        syncCropperToLegacyState(true);
+        syncImageCanvasFromCropper();
+        log(`已适应屏幕，裁剪比例: 800×480`, 'success');
         return;
     }
 
@@ -1131,6 +2182,15 @@ function fitMixedToScreen() {
 }
 
 function resetCrop() {
+    if (isImageCropperReady()) {
+        imageCropper.reset();
+        fitImageCropperToStage();
+        syncCropperToLegacyState(true);
+        syncImageCanvasFromCropper();
+        log('已重置裁剪');
+        return;
+    }
+
     imageScale = 1;
     cropX = 0;
     cropY = 0;
@@ -1406,6 +2466,11 @@ function renderCanvas() {
     const canvas = document.getElementById('mainCanvas');
     if (!canvas) return;
 
+    updateImageStageVisibility();
+    if (currentMode === 'image' && sourceImage && imageCropper && syncImageCanvasFromCropper()) {
+        return;
+    }
+
     const ctx = canvas.getContext('2d');
 
     // 清空画布
@@ -1478,7 +2543,7 @@ function renderTemplateCanvas(ctx, width, height) {
     ctx.fillStyle = 'white';
     ctx.fillRect(0, 0, width, height);
 
-    const templateId = currentTemplateId;
+    const templateId = currentTemplateId || (window.MEETING_NAMEPLATE_ONLY ? NAMEPLATE_TEMPLATE_ID : null);
     if (!templateId) {
         // 未选择模板，保持空白
         return;
@@ -1496,6 +2561,9 @@ function renderTemplateCanvas(ctx, width, height) {
             break;
         case 'qrcode':
             renderQRCodeTemplate(ctx, width, height);
+            break;
+        case 'nameplate':
+            renderNameplateTemplate(ctx, width, height);
             break;
         case 'todo':
             // 代办事项占位

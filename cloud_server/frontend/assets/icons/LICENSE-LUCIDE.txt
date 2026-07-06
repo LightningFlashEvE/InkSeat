@@ -1,0 +1,5 @@
+Lucide Icons
+Copyright (c) 2026 Lucide Icons and Contributors
+License: ISC
+Source: https://lucide.dev
+License text: https://lucide.dev/license

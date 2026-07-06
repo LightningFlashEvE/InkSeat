@@ -10,9 +10,10 @@ let isDragging = false;
 let dragStartX = 0;
 let dragStartY = 0;
 
-// 当前模式：'image'、'text'、'mixed' 或 'template'
-let currentMode = 'image';
-const PUBLISH_TEMPLATE_IDS = new Set(['weather', 'calendar', 'todo', 'quote', 'qrcode']);
+// 当前阶段只开放会议名牌，旧的图片/文字/多模板能力先保留在代码里但不出现在界面入口。
+window.MEETING_NAMEPLATE_ONLY = true;
+let currentMode = 'template';
+const PUBLISH_TEMPLATE_IDS = new Set(['nameplate']);
 const EPD_CANVAS_FONT_FAMILY = '"Noto Sans CJK SC", "Microsoft YaHei", "SimHei", "Segoe UI Symbol", "Segoe UI Emoji", "Arial Unicode MS", Arial, sans-serif';
 
 function epdCanvasFont(size, weight = '700') {
@@ -38,6 +39,10 @@ const API_BASE = '';
 function getPublishMetadata() {
     const mode = (typeof currentMode === 'string' && currentMode) ? currentMode : 'image';
     const templateId = (typeof currentTemplateId !== 'undefined' && currentTemplateId) ? currentTemplateId : null;
+
+    if (window.MEETING_NAMEPLATE_ONLY) {
+        return { contentMode: 'template', templateId: 'nameplate' };
+    }
 
     if (mode === 'template') {
         if (templateId && PUBLISH_TEMPLATE_IDS.has(templateId)) {
@@ -512,6 +517,34 @@ const algorithmNames = {
     'grayscale_color_map': '灰阶与颜色映射'
 };
 
+function drawProcessCanvasMessage(canvas, width, height, title, detail = '', variant = 'info') {
+    if (!canvas) return;
+    canvas.width = width;
+    canvas.height = height;
+    canvas.dataset.processState = variant === 'error' ? 'error' : (title.includes('处理中') ? 'processing' : 'info');
+    canvas.dataset.processMessage = detail ? `${title}: ${detail}` : title;
+
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = variant === 'error' ? '#fff5f5' : '#f0f0f0';
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = variant === 'error' ? '#c53030' : '#999';
+    ctx.font = 'bold 26px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(title, width / 2, height / 2 - (detail ? 18 : 0));
+
+    if (detail) {
+        ctx.fillStyle = variant === 'error' ? '#744' : '#777';
+        ctx.font = '18px Arial, sans-serif';
+        const text = detail.length > 34 ? `${detail.slice(0, 34)}...` : detail;
+        ctx.fillText(text, width / 2, height / 2 + 22);
+    }
+}
+
+function drawProcessError(canvas, width, height, message) {
+    drawProcessCanvasMessage(canvas, width, height, '处理失败', message || '请检查后端服务', 'error');
+}
+
 function processImage() {
     // 新版界面：检查当前模式
     if (typeof currentMode !== 'undefined' && currentMode !== 'image') {
@@ -572,8 +605,17 @@ function processImage() {
     const srcWidth = width / imageScale;
     const srcHeight = height / imageScale;
 
+    const cropperCanvas = (typeof getImageModeRenderCanvas === 'function')
+        ? getImageModeRenderCanvas(width, height)
+        : null;
+
     // 从源图像绘制到临时画布
-    if (mainCanvas && sourceImage) {
+    if (cropperCanvas) {
+        tempCtx.drawImage(cropperCanvas, 0, 0, width, height);
+        if (typeof syncImageCanvasFromCropper === 'function') {
+            syncImageCanvasFromCropper();
+        }
+    } else if (mainCanvas && sourceImage) {
         // 新版界面：直接从源图像绘制
         tempCtx.drawImage(sourceImage, srcX, srcY, srcWidth, srcHeight, 0, 0, width, height);
     } else if (sourceCanvas) {
@@ -791,7 +833,10 @@ async function uploadToDevice() {
     }
 
     if (!deviceId) {
-        log('请输入设备ID', 'error');
+        if (typeof updateDeviceBoundControls === 'function') {
+            updateDeviceBoundControls();
+        }
+        log('模板设计模式不直接发布；批量下发请到名单下发，单台发布请从设备页进入', 'info');
         console.error('❌ deviceId未找到');
         return;
     }
@@ -813,6 +858,10 @@ async function uploadToDevice() {
         }
         if (templateId === 'qrcode' && !templateConfig.content) {
             log('请输入二维码内容', 'error');
+            return;
+        }
+        if (templateId === 'nameplate' && !templateConfig.name) {
+            log('请输入铭牌人名', 'error');
             return;
         }
 
@@ -1347,19 +1396,8 @@ function processTemplateImage() {
     const width = parseInt(document.getElementById('width').value);
     const height = parseInt(document.getElementById('height').value);
 
-    // 设置处理画布大小，先显示处理中状态
-    processedCanvas.width = width;
-    processedCanvas.height = height;
+    drawProcessCanvasMessage(processedCanvas, width, height, '处理中...');
     const ctx = processedCanvas.getContext('2d');
-
-    // 清空预览画布，显示处理中状态
-    ctx.fillStyle = '#f0f0f0';
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = '#999';
-    ctx.font = '24px Arial';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('处理中...', width / 2, height / 2);
 
     // 截取 mainCanvas 内容到临时画布（确保拿到完整图像）
     const tempCanvas = document.createElement('canvas');
@@ -1377,6 +1415,8 @@ function processTemplateImage() {
     const algorithmName = algorithmNames[algorithm] || algorithm;
     console.log('模板处理 - 实际使用的算法:', algorithm, '算法名称:', algorithmName);
     log(`正在调用后端6色算法处理（${algorithmName}）...`);
+    showProgress('正在处理图像...');
+    updateProgress(10);
 
     // 调用后端 6色抖动处理接口（与图片/文字模式共用同一接口）
     fetch(`${API_BASE}/api/epd/process-sixcolor`, {
@@ -1390,29 +1430,51 @@ function processTemplateImage() {
             gradThresh: gradThresh
         })
     })
-    .then(response => response.json())
+    .then(async response => {
+        updateProgress(50);
+        let result;
+        try {
+            result = await response.json();
+        } catch (error) {
+            throw new Error(`处理接口响应异常 (${response.status})`);
+        }
+        if (!response.ok || !result.success) {
+            throw new Error(result?.error || `处理接口失败 (${response.status})`);
+        }
+        if (!result.previewImage) {
+            throw new Error('后端未返回预览图');
+        }
+        return result;
+    })
     .then(result => {
-        if (result.success) {
-            // 加载预览图到 processedCanvas（抖动后效果 = 设备实际显示）
-            const previewImg = new Image();
-            previewImg.onload = () => {
-                ctx.clearRect(0, 0, width, height);
-                ctx.drawImage(previewImg, 0, 0);
-                processedImageData = ctx.getImageData(0, 0, width, height);
-            };
-            previewImg.src = 'data:image/png;base64,' + result.previewImage;
-
-            // 保存4bit数据
+        updateProgress(70);
+        const previewImg = new Image();
+        previewImg.onload = () => {
+            updateProgress(90);
+            ctx.clearRect(0, 0, width, height);
+            ctx.drawImage(previewImg, 0, 0);
+            processedImageData = ctx.getImageData(0, 0, width, height);
+            processedCanvas.dataset.processState = 'success';
+            processedCanvas.dataset.processMessage = '处理完成';
             if (result.data4bit) {
                 window.e6Data4bit = result.data4bit;
             }
-
+            updateProgress(100);
+            setTimeout(() => {
+                hideProgress();
+            }, 500);
             log(`6色处理完成：已使用${algorithmName}映射到6色调色板`, 'success');
-        } else {
-            log('处理失败: ' + result.error, 'error');
-        }
+        };
+        previewImg.onerror = () => {
+            hideProgress();
+            drawProcessError(processedCanvas, width, height, '预览图加载失败');
+            log('预览图加载失败', 'error');
+        };
+        previewImg.src = 'data:image/png;base64,' + result.previewImage;
     })
     .catch(error => {
+        hideProgress();
+        drawProcessError(processedCanvas, width, height, error.message);
         log('处理失败: ' + error.message, 'error');
         console.error(error);
     });

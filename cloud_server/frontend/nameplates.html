@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>名单下发</title>
+    <link rel="icon" href="data:;base64,=">
+    <script>
+        (function () {
+            try {
+                if (localStorage.getItem('meetingThemeMode') === 'light') {
+                    document.documentElement.classList.add('theme-light');
+                    document.documentElement.dataset.theme = 'light';
+                    document.documentElement.style.colorScheme = 'light';
+                }
+            } catch (e) {}
+        }());
+    </script>
+    <style>
+        html.theme-light,
+        html[data-theme="light"] {
+            background: #eef5f7 !important;
+            color-scheme: light;
+        }
+
+        html.theme-light body,
+        html[data-theme="light"] body {
+            color: #0b1720 !important;
+            background: #eef5f7 !important;
+        }
+    </style>
+    <script src="theme.js?v=20260706opt2"></script>
+    <link rel="stylesheet" href="ui.css?v=20260706opt2">
+</head>
+<body class="dashboard-page nameplates-page meeting-device-page">
+    <div class="meeting-page">
+        <div class="app-shell">
+            <aside class="meeting-sidebar" aria-label="主导航">
+                <a class="meeting-brand" href="index.html?v=20260706opt2" aria-label="会议牌管理">
+                    <span class="meeting-brand-mark" aria-hidden="true"></span>
+                    <span>会议牌管理</span>
+                </a>
+
+                <nav class="meeting-nav">
+                    <a class="meeting-nav-item" href="index.html?v=20260706opt2">
+                        <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
+                        <span>设备</span>
+                    </a>
+                    <a class="meeting-nav-item active" href="nameplates.html?v=20260706opt2" aria-current="page">
+                        <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
+                        <span>名单下发</span>
+                    </a>
+                    <a class="meeting-nav-item" href="control.html?v=20260706opt2">
+                        <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
+                        <span>模板设计</span>
+                    </a>
+                    <a class="meeting-nav-item" href="settings.html?v=20260706opt2">
+                        <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
+                        <span>设置</span>
+                    </a>
+                </nav>
+            </aside>
+
+        <main class="dashboard-main">
+            <header class="meeting-topbar page-system-topbar">
+                <div class="meeting-status-bar" id="statusBar" role="status" aria-live="polite">就绪</div>
+            </header>
+
+            <section class="dashboard-hero nameplate-hero">
+                <div>
+                    <div class="section-kicker">Nameplate Dispatch</div>
+                    <div class="hero-title">
+                        <div>
+                            <h1>名单下发</h1>
+                            <p>上传图片、文字或表格生成下发草稿，确认名单和模板后再把姓名下发到对应墨水屏铭牌。</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="ai-parse-panel command-panel">
+                <div class="section-header compact">
+                    <div>
+                        <div class="section-kicker">AI Parse</div>
+                        <h2>AI解析草稿</h2>
+                    </div>
+                    <p>解析不会直接下发，确认后再执行</p>
+                </div>
+                <div class="ai-parse-layout">
+                    <div class="nameplate-compose">
+                        <label for="nameplateAiTextInput">文字说明 / 粘贴内容</label>
+                        <textarea id="nameplateAiTextInput" rows="5" placeholder="可以粘贴微信消息、名单文字，或补充说明：例如“把这张表的参会人员生成 Pheno 红色底栏铭牌，职务为 Technical Expert”。"></textarea>
+                    </div>
+                    <div class="ai-upload-box">
+                        <label for="nameplateAiFiles">上传图片 / 表格</label>
+                        <input id="nameplateAiFiles" type="file" multiple accept=".png,.jpg,.jpeg,.webp,.gif,.txt,.csv,.tsv,.xlsx,.xlsm,image/png,image/jpeg,image/webp,image/gif,text/plain,text/csv">
+                        <div class="ai-upload-note">支持图片、TXT、CSV、TSV、XLSX。图片识别需要服务器配置 NAMEPLATE_AI_API_KEY。</div>
+                        <button class="btn btn-primary" type="button" id="nameplateAiParseBtn" onclick="parseNameplateDraft()">AI解析为草稿</button>
+                    </div>
+                </div>
+                <div class="parsed-preview" id="nameplateParsedPreview">
+                    <div class="activity-row">
+                        <strong>等待解析</strong>
+                        <span>解析后会填入下方名单与模板字段</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="nameplate-panel command-panel" id="nameplate-dispatch">
+                <div class="section-header compact">
+                    <div>
+                        <div class="section-kicker">Input</div>
+                        <h2>名单与模板</h2>
+                    </div>
+                    <p id="nameplateDispatchHint">按设备顺序将人名下发到对应铭牌</p>
+                </div>
+
+                <div class="nameplate-layout">
+                    <div class="nameplate-compose">
+                        <label for="nameplateNamesInput">名单文本</label>
+                        <textarea id="nameplateNamesInput" rows="9" placeholder="一行一个姓名，或用逗号/顿号分隔&#10;张三&#10;李四&#10;王五"></textarea>
+                    </div>
+
+                    <div class="nameplate-options">
+                        <label for="nameplateSavedTemplateSelect">已保存模板</label>
+                        <select id="nameplateSavedTemplateSelect">
+                            <option value="">手动配置</option>
+                        </select>
+
+                        <label for="nameplateBatchStyle">背景模板</label>
+                        <select id="nameplateBatchStyle">
+                            <option value="formal_red" selected>Pheno 红色底栏</option>
+                            <option value="formal_green">Pheno 绿色底栏</option>
+                            <option value="plain">Pheno 绿色横幅</option>
+                            <option value="formal_blue">Pheno 职务名片</option>
+                        </select>
+
+                        <label for="nameplateBatchTitle">职务 / 副标题（可选）</label>
+                        <input id="nameplateBatchTitle" type="text" placeholder="CEO / Technical Expert">
+
+                        <label for="nameplateBatchSubtitle">公司名称（可选）</label>
+                        <input id="nameplateBatchSubtitle" type="text" placeholder="留空使用默认公司名">
+
+                        <label for="nameplateBatchWakeInterval">唤醒频率</label>
+                        <select id="nameplateBatchWakeInterval">
+                            <option value="3600">每 1 小时</option>
+                            <option value="21600">每 6 小时</option>
+                            <option value="43200" selected>每 12 小时（默认）</option>
+                            <option value="86400">每 24 小时</option>
+                        </select>
+                    </div>
+                </div>
+            </section>
+
+            <section class="nameplate-panel command-panel">
+                <div class="section-header compact">
+                    <div>
+                        <div class="section-kicker">Devices</div>
+                        <h2>目标设备</h2>
+                    </div>
+                    <p>默认按添加时间从早到晚分配</p>
+                </div>
+                <div class="nameplate-device-toolbar">
+                    <span>设备顺序</span>
+                    <button class="btn btn-small btn-secondary" type="button" onclick="selectAllNameplateDevices(true)">全选</button>
+                    <button class="btn btn-small btn-secondary" type="button" onclick="selectAllNameplateDevices(false)">清空</button>
+                </div>
+                <div class="nameplate-device-list" id="nameplateDeviceList">
+                    <div class="nameplate-device-empty">加载设备中</div>
+                </div>
+                <button class="btn btn-primary nameplate-submit" onclick="dispatchNameplates()">下发名单</button>
+            </section>
+
+        </main>
+
+        <aside class="insight-panel" aria-label="名单下发状态">
+            <section class="insight-card">
+                <div class="insight-title">
+                    <h3>分配概览</h3>
+                    <span class="panel-eyebrow">Queue</span>
+                </div>
+                <div class="activity-list" id="nameplateSummary">
+                    <div class="activity-row">
+                        <strong>等待名单</strong>
+                        <span>输入姓名后会显示预计分配数量</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="insight-card">
+                <div class="insight-title">
+                    <h3>最近下发</h3>
+                    <span class="panel-eyebrow">Result</span>
+                </div>
+                <div class="activity-list" id="nameplateResult">
+                    <div class="activity-row">
+                        <strong>暂无记录</strong>
+                        <span>下发后设备将在下次唤醒时刷新</span>
+                    </div>
+                </div>
+            </section>
+        </aside>
+        </div>
+    </div>
+
+    <script src="auth.js?v=20260706opt2"></script>
+    <script src="nameplates.js?v=20260706opt2"></script>
+</body>
+</html>

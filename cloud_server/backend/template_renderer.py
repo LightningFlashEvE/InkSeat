@@ -9,6 +9,7 @@
 - qrcode:   二维码（本地生成）
 - todo:     待办事项（占位）
 - calendar: 日历（本地日期）
+- nameplate: 铭牌姓名
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import json
 import base64
 import urllib.parse
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional, Dict, Any
 from zoneinfo import ZoneInfo
 
@@ -34,6 +36,11 @@ try:
     TEMPLATE_TZ = ZoneInfo(TEMPLATE_TIMEZONE)
 except Exception:
     TEMPLATE_TZ = timezone(timedelta(hours=8))
+
+NAMEPLATE_ASSET_DIR = Path(__file__).resolve().parent / 'assets' / 'nameplate'
+NAMEPLATE_COMPANY_CN = '现象创新（深圳）科技有限公司'
+NAMEPLATE_COMPANY_EN = 'Pheno Innovations Technology Co., Ltd.'
+_NAMEPLATE_ASSET_CACHE: dict[str, Image.Image] = {}
 
 
 def _local_now() -> datetime:
@@ -81,6 +88,32 @@ def _get_font_bold(size: int) -> ImageFont.FreeTypeFont:
         except Exception:
             continue
     return _get_font(size)
+
+
+def _contains_cjk(text: str) -> bool:
+    return any('\u4e00' <= ch <= '\u9fff' for ch in str(text or ''))
+
+
+def _get_latin_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
+    candidates = [
+        "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/segoeuib.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return _get_font_bold(size) if bold else _get_font(size)
+
+
+def _get_nameplate_font(text: str, size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
+    if _contains_cjk(text):
+        return _get_font_bold(size) if bold else _get_font(size)
+    return _get_latin_font(size, bold)
 
 
 # ==================== EPD 数据编码 ====================
@@ -158,6 +191,39 @@ def _fit_wrapped_text(draw: ImageDraw.ImageDraw, text: str, max_width: int, max_
 
     font = _get_font_bold(min_size)
     return font, _wrap_text(draw, text, font, max_width), max(min_size + 12, int(min_size * 1.35))
+
+
+def _fit_single_line_font(draw: ImageDraw.ImageDraw, text: str, max_width: int,
+                          start_size: int, min_size: int,
+                          bold: bool = True) -> ImageFont.FreeTypeFont:
+    for size in range(start_size, min_size - 1, -2):
+        font = _get_nameplate_font(text, size, bold)
+        if _text_width(draw, text, font) <= max_width:
+            return font
+    return _get_nameplate_font(text, min_size, bold)
+
+
+def _load_nameplate_asset(filename: str) -> Optional[Image.Image]:
+    cached = _NAMEPLATE_ASSET_CACHE.get(filename)
+    if cached is not None:
+        return cached.copy()
+
+    path = NAMEPLATE_ASSET_DIR / filename
+    try:
+        asset = Image.open(path).convert('RGBA')
+        _NAMEPLATE_ASSET_CACHE[filename] = asset
+        return asset.copy()
+    except Exception as e:
+        print(f'⚠️ 名牌资产加载失败: {path} -> {e}')
+        return None
+
+
+def _paste_nameplate_asset(img: Image.Image, filename: str, x: int, y: int, width: int, height: int) -> None:
+    asset = _load_nameplate_asset(filename)
+    if asset is None:
+        return
+    asset = asset.resize((width, height), Image.LANCZOS)
+    img.paste(asset, (x, y), asset)
 
 
 # ==================== 天气模板 ====================
@@ -295,6 +361,13 @@ def render_calendar(config: Dict[str, Any]) -> str:
 def render_todo(config: Dict[str, Any]) -> str:
     """渲染代办事项模板（占位），返回 EPD a~p 字符串"""
     img = _render_todo_image(config)
+    return _pil_to_epd_string(img)
+
+
+# ==================== 铭牌模板 ====================
+def render_nameplate(config: Dict[str, Any]) -> str:
+    """渲染铭牌模板，返回 EPD a~p 字符串"""
+    img = _render_nameplate_image(config)
     return _pil_to_epd_string(img)
 
 
@@ -467,6 +540,115 @@ def _render_todo_image(config: Dict[str, Any]) -> Image.Image:
     return img
 
 
+def _draw_left_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str,
+                    font: ImageFont.FreeTypeFont, fill: tuple = (0, 0, 0),
+                    anchor: str = 'lm') -> None:
+    try:
+        draw.text(xy, text, font=font, fill=fill, anchor=anchor)
+    except Exception:
+        bbox = draw.textbbox((0, 0), text, font=font)
+        if anchor == 'lm':
+            y = xy[1] - (bbox[3] - bbox[1]) // 2
+        else:
+            y = xy[1]
+        draw.text((xy[0], y), text, font=font, fill=fill)
+
+
+def _draw_pheno_footer_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, name: str,
+                                 style: str, company_text: str) -> None:
+    accent = (0, 255, 0) if style == 'formal_green' else (255, 0, 0)
+    footer_top = 385
+    draw.rectangle((0, 0, 799, footer_top - 1), fill=accent)
+    draw.rectangle((0, footer_top, 799, 479), fill=(255, 255, 255))
+
+    font_name = _fit_single_line_font(draw, name, 590, 148, 72)
+    _draw_text_centered(draw, name, 400, 184, font_name, (255, 255, 255))
+
+    _paste_nameplate_asset(img, 'pheno-logo-black.png', 108, 410, 181, 39)
+
+    font_company = _fit_single_line_font(draw, company_text, 390, 25, 18)
+    _draw_left_text(draw, (326, 433), company_text, font_company, (0, 0, 0), anchor='lm')
+
+
+def _draw_pheno_green_band_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, name: str) -> None:
+    band_top = 361
+    draw.rectangle((0, 0, 799, band_top - 1), fill=(255, 255, 255))
+    draw.rectangle((0, band_top, 799, 479), fill=(0, 255, 0))
+
+    font_name = _fit_single_line_font(draw, name, 590, 150, 72)
+    _draw_text_centered(draw, name, 400, 184, font_name, (0, 0, 0))
+
+    _paste_nameplate_asset(img, 'pheno-logo-white.png', 276, 390, 248, 54)
+
+
+def _draw_pheno_profile_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, name: str,
+                                  role_text: str, company_text: str) -> None:
+    draw.rectangle((0, 0, 799, 479), fill=(255, 255, 255))
+
+    mark_size = 128
+    gap = 26
+    min_margin = 80
+    max_text_width = 800 - min_margin * 2 - mark_size - gap
+
+    font_name = _fit_single_line_font(draw, name, max_text_width, 96, 58)
+    name_width = _text_width(draw, name, font_name)
+
+    role_width = 0
+    font_role = None
+    if role_text:
+        font_role = _fit_single_line_font(draw, role_text, max_text_width, 40, 24, bold=False)
+        role_width = _text_width(draw, role_text, font_role)
+
+    text_width = max(name_width, role_width)
+    group_width = mark_size + gap + text_width
+    group_left = max(min_margin, round((800 - group_width) / 2))
+    mark_top = 153
+    text_left = group_left + mark_size + gap
+
+    _paste_nameplate_asset(img, 'pheno-mark-square.png', group_left, mark_top, mark_size, mark_size)
+
+    _draw_left_text(draw, (text_left, 151), name, font_name, (0, 0, 0), anchor='lt')
+    if role_text and font_role:
+        _draw_left_text(draw, (text_left, 244), role_text, font_role, (0, 0, 0), anchor='lt')
+
+    font_company = _fit_single_line_font(draw, company_text, 370, 22, 16, bold=False)
+    company_width = _text_width(draw, company_text, font_company)
+    text_x = round((800 - company_width) / 2)
+    line_gap = 20
+    line_y = 406
+    line_height = 16
+
+    left_line_right = max(0, text_x - line_gap)
+    right_line_left = min(800, text_x + company_width + line_gap)
+    if left_line_right > 0:
+        draw.rectangle((0, line_y, left_line_right, line_y + line_height - 1), fill=(0, 0, 0))
+    if right_line_left < 800:
+        draw.rectangle((right_line_left, line_y, 799, line_y + line_height - 1), fill=(0, 0, 0))
+
+    _draw_left_text(draw, (text_x, 402), company_text, font_company, (0, 0, 0), anchor='lt')
+
+
+def _render_nameplate_image(config: Dict[str, Any]) -> Image.Image:
+    """渲染 Pheno 品牌姓名牌。"""
+    name = str(config.get('name') or config.get('personName') or '').strip()
+    title = str(config.get('title') or config.get('organization') or '').strip()
+    subtitle = str(config.get('subtitle') or config.get('note') or '').strip()
+    style = str(config.get('backgroundStyle') or 'formal_red').strip().lower()
+
+    if not name:
+        name = '姓名'
+
+    img, draw = _create_base_canvas((255, 255, 255))
+    if style == 'formal_blue':
+        _draw_pheno_profile_nameplate(img, draw, name, title, subtitle or NAMEPLATE_COMPANY_EN)
+    elif style == 'plain':
+        _draw_pheno_green_band_nameplate(img, draw, name)
+    else:
+        _draw_pheno_footer_nameplate(img, draw, name, style, subtitle or NAMEPLATE_COMPANY_CN)
+
+    return img
+
+
 # 渲染器映射（返回 PIL Image 的版本）
 TEMPLATE_IMAGE_RENDERERS = {
     'weather': _render_weather_image,
@@ -474,6 +656,7 @@ TEMPLATE_IMAGE_RENDERERS = {
     'qrcode': _render_qrcode_image,
     'calendar': _render_calendar_image,
     'todo': _render_todo_image,
+    'nameplate': _render_nameplate_image,
 }
 
 
@@ -520,6 +703,7 @@ TEMPLATE_RENDERERS = {
     'qrcode': render_qrcode,
     'calendar': render_calendar,
     'todo': render_todo,
+    'nameplate': render_nameplate,
 }
 
 

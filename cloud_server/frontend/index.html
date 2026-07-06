@@ -1,272 +1,250 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
-    <meta charset='utf-8'>
-    <title>设备管理 - ESP32 E-Paper Cloud</title>
-    <link rel='icon' href='data:;base64,='>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>智能会议牌 - 设备管理</title>
+    <link rel="icon" href="data:;base64,=">
+    <script>
+        (function () {
+            try {
+                if (localStorage.getItem('meetingThemeMode') === 'light') {
+                    document.documentElement.classList.add('theme-light');
+                    document.documentElement.dataset.theme = 'light';
+                    document.documentElement.style.colorScheme = 'light';
+                }
+            } catch (e) {}
+        }());
+    </script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
+        html.theme-light,
+        html[data-theme="light"] {
+            background: #eef5f7 !important;
+            color-scheme: light;
         }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        .header {
-            background: white;
-            border-radius: 15px;
-            padding: 30px;
-            margin-bottom: 20px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            position: relative;
-        }
-        .header h1 {
-            color: #667eea;
-            font-size: 2em;
-            margin-bottom: 10px;
-            text-align: center;
-        }
-        .header p {
-            color: #666;
-            font-size: 1.1em;
-            text-align: center;
-        }
-        .logout-btn {
-            position: absolute;
-            top: 30px;
-            right: 30px;
-            padding: 10px 20px;
-            background: #dc3545;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        .logout-btn:hover {
-            background: #c82333;
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(220, 53, 69, 0.4);
-        }
-        .add-device {
-            background: white;
-            border-radius: 15px;
-            padding: 25px;
-            margin-bottom: 20px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-        }
-        .add-device h2 {
-            color: #495057;
-            margin-bottom: 15px;
-            font-size: 1.3em;
-        }
-        .input-group {
-            display: flex;
-            gap: 10px;
-        }
-        .input-group input {
-            flex: 1;
-            padding: 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 8px;
-            font-size: 14px;
-        }
-        .input-group input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        .btn {
-            padding: 12px 30px;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .btn-primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-        }
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
-        }
-        .devices-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-        .device-card {
-            background: white;
-            border-radius: 15px;
-            padding: 25px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            cursor: pointer;
-            transition: all 0.3s;
-            position: relative;
-        }
-        .device-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 15px 40px rgba(0,0,0,0.3);
-        }
-        .device-status {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            font-size: 0.9em;
-            font-weight: bold;
-        }
-        .status-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            animation: pulse 2s infinite;
-        }
-        .status-online {
-            background: #28a745;
-            color: #28a745;
-        }
-        .status-sleeping {
-            background: #ffc107;
-            color: #ffc107;
-        }
-        .status-offline {
-            background: #dc3545;
-            color: #dc3545;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        .device-id {
-            font-size: 1.2em;
-            font-weight: bold;
-            color: #495057;
-            margin-bottom: 15px;
-            margin-right: 80px;
-        }
-        .device-info {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            color: #666;
-            font-size: 0.9em;
-        }
-        .device-info-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 5px 0;
-            border-bottom: 1px solid #f0f0f0;
-        }
-        .device-info-label {
-            font-weight: 500;
-            color: #888;
-        }
-        .device-info-value {
-            font-weight: 600;
-            color: #495057;
-        }
-        .device-actions {
-            margin-top: 15px;
-            display: flex;
-            gap: 10px;
-        }
-        .btn-small {
-            padding: 8px 16px;
-            font-size: 12px;
-        }
-        .btn-danger {
-            background: #dc3545;
-            color: white;
-        }
-        .btn-danger:hover {
-            background: #c82333;
-        }
-        .btn-success {
-            background: #28a745;
-            color: white;
-        }
-        .btn-success:hover {
-            background: #218838;
-        }
-        .empty-state {
-            background: white;
-            border-radius: 15px;
-            padding: 60px;
-            text-align: center;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-        }
-        .empty-state h3 {
-            color: #495057;
-            margin-bottom: 10px;
-        }
-        .empty-state p {
-            color: #888;
-        }
-        .status-bar {
-            background: white;
-            border-radius: 15px;
-            padding: 15px 25px;
-            font-family: 'Courier New', monospace;
-            font-size: 0.9em;
-            color: #495057;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-        }
-        .signal-strength {
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
-        }
-        .signal-bar {
-            width: 3px;
-            background: #ddd;
-            border-radius: 2px;
-        }
-        .signal-bar.active {
-            background: #28a745;
+
+        html.theme-light body,
+        html[data-theme="light"] body {
+            color: #0b1720 !important;
+            background: #eef5f7 !important;
         }
     </style>
+    <script src="theme.js?v=20260706opt2"></script>
+    <link rel="stylesheet" href="ui.css?v=20260706opt2">
 </head>
-<body>
-    <div class="container">
-        <div class="header">
-            <button class="logout-btn" onclick="logout()">🚪 退出登录</button>
-            <h1>现象光伏智能墨水屏管理系统</h1>
-            <p>管理多个ESP32墨水屏设备</p>
-        </div>
+<body class="meeting-device-page">
+    <div class="meeting-page">
+        <section class="meeting-shell">
+            <aside class="meeting-sidebar" aria-label="主导航">
+                <a class="meeting-brand" href="index.html?v=20260706opt2" aria-label="会议牌管理">
+                    <span class="meeting-brand-mark" aria-hidden="true"></span>
+                    <span>会议牌管理</span>
+                </a>
 
-        <div class="add-device">
-            <h2>添加新设备</h2>
-            <div class="input-group">
-                <input type="text" id="newDeviceId" placeholder="输入设备ID，例如：B6DA20">
-                <input type="text" id="deviceName" placeholder="设备名称（可选）">
-                <button class="btn btn-primary" onclick="addDevice()">➕ 添加设备</button>
-            </div>
-        </div>
+                <nav class="meeting-nav">
+                    <a class="meeting-nav-item active" href="index.html?v=20260706opt2" aria-current="page">
+                        <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
+                        <span>设备</span>
+                    </a>
+                    <a class="meeting-nav-item" href="nameplates.html?v=20260706opt2">
+                        <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
+                        <span>名单下发</span>
+                    </a>
+                    <a class="meeting-nav-item" href="control.html?v=20260706opt2">
+                        <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
+                        <span>模板设计</span>
+                    </a>
+                    <a class="meeting-nav-item" href="settings.html?v=20260706opt2">
+                        <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
+                        <span>设置</span>
+                    </a>
+                </nav>
+            </aside>
 
-        <div id="devicesContainer">
-            <!-- 设备卡片将在这里动态生成 -->
-        </div>
+            <main class="meeting-main">
+                <header class="meeting-topbar">
+                    <div class="meeting-status-bar" id="statusBar" role="status" aria-live="polite">就绪</div>
+                    <div class="meeting-actions-top">
+                        <button class="meeting-logout-btn" type="button" onclick="logout()">退出</button>
+                    </div>
+                </header>
 
-        <div class="status-bar" id="statusBar">
-            就绪
-        </div>
+                <div class="meeting-dashboard">
+                    <section class="meeting-left-col">
+                        <div class="meeting-stats meeting-glass" aria-label="设备概览">
+                            <article class="meeting-stat">
+                                <div class="meeting-stat-icon icon-device blue" aria-hidden="true"></div>
+                                <div>
+                                    <div class="meeting-stat-title">全部设备</div>
+                                    <div class="meeting-stat-num"><span id="fleetTotal">0</span><small>台</small></div>
+                                </div>
+                            </article>
+                            <article class="meeting-stat">
+                                <div class="meeting-stat-icon icon-online green" aria-hidden="true"></div>
+                                <div>
+                                    <div class="meeting-stat-title">在线设备</div>
+                                    <div class="meeting-stat-num"><span id="fleetOnline">0</span><small>台</small></div>
+                                </div>
+                            </article>
+                            <article class="meeting-stat">
+                                <div class="meeting-stat-icon icon-sleep orange" aria-hidden="true"></div>
+                                <div>
+                                    <div class="meeting-stat-title">睡眠设备</div>
+                                    <div class="meeting-stat-num"><span id="fleetSleeping">0</span><small>台</small></div>
+                                </div>
+                            </article>
+                            <article class="meeting-stat">
+                                <div class="meeting-stat-icon icon-template purple" aria-hidden="true"></div>
+                                <div>
+                                    <div class="meeting-stat-title">使用中</div>
+                                    <div class="meeting-stat-num"><span id="fleetUsing">0</span><small>台</small></div>
+                                </div>
+                            </article>
+                        </div>
+
+                        <section class="meeting-table-card meeting-glass" id="device-fleet">
+                            <div class="meeting-card-head">
+                                <div>
+                                    <h2>设备列表</h2>
+                                    <p id="fleetLastSync">等待首次同步</p>
+                                </div>
+                                <div class="meeting-card-tools">
+                                    <label class="meeting-search" for="deviceSearchInput">
+                                        <input id="deviceSearchInput" type="search" placeholder="搜索设备名称或编号" autocomplete="off">
+                                        <span class="meeting-search-icon" aria-hidden="true"></span>
+                                    </label>
+                                    <button class="meeting-add-btn" id="openAddDevice" type="button">
+                                        <span class="meeting-add-icon icon-plus" aria-hidden="true"></span>
+                                        添加设备
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="meeting-table-wrap">
+                                <table class="meeting-table">
+                                    <thead>
+                                        <tr>
+                                            <th class="meeting-col-name">设备名称</th>
+                                            <th>设备编号</th>
+                                            <th>当前内容</th>
+                                            <th>状态</th>
+                                            <th>最近在线</th>
+                                            <th>操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="deviceTableBody">
+                                        <tr>
+                                            <td colspan="6">
+                                                <div class="meeting-empty-inline">正在加载设备</div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="meeting-pager">
+                                <button class="meeting-page-btn" type="button" aria-label="上一页" disabled>‹</button>
+                                <span class="meeting-page-btn active">1</span>
+                                <span class="meeting-page-text" id="deviceListSummary">0 台设备</span>
+                                <button class="meeting-page-btn" type="button" aria-label="下一页" disabled>›</button>
+                            </div>
+                        </section>
+                    </section>
+
+                    <aside class="meeting-right-col">
+                        <section class="meeting-side-card meeting-status-card meeting-glass">
+                            <h2>设备状态分布</h2>
+                            <div class="meeting-donut-layout">
+                                <div class="meeting-donut" id="fleetHealthRing" aria-label="设备状态分布"></div>
+                                <div class="meeting-legend">
+                                    <div class="meeting-legend-row">
+                                        <i class="meeting-dot online" aria-hidden="true"></i>
+                                        <span>在线</span>
+                                        <strong id="fleetOnlineLegend">0 (0%)</strong>
+                                    </div>
+                                    <div class="meeting-legend-row">
+                                        <i class="meeting-dot sleeping" aria-hidden="true"></i>
+                                        <span>睡眠</span>
+                                        <strong id="fleetSleepingLegend">0 (0%)</strong>
+                                    </div>
+                                    <div class="meeting-legend-row">
+                                        <i class="meeting-dot offline" aria-hidden="true"></i>
+                                        <span>离线</span>
+                                        <strong id="fleetOfflineLegend">0 (0%)</strong>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="meeting-side-card meeting-info-card meeting-glass">
+                            <h2>设备信息</h2>
+                            <div class="meeting-info-grid">
+                                <div class="meeting-info-list">
+                                    <div class="meeting-info-row"><span>设备名称</span><span id="selectedDeviceName">未选择</span></div>
+                                    <div class="meeting-info-row"><span>设备编号</span><span id="selectedDeviceId">-</span></div>
+                                    <div class="meeting-info-row"><span>当前内容</span><span id="selectedDeviceContent">-</span></div>
+                                    <div class="meeting-info-row meeting-signal-row"><span>WiFi强度</span><span id="selectedDeviceSignal">未上报</span></div>
+                                    <div class="meeting-info-row"><span>唤醒间隔</span><span id="selectedDeviceSleep">默认 12小时</span></div>
+                                </div>
+                                <div class="meeting-device-preview" aria-hidden="true">
+                                    <div class="meeting-screen">
+                                        <h3 id="selectedPreviewName">会议牌</h3>
+                                        <p id="selectedPreviewContent">会议名牌</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="meeting-side-card meeting-quick-card meeting-glass">
+                            <h2>快速操作</h2>
+                            <div class="meeting-quick-grid">
+                                <button class="meeting-quick" type="button" data-quick-action="restart">
+                                    <span class="meeting-quick-icon icon-restart" aria-hidden="true"></span>
+                                    <span>远程重启</span>
+                                </button>
+                                <button class="meeting-quick" type="button" data-quick-action="capture">
+                                    <span class="meeting-quick-icon icon-capture" aria-hidden="true"></span>
+                                    <span>远程截屏</span>
+                                </button>
+                                <button class="meeting-quick" type="button" data-quick-action="push">
+                                    <span class="meeting-quick-icon icon-edit" aria-hidden="true"></span>
+                                    <span>单台编辑</span>
+                                </button>
+                                <button class="meeting-quick" type="button" data-quick-action="group">
+                                    <span class="meeting-quick-icon icon-group" aria-hidden="true"></span>
+                                    <span>设备分组</span>
+                                </button>
+                            </div>
+                        </section>
+                    </aside>
+                </div>
+            </main>
+        </section>
     </div>
 
-    <script src="auth.js?v=20260526"></script>
-    <script src="devices.js?v=20250612d"></script>
+    <div class="meeting-modal" id="addDeviceModal" hidden>
+        <div class="meeting-modal-backdrop" data-close-add-device></div>
+        <section class="meeting-modal-panel" role="dialog" aria-modal="true" aria-labelledby="addDeviceTitle">
+            <div class="meeting-modal-head">
+                <h2 id="addDeviceTitle">添加设备</h2>
+                <button class="meeting-modal-close" type="button" data-close-add-device aria-label="关闭">×</button>
+            </div>
+            <div class="meeting-add-form">
+                <label>
+                    <span>设备编号</span>
+                    <input type="text" id="newDeviceId" placeholder="例如：B6DA20" autocomplete="off">
+                </label>
+                <label>
+                    <span>设备名称</span>
+                    <input type="text" id="deviceName" placeholder="例如：会议牌 A101" autocomplete="off">
+                </label>
+                <button class="meeting-add-submit" type="button" onclick="addDevice()">添加设备</button>
+            </div>
+        </section>
+    </div>
+
+    <script src="auth.js?v=20260706opt2"></script>
+    <script src="devices.js?v=20260706opt2"></script>
 </body>
 </html>

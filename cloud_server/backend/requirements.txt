@@ -10,3 +10,4 @@ Pillow==10.3.0
 opencv-python-headless==4.8.1.78
 qrcode[pil]==7.4.2
 requests==2.32.3
+openpyxl==3.1.5

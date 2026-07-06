@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>设置</title>
+    <link rel="icon" href="data:;base64,=">
+    <script>
+        (function () {
+            try {
+                if (localStorage.getItem('meetingThemeMode') === 'light') {
+                    document.documentElement.classList.add('theme-light');
+                    document.documentElement.dataset.theme = 'light';
+                    document.documentElement.style.colorScheme = 'light';
+                }
+            } catch (e) {}
+        }());
+    </script>
+    <style>
+        html.theme-light,
+        html[data-theme="light"] {
+            background: #eef5f7 !important;
+            color-scheme: light;
+        }
+
+        html.theme-light body,
+        html[data-theme="light"] body {
+            color: #0b1720 !important;
+            background: #eef5f7 !important;
+        }
+    </style>
+    <script src="theme.js?v=20260706opt2"></script>
+    <link rel="stylesheet" href="ui.css?v=20260706opt2">
+</head>
+<body class="settings-page meeting-device-page">
+    <div class="meeting-page">
+        <section class="meeting-shell settings-shell">
+            <aside class="meeting-sidebar" aria-label="主导航">
+                <a class="meeting-brand" href="index.html?v=20260706opt2" aria-label="会议牌管理">
+                    <span class="meeting-brand-mark" aria-hidden="true"></span>
+                    <span>会议牌管理</span>
+                </a>
+
+                <nav class="meeting-nav">
+                    <a class="meeting-nav-item" href="index.html?v=20260706opt2">
+                        <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
+                        <span>设备</span>
+                    </a>
+                    <a class="meeting-nav-item" href="nameplates.html?v=20260706opt2">
+                        <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
+                        <span>名单下发</span>
+                    </a>
+                    <a class="meeting-nav-item" href="control.html?v=20260706opt2">
+                        <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
+                        <span>模板设计</span>
+                    </a>
+                    <a class="meeting-nav-item active" href="settings.html?v=20260706opt2" aria-current="page">
+                        <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
+                        <span>设置</span>
+                    </a>
+                </nav>
+            </aside>
+
+            <main class="meeting-main settings-main">
+                <header class="meeting-topbar page-system-topbar">
+                    <div class="meeting-status-bar" id="statusBar" role="status" aria-live="polite">就绪</div>
+                </header>
+
+                <header class="settings-hero meeting-glass">
+                    <div>
+                        <div class="settings-kicker">Settings</div>
+                        <h1>设置</h1>
+                        <p>管理本机界面偏好。</p>
+                    </div>
+                    <div class="settings-theme-state">
+                        <span>当前主题</span>
+                        <strong data-theme-current>暗色</strong>
+                    </div>
+                </header>
+
+                <section class="settings-card meeting-glass" aria-labelledby="themeTitle">
+                    <div class="settings-card-head">
+                        <div>
+                            <div class="settings-kicker">Appearance</div>
+                            <h2 id="themeTitle">主题外观</h2>
+                            <p>在暗色玻璃和明亮玻璃之间切换。</p>
+                        </div>
+                        <button class="theme-switch" type="button" data-theme-toggle aria-pressed="false">
+                            <span class="theme-switch-label theme-switch-dark">暗</span>
+                            <span class="theme-switch-label theme-switch-light">亮</span>
+                            <span class="theme-switch-thumb" aria-hidden="true"></span>
+                        </button>
+                    </div>
+
+                    <div class="theme-preview-grid">
+                        <button class="theme-preview theme-preview-dark" type="button" data-theme-set="dark" aria-label="切换到暗色玻璃主题" aria-pressed="true">
+                            <div class="theme-preview-top"></div>
+                            <div class="theme-preview-row wide"></div>
+                            <div class="theme-preview-row"></div>
+                            <div class="theme-preview-pills">
+                                <span></span>
+                                <span></span>
+                                <span></span>
+                            </div>
+                        </button>
+                        <button class="theme-preview theme-preview-light" type="button" data-theme-set="light" aria-label="切换到明亮玻璃主题" aria-pressed="false">
+                            <div class="theme-preview-top"></div>
+                            <div class="theme-preview-row wide"></div>
+                            <div class="theme-preview-row"></div>
+                            <div class="theme-preview-pills">
+                                <span></span>
+                                <span></span>
+                                <span></span>
+                            </div>
+                        </button>
+                    </div>
+                </section>
+            </main>
+        </section>
+    </div>
+
+    <script src="auth.js?v=20260706opt2"></script>
+    <script>
+        requireAuth();
+    </script>
+</body>
+</html>

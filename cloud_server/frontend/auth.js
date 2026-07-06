@@ -27,7 +27,7 @@ function getAuthHeaders() {
 async function requireAuth() {
     const token = getAuthToken();
     if (!token) {
-        window.location.href = 'login.html';
+        window.location.href = 'login.html?v=20260706opt2';
         return null;
     }
 
@@ -42,13 +42,13 @@ async function requireAuth() {
             return data.user || null;
         } else {
             clearAuth();
-            window.location.href = 'login.html';
+            window.location.href = 'login.html?v=20260706opt2';
             return null;
         }
     } catch (e) {
         console.error('auth check error', e);
         clearAuth();
-        window.location.href = 'login.html';
+        window.location.href = 'login.html?v=20260706opt2';
         return null;
     }
 }

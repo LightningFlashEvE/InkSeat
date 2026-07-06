@@ -33,6 +33,12 @@ services:
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
       # 和风天气 API Key（天气模板所需）
       QWEATHER_KEY: ${QWEATHER_KEY:-}
+      # 名单下发 AI 解析。Key 只放后端，不暴露到前端浏览器。
+      NAMEPLATE_AI_API_KEY: ${NAMEPLATE_AI_API_KEY:-}
+      NAMEPLATE_AI_BASE_URL: ${NAMEPLATE_AI_BASE_URL:-https://api.openai.com/v1}
+      NAMEPLATE_AI_MODEL: ${NAMEPLATE_AI_MODEL:-gpt-4.1-mini}
+      # OpenAI Responses 用 responses；国内 OpenAI 兼容接口通常用 chat_completions
+      NAMEPLATE_AI_API_MODE: ${NAMEPLATE_AI_API_MODE:-responses}
     volumes:
       # 持久化保存最新图片：data/epd/<deviceId>/latest.txt
       - ./backend/data:/app/data
@@ -61,4 +67,3 @@ services:
 networks:
   esp32-network:
     driver: bridge
-

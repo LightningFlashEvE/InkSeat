@@ -13,6 +13,9 @@ import time
 import threading
 import hashlib
 import secrets
+import re
+import base64
+import mimetypes
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
@@ -20,6 +23,7 @@ from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 import numpy as np
+import requests
 
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
@@ -54,6 +58,7 @@ TEMPLATE_SLEEP_INTERVAL_SECONDS = {
     'quote': 24 * 60 * 60,
     'todo': DEFAULT_SLEEP_INTERVAL_SECONDS,
     'qrcode': DEFAULT_SLEEP_INTERVAL_SECONDS,
+    'nameplate': DEFAULT_SLEEP_INTERVAL_SECONDS,
 }
 CONTENT_MODE_LABELS = {
     'image': '普通图片',
@@ -110,7 +115,12 @@ def get_device_content_metadata(device):
     # 从 templateConfig 中读取用户自定义的唤醒间隔
     template_config = device.get('templateConfig', {})
     custom_interval = template_config.get('sleepIntervalSeconds') if isinstance(template_config, dict) else None
-    return build_content_metadata(device.get('activeContentMode'), device.get('activeTemplateId'), custom_interval)
+    meta = build_content_metadata(device.get('activeContentMode'), device.get('activeTemplateId'), custom_interval)
+    if meta.get('activeTemplateId') == 'nameplate' and isinstance(template_config, dict):
+        name = str(template_config.get('name') or template_config.get('personName') or '').strip()
+        if name:
+            meta['activeContentLabel'] = f'铭牌：{name}'
+    return meta
 
 def get_template_local_date(value):
     """Return the calendar date used by daily templates."""
@@ -136,7 +146,7 @@ def _should_re_render_template(template_id: str, config: dict, device: dict, wak
     render_source = device.get('renderSource')
 
     # 二维码/待办：内容不自动变化，永不自动渲染
-    if template_id in ('qrcode', 'todo'):
+    if template_id in ('qrcode', 'todo', 'nameplate'):
         print(f'🛑 _should_re_render: 模板={template_id}, renderSource={render_source} → 永不自动渲染')
         return False
 
@@ -195,6 +205,493 @@ def render_template_epd_data(template_id: str, config: dict) -> str:
     return epd_data
 
 
+NAMEPLATE_MAX_NAME_LEN = 16
+NAMEPLATE_MAX_PARSE_FILE_BYTES = int(os.environ.get('NAMEPLATE_MAX_PARSE_FILE_BYTES', 8 * 1024 * 1024))
+NAMEPLATE_AI_API_KEY = (
+    os.environ.get('NAMEPLATE_AI_API_KEY')
+    or os.environ.get('OPENAI_API_KEY')
+    or ''
+).strip()
+NAMEPLATE_AI_BASE_URL = (
+    os.environ.get('NAMEPLATE_AI_BASE_URL')
+    or os.environ.get('OPENAI_BASE_URL')
+    or 'https://api.openai.com/v1'
+).rstrip('/')
+NAMEPLATE_AI_MODEL = (
+    os.environ.get('NAMEPLATE_AI_MODEL')
+    or os.environ.get('OPENAI_NAMEPLATE_MODEL')
+    or 'gpt-4.1-mini'
+)
+NAMEPLATE_AI_API_MODE = os.environ.get('NAMEPLATE_AI_API_MODE', 'responses').strip().lower()
+NAMEPLATE_LABEL_PREFIXES = {
+    '名单', '姓名', '人员', '参会人', '参会人员', '嘉宾', '领导', '铭牌', '下发名单', '姓名名单'
+}
+NAMEPLATE_REJECT_VALUES = {
+    '姓名', '名字', '名单', '人员', '参会人', '参会人员', '嘉宾', '领导', '单位',
+    '部门', '职务', '职位', '序号', '编号', '备注', '电话', '手机', '设备', '设备号',
+    'device', 'name', 'title', 'department', 'position', 'no'
+}
+NAMEPLATE_LEADING_WORDS = (
+    '请给', '请为', '请把', '请将', '请', '给', '为', '把', '将',
+    '下发', '发送', '显示', '设置', '安排', '名单', '姓名', '人员', '铭牌'
+)
+
+
+def get_nameplate_ai_api_key() -> str:
+    return (
+        os.environ.get('NAMEPLATE_AI_API_KEY')
+        or os.environ.get('OPENAI_API_KEY')
+        or NAMEPLATE_AI_API_KEY
+        or ''
+    ).strip()
+
+
+def _clean_nameplate_candidate(raw_value) -> str:
+    if raw_value is None:
+        return ''
+
+    value = str(raw_value).strip()
+    if not value:
+        return ''
+
+    value = re.sub(r'^[\s\-\*\u2022]+', '', value)
+    value = re.sub(r'^\d+[\.\、\)\）\s]+', '', value)
+    value = re.sub(r'^[一二三四五六七八九十百]+[\.\、\)\）\s]+', '', value)
+    value = value.strip(' "\'“”‘’[]【】()（）<>《》')
+
+    if ':' in value or '：' in value:
+        label, rest = re.split(r'[:：]', value, maxsplit=1)
+        if label.strip() in NAMEPLATE_LABEL_PREFIXES:
+            value = rest.strip()
+
+    changed = True
+    while changed and value:
+        changed = False
+        for word in NAMEPLATE_LEADING_WORDS:
+            if value.startswith(word):
+                value = value[len(word):].strip()
+                changed = True
+
+    value = re.split(r'[（(【\[]', value, maxsplit=1)[0].strip()
+    value = re.split(r'[-—/|]', value, maxsplit=1)[0].strip()
+    if re.search(r'\s', value):
+        value = re.split(r'\s+', value, maxsplit=1)[0].strip()
+
+    value = re.sub(r'(同志|先生|女士|老师)$', '', value).strip()
+    value = value.strip(' "\'“”‘’.,，。;；:：!?！？[]【】()（）<>《》')
+
+    if value.lower() in NAMEPLATE_REJECT_VALUES or value in NAMEPLATE_REJECT_VALUES:
+        return ''
+    if not value or len(value) > NAMEPLATE_MAX_NAME_LEN:
+        return ''
+    if not re.search(r'[\u4e00-\u9fffA-Za-z]', value):
+        return ''
+    if re.search(r'\d', value):
+        return ''
+    if re.search(r'[，,。；;:：!?！？]', value):
+        return ''
+    return value
+
+
+def parse_nameplate_names(data: dict) -> list[str]:
+    """Parse a conservative name list from API payload.
+
+    Future AI/WeChat integrations should call this same dispatch API with a
+    normalized names array after completing intent extraction.
+    """
+    names = []
+    raw_names = data.get('names')
+    if isinstance(raw_names, list):
+        for item in raw_names:
+            name = _clean_nameplate_candidate(item)
+            if name:
+                names.append(name)
+        return names
+
+    text = data.get('text') or data.get('message') or ''
+    if not isinstance(text, str):
+        return []
+
+    normalized = text.replace('\r\n', '\n').replace('\r', '\n')
+    normalized = re.sub(r'[、,，;；\t]+', '\n', normalized)
+
+    for line in normalized.split('\n'):
+        name = _clean_nameplate_candidate(line)
+        if name:
+            names.append(name)
+
+    return names
+
+
+def parse_nameplate_names_from_text(text: str) -> list[str]:
+    if not isinstance(text, str) or not text.strip():
+        return []
+
+    names = []
+    normalized = text.replace('\r\n', '\n').replace('\r', '\n')
+    for line in normalized.split('\n'):
+        cells = re.split(r'[\t,，、;；|]+', line)
+        for cell in cells:
+            name = _clean_nameplate_candidate(cell)
+            if name:
+                names.append(name)
+                break
+    return names
+
+
+def resolve_nameplate_target_devices(owner: str, requested_device_ids) -> tuple[list[dict], list[str]]:
+    if devices_collection is None or not owner:
+        return [], []
+
+    if isinstance(requested_device_ids, list) and requested_device_ids:
+        clean_ids = []
+        for raw_id in requested_device_ids:
+            clean_id = normalize_device_id(str(raw_id))
+            if clean_id and clean_id not in clean_ids:
+                clean_ids.append(clean_id)
+
+        docs = list(devices_collection.find({'owner': owner, 'deviceId': {'$in': clean_ids}}))
+        by_id = {doc.get('deviceId'): doc for doc in docs}
+        target_devices = [by_id[device_id] for device_id in clean_ids if device_id in by_id]
+        missing = [device_id for device_id in clean_ids if device_id not in by_id]
+        return target_devices, missing
+
+    return list(devices_collection.find({'owner': owner, 'claimed': True}).sort('addedAt', 1)), []
+
+
+def normalize_nameplate_template_config(raw_config) -> dict:
+    raw_config = raw_config if isinstance(raw_config, dict) else {}
+    style = str(raw_config.get('backgroundStyle') or 'formal_red').strip().lower()
+    if style not in ('formal_red', 'formal_blue', 'formal_green', 'plain'):
+        style = 'formal_red'
+
+    config = {
+        'backgroundStyle': style,
+        'title': str(raw_config.get('title') or '').strip()[:40],
+        'subtitle': str(raw_config.get('subtitle') or '').strip()[:40],
+    }
+
+    sleep_interval = raw_config.get('sleepIntervalSeconds')
+    if isinstance(sleep_interval, (int, float)) and sleep_interval > 0:
+        config['sleepIntervalSeconds'] = int(sleep_interval)
+    return config
+
+
+def normalize_nameplate_template_name(value) -> str:
+    name = str(value or '').strip()
+    return (name[:40] if name else '会议名牌模板')
+
+
+def serialize_saved_nameplate_template(doc):
+    if not doc:
+        return None
+
+    result = {
+        'templateId': doc.get('templateId'),
+        'name': doc.get('name') or '会议名牌模板',
+        'baseTemplateId': doc.get('baseTemplateId') or 'nameplate',
+        'templateConfig': normalize_nameplate_template_config(doc.get('templateConfig')),
+    }
+    for key in ('createdAt', 'updatedAt'):
+        value = doc.get(key)
+        if hasattr(value, 'isoformat'):
+            result[key] = value.isoformat()
+        elif value:
+            result[key] = str(value)
+    return result
+
+
+def decode_uploaded_text(raw: bytes) -> str:
+    for encoding in ('utf-8-sig', 'utf-8', 'gb18030', 'latin-1'):
+        try:
+            return raw.decode(encoding)
+        except Exception:
+            continue
+    return raw.decode('utf-8', errors='ignore')
+
+
+def extract_spreadsheet_text(raw: bytes, filename: str) -> tuple[str, list[str]]:
+    warnings = []
+    suffix = Path(filename or '').suffix.lower()
+    if suffix in ('.csv', '.tsv', '.txt'):
+        return decode_uploaded_text(raw), warnings
+
+    if suffix in ('.xlsx', '.xlsm'):
+        try:
+            from openpyxl import load_workbook
+        except Exception:
+            return '', ['服务器缺少 openpyxl，暂不能解析 XLSX 表格']
+
+        try:
+            wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+            lines = []
+            for sheet in wb.worksheets[:5]:
+                lines.append(f'工作表: {sheet.title}')
+                for row in sheet.iter_rows(max_row=300, max_col=30, values_only=True):
+                    cells = []
+                    for cell in row:
+                        if cell is None:
+                            continue
+                        text = str(cell).strip()
+                        if text:
+                            cells.append(text)
+                    if cells:
+                        lines.append('\t'.join(cells))
+            return '\n'.join(lines), warnings
+        except Exception as e:
+            return '', [f'表格解析失败: {e}']
+
+    return '', [f'不支持的表格格式: {suffix or filename}']
+
+
+def collect_nameplate_parse_sources(req) -> tuple[str, list[dict], list[str], list[str]]:
+    warnings = []
+    filenames = []
+    text_parts = []
+    image_parts = []
+
+    if req.content_type and req.content_type.startswith('application/json'):
+        data = req.get_json() or {}
+        text = data.get('text') or data.get('message') or ''
+        if isinstance(text, str) and text.strip():
+            text_parts.append(text)
+        return '\n'.join(text_parts), image_parts, warnings, filenames
+
+    form_text = req.form.get('text') or req.form.get('message') or ''
+    if form_text.strip():
+        text_parts.append(form_text.strip())
+
+    for storage in req.files.getlist('files'):
+        filename = storage.filename or 'upload'
+        raw = storage.read()
+        if not raw:
+            continue
+        filenames.append(filename)
+        if len(raw) > NAMEPLATE_MAX_PARSE_FILE_BYTES:
+            warnings.append(f'{filename} 超过大小限制，已跳过')
+            continue
+
+        mime_type = storage.mimetype or mimetypes.guess_type(filename)[0] or ''
+        suffix = Path(filename).suffix.lower()
+        if mime_type.startswith('image/') or suffix in ('.png', '.jpg', '.jpeg', '.webp', '.gif'):
+            if suffix == '.gif':
+                warnings.append(f'{filename} 如为动图，仅建议上传静态图片')
+            image_parts.append({
+                'filename': filename,
+                'mimeType': mime_type or 'image/png',
+                'dataUrl': f"data:{mime_type or 'image/png'};base64,{base64.b64encode(raw).decode('ascii')}",
+            })
+            continue
+
+        extracted_text, file_warnings = extract_spreadsheet_text(raw, filename)
+        warnings.extend(file_warnings)
+        if extracted_text:
+            text_parts.append(f'文件: {filename}\n{extracted_text}')
+
+    return '\n\n'.join(text_parts), image_parts, warnings, filenames
+
+
+def build_nameplate_parse_result(names: list[str], template_config: dict, warnings=None,
+                                 ai_used=False, source_summary='') -> dict:
+    clean_names = []
+    for name in names:
+        clean = _clean_nameplate_candidate(name)
+        if clean:
+            clean_names.append(clean)
+
+    return {
+        'names': clean_names,
+        'templateConfig': normalize_nameplate_template_config(template_config),
+        'warnings': warnings or [],
+        'aiUsed': bool(ai_used),
+        'sourceSummary': source_summary or '',
+    }
+
+
+def _extract_openai_response_text(resp_json: dict) -> str:
+    if not isinstance(resp_json, dict):
+        return ''
+    if isinstance(resp_json.get('output_text'), str):
+        return resp_json['output_text']
+
+    texts = []
+    for output in resp_json.get('output', []) or []:
+        for content in output.get('content', []) or []:
+            if isinstance(content.get('text'), str):
+                texts.append(content['text'])
+    return '\n'.join(texts)
+
+
+def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base_config: dict) -> dict:
+    api_key = get_nameplate_ai_api_key()
+    if not api_key:
+        raise RuntimeError('NAMEPLATE_AI_API_KEY 未配置')
+
+    schema = {
+        'type': 'object',
+        'additionalProperties': False,
+        'required': ['names', 'templateConfig', 'warnings', 'sourceSummary'],
+        'properties': {
+            'names': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': '按原始顺序提取的人名，只保留姓名，不要包含单位、职务、序号。'
+            },
+            'templateConfig': {
+                'type': 'object',
+                'additionalProperties': False,
+                'required': ['backgroundStyle', 'title', 'subtitle', 'sleepIntervalSeconds'],
+                'properties': {
+                    'backgroundStyle': {'type': 'string', 'enum': ['formal_red', 'formal_blue', 'formal_green', 'plain']},
+                    'title': {'type': 'string'},
+                    'subtitle': {'type': 'string'},
+                    'sleepIntervalSeconds': {'type': 'integer'},
+                },
+            },
+            'warnings': {'type': 'array', 'items': {'type': 'string'}},
+            'sourceSummary': {'type': 'string'},
+        },
+    }
+
+    prompt_text = (
+        '你是政务会议电子铭牌名单解析助手。请从用户上传的文字、图片或表格中提取需要下发到铭牌的姓名。'
+        '输出必须符合 JSON Schema。只提取人名，不要把单位、职务、标题、设备编号、电话、序号当作姓名。'
+        '保持名单原始顺序。若文本中出现职务或英文副标题，可作为 title；公司名称可作为 subtitle。'
+        'backgroundStyle 可使用 formal_red=Pheno红色底栏、formal_green=Pheno绿色底栏、plain=Pheno绿色横幅、formal_blue=Pheno职务名片。'
+        '如果不确定，请把疑问写入 warnings。'
+        f'\n当前默认模板: {json.dumps(base_config, ensure_ascii=False)}'
+        f'\n文本内容:\n{source_text[:12000]}'
+    )
+
+    base_url = (
+        os.environ.get('NAMEPLATE_AI_BASE_URL')
+        or os.environ.get('OPENAI_BASE_URL')
+        or NAMEPLATE_AI_BASE_URL
+    ).rstrip('/')
+    model = (
+        os.environ.get('NAMEPLATE_AI_MODEL')
+        or os.environ.get('OPENAI_NAMEPLATE_MODEL')
+        or NAMEPLATE_AI_MODEL
+    )
+    api_mode = (os.environ.get('NAMEPLATE_AI_API_MODE') or NAMEPLATE_AI_API_MODE or 'responses').strip().lower()
+
+    if api_mode in ('chat', 'chat_completions', 'chat-completions'):
+        content = [{'type': 'text', 'text': prompt_text}]
+        for image in image_parts[:8]:
+            content.append({
+                'type': 'image_url',
+                'image_url': {
+                    'url': image['dataUrl'],
+                    'detail': 'high',
+                },
+            })
+
+        payload = {
+            'model': model,
+            'messages': [{'role': 'user', 'content': content}],
+            'response_format': {'type': 'json_object'},
+            'max_tokens': 1800,
+        }
+        if 'minimax' in base_url.lower() or model.lower().startswith('minimax-'):
+            payload['thinking'] = {'type': 'disabled'}
+
+        resp = requests.post(
+            f'{base_url}/chat/completions',
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json',
+            },
+            json=payload,
+            timeout=75,
+        )
+        if resp.status_code >= 400 and 'response_format' in resp.text:
+            retry_payload = dict(payload)
+            retry_payload.pop('response_format', None)
+            resp = requests.post(
+                f'{base_url}/chat/completions',
+                headers={
+                    'Authorization': f'Bearer {api_key}',
+                    'Content-Type': 'application/json',
+                },
+                json=retry_payload,
+                timeout=75,
+            )
+        if resp.status_code >= 400:
+            raise RuntimeError(f'AI解析失败: HTTP {resp.status_code} {resp.text[:300]}')
+
+        completion = resp.json()
+        output_text = (
+            completion.get('choices', [{}])[0]
+            .get('message', {})
+            .get('content', '')
+        )
+        if not output_text:
+            raise RuntimeError('AI解析未返回文本')
+
+        parsed = json.loads(output_text)
+        return build_nameplate_parse_result(
+            parsed.get('names', []),
+            parsed.get('templateConfig', base_config),
+            warnings=parsed.get('warnings', []),
+            ai_used=True,
+            source_summary=parsed.get('sourceSummary', 'AI解析'),
+        )
+
+    content = [{
+        'type': 'input_text',
+        'text': prompt_text
+    }]
+
+    for image in image_parts[:8]:
+        content.append({
+            'type': 'input_image',
+            'image_url': image['dataUrl'],
+            'detail': 'high',
+        })
+
+    payload = {
+        'model': model,
+        'input': [{'role': 'user', 'content': content}],
+        'text': {
+            'format': {
+                'type': 'json_schema',
+                'name': 'nameplate_parse_result',
+                'strict': True,
+                'schema': schema,
+            }
+        },
+        'max_output_tokens': 1800,
+    }
+
+    resp = requests.post(
+        f'{base_url}/responses',
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        },
+        json=payload,
+        timeout=75,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(f'OpenAI 解析失败: HTTP {resp.status_code} {resp.text[:300]}')
+
+    output_text = _extract_openai_response_text(resp.json())
+    if not output_text:
+        raise RuntimeError('OpenAI 解析未返回文本')
+    try:
+        parsed = json.loads(output_text)
+    except Exception as e:
+        raise RuntimeError(f'OpenAI 解析结果不是 JSON: {e}')
+
+    return build_nameplate_parse_result(
+        parsed.get('names', []),
+        parsed.get('templateConfig') or base_config,
+        parsed.get('warnings') or [],
+        ai_used=True,
+        source_summary=parsed.get('sourceSummary') or '',
+    )
+
+
 def to_epoch_ms(value):
     if not value:
         return None
@@ -229,6 +726,7 @@ devices_collection = None
 device_status_collection = None
 pages_collection = None
 pairing_codes_collection = None
+saved_nameplate_templates_collection = None
 
 # ==================== 图片持久化存储目录 ====================
 # 图片数据保存在 data/epd/<deviceId>/latest.txt
@@ -295,7 +793,7 @@ def redact_uri_secret(uri: str) -> str:
 def connect_mongodb(max_retries: int = 10, retry_delay_seconds: int = 2):
     """连接 MongoDB"""
     global mongo_client, db, users_collection, devices_collection, device_status_collection
-    global pages_collection, pairing_codes_collection
+    global pages_collection, pairing_codes_collection, saved_nameplate_templates_collection
     for attempt in range(1, max_retries + 1):
         try:
             mongo_client = MongoClient(Config.MONGODB_URI, serverSelectionTimeoutMS=5000)
@@ -307,6 +805,7 @@ def connect_mongodb(max_retries: int = 10, retry_delay_seconds: int = 2):
             device_status_collection = db['device_status']
             pages_collection = db['pages']
             pairing_codes_collection = db['pairing_codes']
+            saved_nameplate_templates_collection = db['saved_nameplate_templates']
 
             # 创建索引
             users_collection.create_index('username', unique=True)
@@ -326,6 +825,10 @@ def connect_mongodb(max_retries: int = 10, retry_delay_seconds: int = 2):
 
             pairing_codes_collection.create_index('deviceId', unique=True)
             pairing_codes_collection.create_index('expiresAt', expireAfterSeconds=0)
+
+            saved_nameplate_templates_collection.create_index('templateId', unique=True)
+            saved_nameplate_templates_collection.create_index('owner')
+            saved_nameplate_templates_collection.create_index([('owner', 1), ('updatedAt', -1)])
 
             print(f'✅ Connected to MongoDB: {redact_uri_secret(Config.MONGODB_URI)}')
             print(f'📊 Database: {Config.MONGODB_DB}')
@@ -1318,21 +1821,168 @@ TEMPLATES = [
             'content': '',
             'title': ''
         }
+    },
+    {
+        'templateId': 'nameplate',
+        'name': '会议名牌',
+        'icon': 'meeting-nameplate',
+        'description': 'Pheno 品牌姓名牌',
+        'preview': '/templates/nameplate.png',
+        'defaultData': {
+            'type': 'template',
+            'template': 'nameplate',
+            'name': '',
+            'backgroundStyle': 'formal_red',
+            'title': '',
+            'subtitle': ''
+        }
     }
 ]
+ACTIVE_TEMPLATE_IDS = {'nameplate'}
+
+def get_active_templates():
+    return [template for template in TEMPLATES if template.get('templateId') in ACTIVE_TEMPLATE_IDS]
 
 @app.route('/api/templates', methods=['GET'])
 def get_templates():
     """获取所有可用模板"""
-    return jsonify({'success': True, 'templates': TEMPLATES})
+    return jsonify({'success': True, 'templates': get_active_templates()})
 
 @app.route('/api/templates/<template_id>', methods=['GET'])
 def get_template(template_id):
     """获取单个模板详情"""
+    if template_id not in ACTIVE_TEMPLATE_IDS:
+        return jsonify({'success': False, 'error': 'Template not available'}), 404
     template = next((t for t in TEMPLATES if t['templateId'] == template_id), None)
     if not template:
         return jsonify({'success': False, 'error': 'Template not found'}), 404
     return jsonify({'success': True, 'template': template})
+
+
+@app.route('/api/nameplate/templates', methods=['GET'])
+@login_required
+def list_saved_nameplate_templates():
+    """列出当前账号保存的会议名牌模板。"""
+    try:
+        if saved_nameplate_templates_collection is None:
+            return jsonify({'success': False, 'error': 'Database not connected'}), 500
+
+        user = getattr(request, 'user', None)
+        owner = user.get('username') if user else None
+        if not owner:
+            return jsonify({'success': False, 'error': 'Missing owner'}), 401
+
+        docs = list(saved_nameplate_templates_collection.find(
+            {'owner': owner, 'baseTemplateId': 'nameplate'},
+            {'_id': 0}
+        ).sort('updatedAt', -1))
+
+        return jsonify({
+            'success': True,
+            'templates': [serialize_saved_nameplate_template(doc) for doc in docs]
+        })
+    except Exception as e:
+        print(f'❌ Error listing saved nameplate templates: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/nameplate/templates/<template_id>', methods=['GET'])
+@login_required
+def get_saved_nameplate_template(template_id):
+    """获取当前账号保存的单个会议名牌模板。"""
+    try:
+        if saved_nameplate_templates_collection is None:
+            return jsonify({'success': False, 'error': 'Database not connected'}), 500
+
+        user = getattr(request, 'user', None)
+        owner = user.get('username') if user else None
+        doc = saved_nameplate_templates_collection.find_one(
+            {'owner': owner, 'templateId': str(template_id), 'baseTemplateId': 'nameplate'},
+            {'_id': 0}
+        )
+        if not doc:
+            return jsonify({'success': False, 'error': 'Template not found'}), 404
+
+        return jsonify({'success': True, 'template': serialize_saved_nameplate_template(doc)})
+    except Exception as e:
+        print(f'❌ Error fetching saved nameplate template: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/nameplate/templates', methods=['POST'])
+@login_required
+def save_saved_nameplate_template():
+    """新建或更新当前账号保存的会议名牌模板。"""
+    try:
+        if saved_nameplate_templates_collection is None:
+            return jsonify({'success': False, 'error': 'Database not connected'}), 500
+
+        data = request.get_json() or {}
+        user = getattr(request, 'user', None)
+        owner = user.get('username') if user else None
+        if not owner:
+            return jsonify({'success': False, 'error': 'Missing owner'}), 401
+
+        template_id = str(data.get('templateId') or '').strip()
+        name = normalize_nameplate_template_name(data.get('name'))
+        template_config = normalize_nameplate_template_config(data.get('templateConfig'))
+        now = datetime.utcnow()
+
+        if template_id:
+            result = saved_nameplate_templates_collection.update_one(
+                {'owner': owner, 'templateId': template_id, 'baseTemplateId': 'nameplate'},
+                {'$set': {
+                    'name': name,
+                    'templateConfig': template_config,
+                    'updatedAt': now,
+                }}
+            )
+            if result.matched_count == 0:
+                return jsonify({'success': False, 'error': 'Template not found'}), 404
+        else:
+            template_id = secrets.token_hex(6)
+            doc = {
+                'templateId': template_id,
+                'owner': owner,
+                'baseTemplateId': 'nameplate',
+                'name': name,
+                'templateConfig': template_config,
+                'createdAt': now,
+                'updatedAt': now,
+            }
+            saved_nameplate_templates_collection.insert_one(doc)
+
+        saved = saved_nameplate_templates_collection.find_one(
+            {'owner': owner, 'templateId': template_id, 'baseTemplateId': 'nameplate'},
+            {'_id': 0}
+        )
+        return jsonify({'success': True, 'template': serialize_saved_nameplate_template(saved)})
+    except DuplicateKeyError:
+        return jsonify({'success': False, 'error': 'Template id conflict'}), 409
+    except Exception as e:
+        print(f'❌ Error saving nameplate template: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/nameplate/templates/<template_id>', methods=['DELETE'])
+@login_required
+def delete_saved_nameplate_template(template_id):
+    """删除当前账号保存的会议名牌模板。"""
+    try:
+        if saved_nameplate_templates_collection is None:
+            return jsonify({'success': False, 'error': 'Database not connected'}), 500
+
+        user = getattr(request, 'user', None)
+        owner = user.get('username') if user else None
+        result = saved_nameplate_templates_collection.delete_one(
+            {'owner': owner, 'templateId': str(template_id), 'baseTemplateId': 'nameplate'}
+        )
+        if result.deleted_count == 0:
+            return jsonify({'success': False, 'error': 'Template not found'}), 404
+        return jsonify({'success': True})
+    except Exception as e:
+        print(f'❌ Error deleting saved nameplate template: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 # ==================== API: EPD 控制（HTTP拉取架构） ====================
 
@@ -1584,6 +2234,8 @@ def device_set_template():
 
     clean_id = normalize_device_id(device_id)
     template_id = str(template_id).strip().lower()
+    if template_id not in ACTIVE_TEMPLATE_IDS:
+        return jsonify({'success': False, 'error': '当前只支持会议名牌模板'}), 400
 
     # ===== 渲染逻辑：前端截图优先，无截图时后端渲染 =====
     image_base64 = data.get('imageBase64')
@@ -1668,6 +2320,197 @@ def device_set_template():
         return jsonify(response_data)
 
     return jsonify({'success': True, 'message': 'Template rendered and saved'})
+
+
+@app.route('/api/nameplates/dispatch', methods=['POST'])
+@login_required
+def dispatch_nameplates():
+    """批量把人名渲染为铭牌并下发到一组设备。
+
+    第一版只处理姓名下发；微信/AI 入口后续可以把解析后的 names 数组提交到这里。
+    """
+    try:
+        data = request.get_json() or {}
+        user = getattr(request, 'user', None)
+        owner = user.get('username') if user else None
+
+        if devices_collection is None or not owner:
+            return jsonify({'success': False, 'error': 'Database not connected'}), 500
+
+        names = parse_nameplate_names(data)
+        if not names:
+            return jsonify({'success': False, 'error': '未识别到可下发的人名，请使用一行一个姓名或用逗号/顿号分隔'}), 400
+
+        target_devices, missing_device_ids = resolve_nameplate_target_devices(owner, data.get('deviceIds'))
+        if missing_device_ids:
+            return jsonify({
+                'success': False,
+                'error': '部分设备不存在或无权限',
+                'missingDeviceIds': missing_device_ids
+            }), 403
+
+        if not target_devices:
+            return jsonify({'success': False, 'error': '当前账号没有可下发的设备'}), 400
+
+        base_template_config = normalize_nameplate_template_config(data.get('templateConfig'))
+        custom_interval = base_template_config.get('sleepIntervalSeconds')
+        content_meta = build_content_metadata('template', 'nameplate', custom_interval)
+        batch_id = f"nameplate-{int(time.time())}-{secrets.token_hex(3)}"
+
+        assignments = []
+        failed = []
+        assign_count = min(len(names), len(target_devices))
+
+        for index in range(assign_count):
+            device = target_devices[index]
+            clean_id = device.get('deviceId')
+            name = names[index]
+            template_config = dict(base_template_config)
+            template_config['name'] = name
+
+            try:
+                render_result = render_template_with_preview('nameplate', template_config)
+                epd_data = render_result.get('epdData') if isinstance(render_result, dict) else None
+                if not epd_data or len(epd_data) != EPD_EXPECTED_CHARS:
+                    raise ValueError(f'Nameplate rendering failed or invalid length: {len(epd_data) if epd_data else 0}')
+
+                if not save_device_image(clean_id, epd_data):
+                    raise RuntimeError('Failed to save rendered image')
+
+                device_doc = devices_collection.find_one({'deviceId': clean_id, 'owner': owner})
+                current_version = device_doc.get('imageVersion', 0) if device_doc else 0
+                new_version = current_version + 1
+                now = datetime.utcnow()
+                active_label = f'铭牌：{name}'
+
+                devices_collection.update_one(
+                    {'deviceId': clean_id, 'owner': owner},
+                    {'$set': {
+                        'imageVersion': new_version,
+                        'imageSizeChars': len(epd_data),
+                        'imageSizeBytes': len(epd_data.encode('utf-8')),
+                        'imageSha256': hashlib.sha256(epd_data.encode('utf-8')).hexdigest(),
+                        'activeContentMode': content_meta['activeContentMode'],
+                        'activeContentLabel': active_label,
+                        'activeTemplateId': 'nameplate',
+                        'sleepIntervalSeconds': content_meta['sleepIntervalSeconds'],
+                        'templateConfig': template_config,
+                        'renderSource': 'nameplate_batch',
+                        'nameplateName': name,
+                        'nameplateBatchId': batch_id,
+                        'activeContentUpdatedAt': now,
+                        'updatedAt': now,
+                    }}
+                )
+
+                assignments.append({
+                    'deviceId': clean_id,
+                    'deviceName': device.get('deviceName', clean_id),
+                    'name': name,
+                    'imageVersion': new_version,
+                    'activeContentLabel': active_label,
+                })
+                print(f'✅ 铭牌已下发: {clean_id} -> {name}, 版本={new_version}, batch={batch_id}')
+            except Exception as e:
+                failed.append({
+                    'deviceId': clean_id,
+                    'deviceName': device.get('deviceName', clean_id),
+                    'name': name,
+                    'error': str(e),
+                })
+                print(f'❌ 铭牌下发失败: {clean_id} -> {name}: {e}')
+
+        skipped_names = names[assign_count:]
+        unassigned_devices = [
+            {
+                'deviceId': device.get('deviceId'),
+                'deviceName': device.get('deviceName', device.get('deviceId')),
+            }
+            for device in target_devices[assign_count:]
+        ]
+
+        if not assignments:
+            return jsonify({
+                'success': False,
+                'error': '铭牌渲染或保存失败',
+                'failed': failed,
+                'batchId': batch_id,
+            }), 500
+
+        return jsonify({
+            'success': True,
+            'message': 'Nameplates dispatched',
+            'batchId': batch_id,
+            'assignedCount': len(assignments),
+            'nameCount': len(names),
+            'deviceCount': len(target_devices),
+            'assignments': assignments,
+            'failed': failed,
+            'skippedNames': skipped_names,
+            'unassignedDevices': unassigned_devices,
+            'sleepIntervalSeconds': content_meta['sleepIntervalSeconds'],
+        })
+    except Exception as e:
+        print(f'❌ 批量铭牌下发异常: {e}')
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/nameplates/parse', methods=['POST'])
+@login_required
+def parse_nameplates():
+    """把用户上传的文字/图片/表格解析成待确认的铭牌草稿。"""
+    try:
+        request_json = request.get_json(silent=True) or {} if request.is_json else {}
+        raw_template_config = request_json.get('templateConfig', {})
+        form_template_config = request.form.get('templateConfig') if request.form else None
+        if form_template_config:
+            try:
+                raw_template_config = json.loads(form_template_config)
+            except (TypeError, ValueError):
+                raw_template_config = {}
+
+        base_template_config = normalize_nameplate_template_config(
+            raw_template_config
+        )
+        source_text, image_parts, warnings, filenames = collect_nameplate_parse_sources(request)
+
+        if not source_text.strip() and not image_parts:
+            return jsonify({'success': False, 'error': '请先输入文字或上传图片/表格'}), 400
+
+        local_names = parse_nameplate_names_from_text(source_text)
+        should_use_ai = bool(image_parts) or len(source_text) > 0
+        result = None
+
+        if should_use_ai and get_nameplate_ai_api_key():
+            try:
+                result = call_openai_nameplate_parser(source_text, image_parts, base_template_config)
+                result['warnings'] = warnings + result.get('warnings', [])
+            except Exception as e:
+                warnings.append(f'AI解析失败，已使用本地规则解析: {e}')
+                print(f'⚠️ 名单 AI 解析失败: {e}')
+        elif image_parts:
+            warnings.append('服务器未配置 NAMEPLATE_AI_API_KEY 或 OPENAI_API_KEY，图片内容暂不能识别')
+
+        if result is None:
+            result = build_nameplate_parse_result(
+                local_names or parse_nameplate_names({'text': source_text}),
+                base_template_config,
+                warnings=warnings,
+                ai_used=False,
+                source_summary='本地规则解析',
+            )
+
+        if filenames:
+            result['sourceFiles'] = filenames
+
+        return jsonify({'success': True, 'parsed': result})
+    except Exception as e:
+        print(f'❌ 名单解析异常: {e}')
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # ==================== 健康检查 ====================

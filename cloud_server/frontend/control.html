@@ -1,10 +1,37 @@
 <!DOCTYPE html>
-<html>
+<html class="control-root">
 <head>
     <meta charset='utf-8'>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 E-Paper 页面编辑器</title>
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>模板设计</title>
     <link rel='icon' href='data:;base64,='>
+    <script>
+        (function () {
+            try {
+                if (localStorage.getItem('meetingThemeMode') === 'light') {
+                    document.documentElement.classList.add('theme-light');
+                    document.documentElement.dataset.theme = 'light';
+                    document.documentElement.style.colorScheme = 'light';
+                }
+            } catch (e) {}
+        }());
+    </script>
+    <style>
+        html.theme-light,
+        html[data-theme="light"] {
+            background: #eef5f7 !important;
+            color-scheme: light;
+        }
+
+        html.theme-light body,
+        html[data-theme="light"] body {
+            color: #0b1720 !important;
+            background: #eef5f7 !important;
+        }
+    </style>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -36,7 +63,7 @@
         /* ===== 顶部导航栏 ===== */
         .top-bar {
             height: var(--header-height);
-            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            background: var(--primary);
             color: white;
             display: flex;
             align-items: center;
@@ -148,6 +175,16 @@
 
         .btn-new:hover {
             background: var(--primary-dark);
+        }
+
+        .btn:disabled,
+        .btn-new:disabled {
+            opacity: 0.48;
+            cursor: not-allowed;
+        }
+
+        .btn-new:disabled:hover {
+            background: var(--primary);
         }
 
         .page-list {
@@ -615,7 +652,7 @@
 
         .progress-bar-fill {
             height: 100%;
-            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            background: var(--primary);
             border-radius: 4px;
             transition: width 0.3s;
         }
@@ -768,42 +805,83 @@
             }
         }
     </style>
+    <script src="theme.js?v=20260706opt2"></script>
+    <link rel="stylesheet" href="ui.css?v=20260706opt2">
 </head>
-<body>
-    <!-- 顶部导航栏 -->
-    <div class="top-bar">
-        <div class="logo">📱 E-Paper Studio</div>
-        <div class="device-status">
-            <div class="status-item">
-                <span class="status-dot" id="statusDot"></span>
-                <span id="deviceNameDisplay">未选择设备</span>
-            </div>
-            <div class="status-item">
-                <span>📐</span>
-                <span id="resolutionDisplay">800×480</span>
-            </div>
-        </div>
-        <div class="actions">
-            <button class="btn btn-light" onclick="window.location.href='index.html'">
-                ⬅️ 返回
-            </button>
-        </div>
-    </div>
+<body class="control-page meeting-device-page">
+    <div class="meeting-page">
+        <section class="meeting-shell control-shell">
+            <aside class="meeting-sidebar" aria-label="主导航">
+                <a class="meeting-brand" href="index.html?v=20260706opt2" aria-label="会议牌管理">
+                    <span class="meeting-brand-mark" aria-hidden="true"></span>
+                    <span>会议牌管理</span>
+                </a>
+
+                <nav class="meeting-nav">
+                    <a class="meeting-nav-item" href="index.html?v=20260706opt2">
+                        <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
+                        <span>设备</span>
+                    </a>
+                    <a class="meeting-nav-item" href="nameplates.html?v=20260706opt2">
+                        <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
+                        <span>名单下发</span>
+                    </a>
+                    <a class="meeting-nav-item active" href="control.html?v=20260706opt2" aria-current="page">
+                        <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
+                        <span>模板设计</span>
+                    </a>
+                    <a class="meeting-nav-item" href="settings.html?v=20260706opt2">
+                        <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
+                        <span>设置</span>
+                    </a>
+                </nav>
+            </aside>
+
+            <main class="control-workspace">
+                <!-- 顶部导航栏 -->
+                <div class="top-bar">
+                    <div class="meeting-status-bar control-system-status" role="status" aria-live="polite">
+                        <span id="statusText">就绪</span>
+                        <span id="canvasInfo">画布: 800×480</span>
+                    </div>
+                    <div class="device-status">
+                        <div class="status-item">
+                            <span class="status-dot" id="statusDot"></span>
+                            <span id="deviceNameDisplay">未选择设备</span>
+                        </div>
+                        <div class="status-item">
+                            <span>Canvas</span>
+                            <span id="resolutionDisplay">800×480</span>
+                        </div>
+                    </div>
+                </div>
 
     <!-- 主布局 -->
     <div class="main-layout">
         <!-- 左侧边栏 - 页面列表 -->
         <div class="left-sidebar">
-            <div class="sidebar-header">
-                <h3>📄 页面</h3>
-                <button class="btn-new" onclick="showNewPageModal()">+ 新建</button>
+            <div class="page-sidebar-content">
+                <div class="sidebar-header">
+                    <h3>页面</h3>
+                    <button class="btn-new" id="newPageButton" type="button" onclick="showNewPageModal()" data-requires-device>+ 新建</button>
+                </div>
+                <div class="page-list" id="pageList">
+                    <!-- 页面列表将动态生成 -->
+                    <div class="empty-state" style="text-align: center; padding: 40px 20px; color: var(--text-light);">
+                        <div style="font-size: 2em; margin-bottom: 10px;">📝</div>
+                        <p>暂无页面</p>
+                        <p style="font-size: 0.85em;">点击上方"+ 新建"创建第一个页面</p>
+                    </div>
+                </div>
             </div>
-            <div class="page-list" id="pageList">
-                <!-- 页面列表将动态生成 -->
-                <div class="empty-state" style="text-align: center; padding: 40px 20px; color: var(--text-light);">
-                    <div style="font-size: 2em; margin-bottom: 10px;">📝</div>
-                    <p>暂无页面</p>
-                    <p style="font-size: 0.85em;">点击上方"+ 新建"创建第一个页面</p>
+
+            <div class="saved-template-sidebar" id="savedTemplateSection">
+                <div class="sidebar-header saved-template-head">
+                    <h3>模板列表</h3>
+                    <button class="btn-new" type="button" onclick="startNewNameplateTemplate()">+ 新建</button>
+                </div>
+                <div class="saved-template-list" id="savedTemplateList">
+                    <div class="saved-template-empty">正在加载模板</div>
                 </div>
             </div>
         </div>
@@ -811,18 +889,17 @@
         <!-- 主内容区 - 画布 -->
         <div class="canvas-area">
             <div class="toolbar">
-                <div class="toolbar-group">
-                    <label>屏幕型号:</label>
-                    <span style="padding: 6px 10px; color: var(--text-dark);">7.3" E6 800×480 (6色)</span>
-                </div>
-                <div class="toolbar-group">
-                    <button class="btn btn-secondary" onclick="savePage()">💾 保存</button>
-                    <button class="btn btn-success" onclick="uploadToDevice()">📤 发布</button>
+                <div class="toolbar-group control-device-actions" data-requires-device-group>
+                    <button class="btn btn-secondary" id="savePageButton" type="button" onclick="savePage()" data-requires-device>保存</button>
+                    <button class="btn btn-success" id="publishPageButton" type="button" onclick="uploadToDevice()" data-requires-device>发布</button>
                 </div>
             </div>
 
             <div class="canvas-wrapper">
                 <div class="canvas-container" id="canvasContainer">
+                    <div class="cropper-stage hidden" id="cropperStage">
+                        <img id="cropperImage" alt="待裁剪图片">
+                    </div>
                     <canvas id="mainCanvas" width="800" height="480"></canvas>
                 </div>
             </div>
@@ -837,7 +914,7 @@
 
             <div class="panel-content" id="editPanel">
                 <!-- 内容模式选择 -->
-                <div class="panel-section">
+                <div class="panel-section hidden">
                     <h4>内容模式</h4>
                     <div class="mode-buttons">
                         <div class="mode-btn active" data-mode="image" onclick="switchMode('image')">
@@ -860,14 +937,13 @@
                 </div>
 
                 <!-- 图片模式控件 -->
-                <div id="imageModeControls">
+                <div id="imageModeControls" class="hidden">
                     <div class="panel-section">
                         <h4>图片上传</h4>
-                        <div class="drop-zone" id="dropZone">
-                            <div class="icon">📁</div>
-                            <p>拖拽图片到这里<br>或点击选择</p>
-                            <input type="file" id="fileInput" class="hidden" accept="image/*">
+                        <div class="drop-zone filepond-drop-zone" id="dropZone">
+                            <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp">
                         </div>
+                        <p class="crop-note">固定按 800×480 比例裁剪，处理后会转换为 7.3 寸 E6 六色数据。</p>
                     </div>
 
                     <div class="panel-section">
@@ -993,9 +1069,9 @@
                 </div>
 
                 <!-- 模板模式控件 -->
-                <div id="templateModeControls" class="hidden">
+                <div id="templateModeControls">
                     <div class="panel-section">
-                        <h4>选择模板</h4>
+                        <h4>当前模板</h4>
                         <div class="template-grid" id="templateGrid">
                             <!-- 模板将动态加载 -->
                         </div>
@@ -1068,6 +1144,56 @@
                             📱 生成二维码并预览
                         </button>
                     </div>
+
+                    <!-- 铭牌模板配置 -->
+                    <div id="nameplateTemplateConfig" class="panel-section">
+                        <h4>会议名牌设置</h4>
+                        <div class="form-group">
+                            <label>模板名称</label>
+                            <input type="text" id="nameplateTemplateNameInput" placeholder="如：会务通用模板" value="会议名牌模板">
+                        </div>
+                        <div class="form-group">
+                            <label>人名</label>
+                            <input type="text" id="nameplateNameInput" placeholder="如：张三" oninput="renderNameplatePreview()">
+                        </div>
+                        <div class="form-group">
+                            <label>职务 / 副标题（可选）</label>
+                            <input type="text" id="nameplateTitleInput" placeholder="如：CEO / Technical Expert" oninput="renderNameplatePreview()">
+                        </div>
+                        <div class="form-group">
+                            <label>公司名称（可选）</label>
+                            <input type="text" id="nameplateSubtitleInput" placeholder="留空使用默认公司名" oninput="renderNameplatePreview()">
+                        </div>
+                        <div class="form-group">
+                            <label>背景样式</label>
+                            <select id="nameplateStyleSelect" onchange="renderNameplatePreview()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-size:0.9em;">
+                                <option value="formal_red" selected>Pheno 红色底栏</option>
+                                <option value="formal_green">Pheno 绿色底栏</option>
+                                <option value="plain">Pheno 绿色横幅</option>
+                                <option value="formal_blue">Pheno 职务名片</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>唤醒频率</label>
+                            <select id="nameplateWakeInterval" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-size:0.9em;">
+                                <option value="3600">每 1 小时</option>
+                                <option value="21600">每 6 小时</option>
+                                <option value="43200" selected>每 12 小时（默认）</option>
+                                <option value="86400">每 24 小时</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <button class="btn btn-primary" onclick="renderNameplatePreview()" style="flex:1">
+                                生成预览
+                            </button>
+                            <button class="btn btn-secondary" id="saveTemplateButton" type="button" onclick="saveNameplateTemplate()" style="flex:1">
+                                保存模板
+                            </button>
+                        </div>
+                        <button class="btn btn-secondary" type="button" onclick="saveNameplateTemplateAsNew()" style="width:100%; margin-top: 10px;">
+                            另存为新模板
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -1112,13 +1238,6 @@
             </div>
         </div>
     </div>
-
-    <!-- 底部状态栏 -->
-    <div class="status-bar">
-        <span id="statusText">就绪</span>
-        <span id="canvasInfo">画布: 800×480</span>
-    </div>
-
     <!-- 进度条 -->
     <div class="progress-overlay" id="progressOverlay">
         <div class="progress-label" id="progressLabel">上传中...</div>
@@ -1139,7 +1258,7 @@
                     <label>页面名称</label>
                     <input type="text" id="newPageName" placeholder="输入页面名称...">
                 </div>
-                <h4 style="margin: 20px 0 15px; color: var(--text-dark);">选择模板</h4>
+                <h4 style="margin: 20px 0 15px; color: var(--text-dark);">选择名牌模板</h4>
                 <div class="template-grid" id="modalTemplateGrid">
                     <!-- 模板将动态加载 -->
                 </div>
@@ -1172,6 +1291,9 @@
             </div>
         </div>
     </div>
+            </main>
+        </section>
+    </div>
 
     <!-- 隐藏的设备ID和EPD类型 -->
     <input type="hidden" id="deviceId">
@@ -1179,9 +1301,9 @@
     <input type="hidden" id="width" value="800">
     <input type="hidden" id="height" value="480">
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
-    <script src="auth.js?v=20250612a"></script>
-    <script src="app.js?v=20250615a"></script>
-    <script src="editor.js?v=20250615c"></script>
+    <script src="vendor/qrcode.min.js"></script>
+    <script src="auth.js?v=20260706opt2"></script>
+    <script src="app.js?v=20260706opt2"></script>
+    <script src="editor.js?v=20260706opt2"></script>
 </body>
 </html>
