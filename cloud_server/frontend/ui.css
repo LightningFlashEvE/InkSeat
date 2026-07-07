@@ -1698,7 +1698,8 @@ body.meeting-device-page button:disabled {
 .meeting-page {
     width: 100%;
     height: 100vh;
-    padding: 18px 12px;
+    height: 100dvh;
+    padding: 10px 12px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -1707,7 +1708,8 @@ body.meeting-device-page button:disabled {
 .meeting-shell {
     position: relative;
     width: 100%;
-    height: min(970px, calc(100vh - 36px));
+    height: calc(100vh - 20px);
+    height: calc(100dvh - 20px);
     display: grid;
     grid-template-columns: 146px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
@@ -3322,7 +3324,8 @@ body.dashboard-page.nameplates-page {
     z-index: 1;
     width: 100%;
     min-height: 0;
-    height: min(970px, calc(100vh - 36px));
+    height: calc(100vh - 20px);
+    height: calc(100dvh - 20px);
     grid-template-columns: 146px minmax(0, 1fr) minmax(280px, 340px);
     grid-template-rows: minmax(0, 1fr);
     overflow: hidden;
