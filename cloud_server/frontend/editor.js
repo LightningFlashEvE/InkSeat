@@ -20,7 +20,7 @@ var imageFilePond = null;
 var filePondPluginsRegistered = false;
 var imageEditingAssetsPromise = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260707nogen1';
+const CONTROL_LAZY_ASSET_VERSION = '20260707auth1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_COMPANY_CN = '现象创新（深圳）科技有限公司';
 const NAMEPLATE_COMPANY_EN = 'Pheno Innovations Technology Co., Ltd.';
@@ -95,10 +95,15 @@ loadNameplateBrandAssets();
 // cropX, cropY, mixedCropX, mixedCropY, processedImageData, redChannelData
 
 // ==================== 初始化 ====================
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     console.log('[Editor] 开始初始化...');
 
     try {
+        if (typeof requireAuth === 'function') {
+            const user = await requireAuth();
+            if (!user) return;
+        }
+
         initEditorShell();
         runAfterFirstPaint(initEditorDataAndControls);
     } catch (error) {
