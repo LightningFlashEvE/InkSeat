@@ -492,7 +492,7 @@ function setSignalIndicator(id, rssi) {
 }
 
 function openDevice(deviceId) {
-    window.location.href = `control.html?v=20260706light1&deviceId=${encodeURIComponent(deviceId)}`;
+    window.location.href = `control.html?v=20260707nogen1&deviceId=${encodeURIComponent(deviceId)}`;
 }
 
 let pollingInterval = null;
@@ -744,6 +744,6 @@ function logout() {
             localStorage.removeItem('authToken');
             localStorage.removeItem('authUser');
         }
-        window.location.href = 'login.html?v=20260706light1';
+        window.location.href = 'login.html?v=20260707nogen1';
     }
 }
