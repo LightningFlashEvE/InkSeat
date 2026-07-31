@@ -11,7 +11,7 @@
     <script>
         (function () {
             try {
-                if (localStorage.getItem('meetingThemeMode') === 'light') {
+                if (localStorage.getItem('meetingThemeMode') !== 'dark') {
                     document.documentElement.classList.add('theme-light');
                     document.documentElement.dataset.theme = 'light';
                     document.documentElement.style.colorScheme = 'light';
@@ -32,32 +32,32 @@
             background: #eef5f7 !important;
         }
     </style>
-    <script src="theme.js?v=20260707fit1"></script>
-    <link rel="stylesheet" href="ui.css?v=20260707fit1">
+    <script src="theme.js?v=20260731logo1"></script>
+    <link rel="stylesheet" href="ui.css?v=20260731logo1">
 </head>
 <body class="meeting-device-page">
     <div class="meeting-page">
         <section class="meeting-shell">
             <aside class="meeting-sidebar" aria-label="主导航">
-                <a class="meeting-brand" href="index.html?v=20260707fit1" aria-label="会议牌管理">
+                <a class="meeting-brand" href="index.html?v=20260731logo1" aria-label="会议牌管理">
                     <span class="meeting-brand-mark" aria-hidden="true"></span>
                     <span>会议牌管理</span>
                 </a>
 
                 <nav class="meeting-nav">
-                    <a class="meeting-nav-item active" href="index.html?v=20260707fit1" aria-current="page">
+                    <a class="meeting-nav-item active" href="index.html?v=20260731logo1" aria-current="page">
                         <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
                         <span>设备</span>
                     </a>
-                    <a class="meeting-nav-item" href="nameplates.html?v=20260707fit1">
+                    <a class="meeting-nav-item" href="nameplates.html?v=20260731logo1">
                         <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
                         <span>名单下发</span>
                     </a>
-                    <a class="meeting-nav-item" href="control.html?v=20260707fit1">
+                    <a class="meeting-nav-item" href="control.html?v=20260731logo1">
                         <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
                         <span>模板设计</span>
                     </a>
-                    <a class="meeting-nav-item" href="settings.html?v=20260707fit1">
+                    <a class="meeting-nav-item" href="settings.html?v=20260731logo1">
                         <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
                         <span>设置</span>
                     </a>
@@ -122,6 +122,7 @@
                                     </button>
                                 </div>
                             </div>
+                            <p class="meeting-table-scroll-hint" role="note">表格可左右滑动，查看状态和操作</p>
                             <div class="meeting-table-wrap">
                                 <table class="meeting-table">
                                     <thead>
@@ -215,6 +216,10 @@
                                     <span class="meeting-quick-icon icon-group" aria-hidden="true"></span>
                                     <span>设备分组</span>
                                 </button>
+                                <button class="meeting-quick meeting-quick-danger" type="button" data-quick-action="reset-credentials">
+                                    <span class="meeting-quick-icon icon-delete" aria-hidden="true"></span>
+                                    <span>重置设备凭据</span>
+                                </button>
                             </div>
                         </section>
                     </aside>
@@ -239,12 +244,17 @@
                     <span>设备名称</span>
                     <input type="text" id="deviceName" placeholder="例如：会议牌 A101" autocomplete="off">
                 </label>
-                <button class="meeting-add-submit" type="button" onclick="addDevice()">添加设备</button>
+                <label>
+                    <span>屏幕配对码（6位）</span>
+                    <input type="text" id="pairingCode" placeholder="设备屏幕显示的6位数字" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code">
+                    <small>配对码由未绑定设备生成，24小时内有效。</small>
+                </label>
+                <button class="meeting-add-submit" id="addDeviceSubmit" type="button" onclick="addDevice()">验证并添加</button>
             </div>
         </section>
     </div>
 
-    <script src="auth.js?v=20260707fit1"></script>
-    <script src="devices.js?v=20260707fit1"></script>
+    <script src="auth.js?v=20260731logo1"></script>
+    <script src="devices.js?v=20260731logo1"></script>
 </body>
 </html>

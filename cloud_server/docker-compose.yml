@@ -1,3 +1,9 @@
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # MongoDB 数据库（本机容器部署）
   # 首次 docker compose up -d 时会自动创建 ./mongodb/data 和 ./mongodb/restore
@@ -5,9 +11,16 @@ services:
     image: mongo:8.2.6
     container_name: esp32-mongodb
     restart: unless-stopped
+    logging: *default-logging
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:?set MONGO_INITDB_ROOT_USERNAME in .env}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?set MONGO_INITDB_ROOT_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD-SHELL", 'mongosh --quiet --username "$$MONGO_INITDB_ROOT_USERNAME" --password "$$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin --eval "quit(db.adminCommand({ ping: 1 }).ok ? 0 : 2)"']
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
     volumes:
       - ./mongodb/data:/data/db
       - ./mongodb/restore:/restore
@@ -27,10 +40,21 @@ services:
       # MQTT_PASS: ...
       MONGODB_URI: mongodb://${MONGO_INITDB_ROOT_USERNAME:?set MONGO_INITDB_ROOT_USERNAME in .env}:${MONGO_INITDB_ROOT_PASSWORD:?set MONGO_INITDB_ROOT_PASSWORD in .env}@mongodb:27017/${MONGODB_DB:-esp32_epd}?authSource=admin
       MONGODB_DB: ${MONGODB_DB:-esp32_epd}
-      # 用于 status 返回 imageUrl 的 host/port（建议填公网域名或公网IP）
+      # FLASK_HOST/PORT 仅保留为旧配置回退；新部署统一使用 PUBLIC_BASE_URL。
       FLASK_HOST: ${FLASK_HOST:?set FLASK_HOST in .env}
       FLASK_PORT: ${FLASK_PORT:-8080}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL in .env}
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      AUTH_TOKEN_TTL_SECONDS: ${AUTH_TOKEN_TTL_SECONDS:-604800}
+      ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:?set ADMIN_BOOTSTRAP_TOKEN in .env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      DEVICE_AUTH_REQUIRED: ${DEVICE_AUTH_REQUIRED:-true}
+      PAIRING_MAX_FAILED_ATTEMPTS: ${PAIRING_MAX_FAILED_ATTEMPTS:-8}
+      PAIRING_LOCK_SECONDS: ${PAIRING_LOCK_SECONDS:-900}
+      DEVICE_STATUS_MAX_BODY_BYTES: ${DEVICE_STATUS_MAX_BODY_BYTES:-4096}
+      DEVICE_KEY_RESET_WINDOW_SECONDS: ${DEVICE_KEY_RESET_WINDOW_SECONDS:-300}
+      UNCLAIMED_DEVICE_TTL_SECONDS: ${UNCLAIMED_DEVICE_TTL_SECONDS:-172800}
       # 和风天气 API Key（天气模板所需）
       QWEATHER_KEY: ${QWEATHER_KEY:-}
       # 名单下发 AI 解析。Key 只放后端，不暴露到前端浏览器。
@@ -43,8 +67,10 @@ services:
       # 持久化保存最新图片：data/epd/<deviceId>/latest.txt
       - ./backend/data:/app/data
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - esp32-network
 
@@ -54,13 +80,12 @@ services:
     container_name: esp32-frontend
     ports:
       # 宿主机 FRONTEND_PORT -> 容器 80；ESP32 与浏览器统一访问该端口
-      - "${FRONTEND_PORT:-8080}:80"
-    volumes:
-      # 挂载前端静态文件，修改后无需重建镜像
-      - ./frontend:/usr/share/nginx/html:ro
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - esp32-network
 

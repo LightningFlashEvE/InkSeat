@@ -1,0 +1,5 @@
+services:
+  frontend:
+    volumes:
+      # 仅本地开发使用：静态文件修改后无需重建前端镜像。
+      - ./frontend:/usr/share/nginx/html:ro

@@ -6,15 +6,19 @@
 - `frontend/`：Nginx 静态页面与 `/api/` 反向代理
 - `mongodb/`：MongoDB 容器运行数据目录（首次部署自动生成，不提交 Git）
 - `docker-compose.yml`：容器编排
+- `docker-compose.dev.yml`：仅本地开发使用的前端源码挂载覆盖
 - `.env`：部署环境变量（本地私有，不提交）
 - `.env.example`：环境变量示例
 
-当前访问方式：
+推荐生产访问方式：
 
-- 浏览器访问：`http://你的服务器IP:8080/`
-- ESP32 访问：`http://你的服务器IP:8080/api/...`
+- 浏览器访问：`https://epd.example.com/`
+- ESP32 访问：`https://epd.example.com/api/...`
+- 宿主机 TLS 反向代理把 `443` 转发到 `127.0.0.1:8080`
 - 后端 Flask 仅在 Docker 内网暴露 `5000`
 - MongoDB 仅在 Docker 内网暴露 `27017`
+
+直接公开 `http://服务器IP:8080` 只用于受信内网或迁移期兼容。HTTP 下登录令牌和 `X-Device-Key` 都可能被链路窃取，不能视为安全生产配置。
 
 ## 1. 准备环境
 
@@ -22,12 +26,13 @@
 
 - Linux
 - 已安装 Docker 和 Docker Compose Plugin
-- 服务器安全组 / 防火墙已放行 `8080/tcp`
+- 已准备域名、有效 TLS 证书和宿主机反向代理
+- 服务器安全组 / 防火墙已放行 `443/tcp`
 
 推荐先放行端口：
 
 ```bash
-sudo ufw allow 8080/tcp
+sudo ufw allow 443/tcp
 sudo ufw enable
 ```
 
@@ -42,22 +47,53 @@ cp .env.example .env
 然后编辑 `.env`：
 
 ```env
+FRONTEND_BIND=127.0.0.1
 FRONTEND_PORT=8080
 MONGO_INITDB_ROOT_USERNAME=esp32_epd_root
 MONGO_INITDB_ROOT_PASSWORD=change_this_mongo_password
 MONGODB_DB=esp32_epd
-FLASK_HOST=<public-ip-or-domain>
+FLASK_HOST=epd.example.com
 FLASK_PORT=8080
-SECRET_KEY=change-this-to-a-random-secret
+PUBLIC_BASE_URL=https://epd.example.com
+SECRET_KEY=<random-secret>
+ADMIN_BOOTSTRAP_TOKEN=<at-least-32-random-characters>
+ALLOW_REGISTRATION=false
+AUTH_TOKEN_TTL_SECONDS=604800
+CORS_ORIGINS=
+DEVICE_AUTH_REQUIRED=true
+PAIRING_MAX_FAILED_ATTEMPTS=8
+PAIRING_LOCK_SECONDS=900
+DEVICE_STATUS_MAX_BODY_BYTES=4096
+DEVICE_KEY_RESET_WINDOW_SECONDS=300
+UNCLAIMED_DEVICE_TTL_SECONDS=172800
 ```
 
 说明：
 
-- `FLASK_HOST` 填公网 IP 或域名，例如 `8.135.238.216`
-- `FLASK_PORT` 固定为 `8080`
+- `PUBLIC_BASE_URL` 是后端发给设备的绝对下载 origin，不得包含路径、查询或账号密码
+- `PUBLIC_BASE_URL`、固件的云端 host/port/HTTPS 开关、外部 TLS 反向代理必须指向同一个公开 origin
+- `FLASK_HOST/FLASK_PORT` 仅作为旧配置回退保留
 - `SECRET_KEY` 不要使用示例值，改成随机长字符串
+- `ADMIN_BOOTSTRAP_TOKEN` 至少 32 个随机字符，只在创建首个管理员时输入登录页；可用 `openssl rand -hex 32` 生成
+- `ALLOW_REGISTRATION=false` 表示只有首个管理员可通过引导令牌注册；不要为方便而长期开放公网注册
+- 同源部署保持 `CORS_ORIGINS` 为空；跨域时仅列出精确的 HTTPS origin
+- 生产环境保持 `DEVICE_AUTH_REQUIRED=true`
+- `UNCLAIMED_DEVICE_TTL_SECONDS` 只清理从未绑定过且长期不再唤醒的 TOFU 身份；每次上报会续期，曾绑定设备的密钥哈希不受影响
 - `MONGO_INITDB_ROOT_PASSWORD` 会用于初始化本机 MongoDB 容器；建议只使用字母、数字、下划线，避免 URL 编码问题
 - `.env` 已加入 `.gitignore`，不要提交真实凭据
+
+升级已有部署时不要用 `.env.example` 覆盖现有 `.env`，尤其不能改变已初始化 MongoDB 的账号密码。请在原 `.env` 中补入 `FRONTEND_BIND`、`PUBLIC_BASE_URL`、`ADMIN_BOOTSTRAP_TOKEN`、认证/配对限制和设备凭据重置窗口等新字段，再执行重建。已有管理员的部署仍需设置一个随机且至少 32 字符的 `ADMIN_BOOTSTRAP_TOKEN` 以通过启动配置检查，但它不会绕过“只允许首个账号注册”的规则。
+
+### 已有设备的认证迁移顺序
+
+旧固件不会发送 `X-Device-Key`。直接以默认的 `DEVICE_AUTH_REQUIRED=true` 上线会让尚未升级的设备收到 401，因此已有部署按下面顺序迁移：
+
+1. 在原 `.env` 补齐新字段，但临时设置 `DEVICE_AUTH_REQUIRED=false`。若旧固件仍固定访问公网 `http://服务器IP:8080`，迁移期只能暂时保留 `FRONTEND_BIND=0.0.0.0` 和该端口；应通过安全组、VPN 或来源 IP 白名单尽量缩小暴露面。
+2. 同时部署新版 backend 与 frontend；这个兼容开关只允许“尚无密钥哈希”的旧设备继续访问，已有哈希的设备仍必须提供正确密钥。
+3. 逐台刷入已配置域名、443、HTTPS 和根 CA 的新版固件，并唤醒至少一次。设备会生成 NVS `devKey`，服务端以 TOFU 方式只保存其哈希。通过设备页最后唤醒时间和 backend 日志确认不再出现 401。
+4. 所有在用设备完成登记后，把 `.env` 改回 `DEVICE_AUTH_REQUIRED=true`、`FRONTEND_BIND=127.0.0.1`，重建容器并关闭公网 8080，只保留 443：`docker compose up -d --force-recreate backend frontend`。
+
+兼容期应尽量短，并在受信网络或已完成 TLS 的入口上进行。若某台设备服务端已有 `deviceKeyHash`、但设备 NVS 已被擦除，`DEVICE_AUTH_REQUIRED=false` 也不会绕过旧哈希；必须使用第 7 节的所有者授权重置流程。
 
 ## 3. 运行数据目录
 
@@ -85,6 +121,12 @@ docker compose up -d --force-recreate
 docker compose ps
 ```
 
+生产 compose 不再把 `./frontend` 挂进容器，避免宿主机残缺文件覆盖镜像。前端代码更新后也必须重新构建镜像。仅本地开发需要热加载时使用：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
+
 查看日志：
 
 ```bash
@@ -100,10 +142,10 @@ docker compose down
 
 ## 5. 访问与验证
 
-部署完成后：
+TLS 反向代理配置完成后：
 
 ```text
-http://你的服务器IP:8080/
+https://epd.example.com/
 ```
 
 建议验证：
@@ -113,7 +155,7 @@ http://你的服务器IP:8080/
 3. 后端健康检查可访问：
 
 ```bash
-curl http://你的服务器IP:8080/api/health
+curl --fail https://epd.example.com/api/health
 ```
 
 期望返回类似：
@@ -128,9 +170,10 @@ curl http://你的服务器IP:8080/api/health
 }
 ```
 
-## 6. 当前端口设计
+## 6. TLS 与端口设计
 
-- `frontend`：宿主机 `8080` -> 容器 `80`
+- `frontend`：默认由 `.env` 绑定 `127.0.0.1:8080` -> 容器 `80`
+- 宿主机 TLS 反向代理：公开 `443` -> `http://127.0.0.1:8080`
 - `backend`：仅 Docker 内网 `5000`
 - `mongodb`：仅 Docker 内网 `27017`
 - Nginx 负责把 `/api/` 代理到 `backend:5000`
@@ -139,10 +182,52 @@ curl http://你的服务器IP:8080/api/health
 
 - 外部用户不需要直接访问 `5000`
 - 外部用户不需要直接访问 `27017`
-- 浏览器和 ESP32 都统一走 `8080`
-- 对外只开放一个业务端口，部署更简单
+- 浏览器和 ESP32 都统一走公开 HTTPS origin
+- 对外只开放 `443`；`8080` 保持回环监听
 
-## 7. 常用维护命令
+宿主机 Nginx 可使用下面的最小转发结构，证书路径按实际环境填写：
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name epd.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/epd.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/epd.example.com/privkey.pem;
+    client_max_body_size 25M;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        # 此入口直接面向公网时覆盖客户端伪造的 X-Forwarded-For；若前面
+        # 还有受信 CDN，请先配置 real_ip 模块，再按实际代理链传递。
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 15s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 120s;
+    }
+}
+```
+
+固件需同步设置 `CLOUD_API_USE_HTTPS=1`、公开域名、端口 `443`，并把签发服务器证书的根 CA PEM 配到 `CLOUD_API_ROOT_CA_PEM`。启用 HTTPS 但 CA 为空时固件会拒绝连接，不会自动降级。
+
+## 7. 首次管理员与设备凭据恢复
+
+首次部署时，只通过已验证证书的 HTTPS 登录页填写 `.env` 中的 `ADMIN_BOOTSTRAP_TOKEN` 创建首个管理员，切勿在 HTTP 页面提交。注册成功后页面会立即清空该输入。创建后普通登录不再填写该令牌；`ALLOW_REGISTRATION=false` 会关闭后续公网注册。
+
+设备会把随机 `deviceKey` 保存在 NVS，服务端只保存其哈希。若设备擦除了 NVS，旧哈希会让新密钥持续收到 401。安全恢复步骤是：
+
+1. 不要先删除或解绑设备；这两种操作都不会清除 `deviceKeyHash`。
+2. 以设备所有者登录，在设备页选中设备，点击“重置设备凭据”。
+3. 按提示输入完整设备编号，开启短时重置窗口（默认 300 秒）。
+4. 在窗口到期前让已擦除 NVS 的设备联网一次，服务端才会接受并保存新密钥哈希。
+
+该操作只应在实体设备已由你控制时使用。窗口到期后，未知新密钥仍会被拒绝。
+
+## 8. 常用维护命令
 
 重建并重启：
 
@@ -174,12 +259,12 @@ docker compose logs --tail=200 frontend
 docker compose logs --tail=200 mongodb
 ```
 
-## 8. 常见问题
+## 9. 常见问题
 
 ### 无法打开网页
 
-- 检查阿里云安全组是否放行 `8080`
-- 检查服务器防火墙是否放行 `8080`
+- 检查安全组和防火墙是否放行 `443`
+- 检查 TLS 证书、域名解析和宿主机反向代理
 - 检查 `docker compose ps` 是否显示 `frontend` 正常运行
 
 ### 页面能打开，但接口报错
@@ -190,7 +275,7 @@ docker compose logs --tail=200 mongodb
 
 ### ESP32 无法拉取图片
 
-- 确认固件里的 `CLOUD_API_HOST` 指向公网 IP/域名
-- 确认固件里的 `CLOUD_API_PORT` 为 `8080`
-- 确认 `.env` 中 `FLASK_HOST` 与实际公网地址一致
-- 在服务器上先测试：`curl http://你的服务器IP:8080/api/health`
+- 确认固件 `CLOUD_API_HOST`、`CLOUD_API_PORT`、`CLOUD_API_USE_HTTPS` 与 `PUBLIC_BASE_URL` 一致
+- HTTPS 模式确认 `CLOUD_API_ROOT_CA_PEM` 是正确根 CA，而不是留空或服务器叶证书
+- 确认 `.env` 中 `PUBLIC_BASE_URL` 与证书域名一致
+- 在服务器上先测试：`curl --fail https://epd.example.com/api/health`

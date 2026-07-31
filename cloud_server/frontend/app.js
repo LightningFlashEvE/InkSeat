@@ -36,6 +36,23 @@ let mixedCropY = 0;
 // API 基础地址（前后端分离时，API通过nginx代理到后端）
 const API_BASE = '';
 
+function getSafeEditorColor(value, fallback = 'black') {
+    const color = String(value || '').trim();
+    return /^(?:#[0-9a-f]{3,8}|black|white|red|yellow|green|blue|orange)$/i.test(color)
+        ? color
+        : fallback;
+}
+
+function getSafeEditorItemId(value) {
+    const id = Number(value);
+    return Number.isSafeInteger(id) && id >= 0 ? id : null;
+}
+
+function getSafeEditorFontSize(value) {
+    const size = Number(value);
+    return Number.isFinite(size) ? Math.max(8, Math.min(240, Math.round(size))) : 64;
+}
+
 function getPublishMetadata() {
     const mode = (typeof currentMode === 'string' && currentMode) ? currentMode : 'image';
     const templateId = (typeof currentTemplateId !== 'undefined' && currentTemplateId) ? currentTemplateId : null;
@@ -118,7 +135,7 @@ async function loadDeviceFromURL() {
 
         // 从服务器加载设备信息
     try {
-        const response = await fetch(`${API_BASE}/api/devices/list`, {
+        const response = await authFetch(`${API_BASE}/api/devices/list`, {
             headers: {
                 ...authHeaders()
             }
@@ -641,7 +658,7 @@ function processImage() {
     updateProgress(10);
 
     // 调用后端 API
-    fetch(`${API_BASE}/api/epd/process-sixcolor`, {
+    authFetch(`${API_BASE}/api/epd/process-sixcolor`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -785,7 +802,7 @@ async function sendDataToDeviceInChunks(deviceId, dataString, chunkSize = 1000) 
         const chunk = dataString.substring(i, i + chunkSize);
         const chunkWithLength = chunk + wordToStr(chunk.length);
 
-        const response = await fetch(`${API_BASE}/api/epd/load`, {
+        const response = await authFetch(`${API_BASE}/api/epd/load`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({
@@ -875,7 +892,7 @@ async function uploadToDevice() {
 
         try {
             showProgress('正在发布模板...');
-            const response = await fetch(`${API_BASE}/api/device/template`, {
+            const response = await authFetch(`${API_BASE}/api/device/template`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', ...authHeaders() },
                 body: JSON.stringify({
@@ -939,7 +956,7 @@ async function uploadToDevice() {
         log('正在准备发布（记录屏幕参数）...');
 
         // 1. 记录EPD参数（云端记录即可，设备会在唤醒后自行初始化/刷新）
-        const initResponse = await fetch(`${API_BASE}/api/epd/init`, {
+        const initResponse = await authFetch(`${API_BASE}/api/epd/init`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({
@@ -982,7 +999,7 @@ async function uploadToDevice() {
         console.log(`📦 一次上传所有数据 (${dataString.length} 字符)`);
 
         // 一次上传所有数据到云端（设备唤醒后通过HTTP拉取）
-        const response = await fetch(`${API_BASE}/api/epd/load`, {
+        const response = await authFetch(`${API_BASE}/api/epd/load`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...authHeaders() },
             body: JSON.stringify({
@@ -1051,35 +1068,6 @@ function hidePublishAlertAndFocusProcess() {
 // 延迟函数
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// 显示设备码到墨水屏
-async function showDeviceCode() {
-    const deviceId = document.getElementById('deviceId').value.trim();
-    if (!deviceId) {
-        log('请输入设备ID', 'error');
-        return;
-    }
-
-    try {
-        log('正在发送显示设备码命令...');
-
-        const response = await fetch(`${API_BASE}/api/epd/show-device-code`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...authHeaders() },
-            body: JSON.stringify({ deviceId })
-        });
-
-        if (!response.ok) {
-            throw new Error('命令发送失败: ' + await response.text());
-        }
-
-        log('✅ 设备码显示命令已发送', 'success');
-
-    } catch (error) {
-        log(`发送失败: ${error.message}`, 'error');
-        console.error(error);
-    }
 }
 
 // EPD型号分辨率映射（固定为7.3" E6）
@@ -1244,22 +1232,52 @@ function updateTextItemsList() {
     const container = document.getElementById('textItemsList') || document.getElementById('textList');
     if (!container) return;
 
+    container.replaceChildren();
+
     if (textItems.length === 0) {
-        container.innerHTML = '<div style="padding: 20px; text-align: center; color: #888;">暂无文字</div>';
+        const empty = document.createElement('div');
+        empty.style.cssText = 'padding:20px;text-align:center;color:#888;';
+        empty.textContent = '暂无文字';
+        container.appendChild(empty);
         return;
     }
 
-    container.innerHTML = textItems.map(item => `
-        <div class="text-item ${item.id === selectedTextId ? 'selected' : ''}"
-             onclick="selectTextItem(${item.id})"
-             style="display: flex; align-items: center; padding: 10px; border-bottom: 1px solid #e2e8f0; cursor: pointer;">
-            <span class="color-dot" style="width: 12px; height: 12px; border-radius: 50%; margin-right: 10px; background: ${item.color};"></span>
-            <span class="text-content" style="flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.text}</span>
-            <span style="font-size: 12px; color: #888; margin-right: 10px;">${item.size}px</span>
-            <button class="delete-btn" onclick="event.stopPropagation(); deleteTextItem(${item.id})"
-                    style="background: none; border: none; cursor: pointer; color: #f56565; padding: 4px;">🗑️</button>
-        </div>
-    `).join('');
+    textItems.forEach((item) => {
+        const id = getSafeEditorItemId(item?.id);
+        if (id === null) return;
+
+        const row = document.createElement('div');
+        row.className = `text-item${id === selectedTextId ? ' selected' : ''}`;
+        row.style.cssText = 'display:flex;align-items:center;padding:10px;border-bottom:1px solid #e2e8f0;cursor:pointer;';
+        row.addEventListener('click', () => selectTextItem(id));
+
+        const colorDot = document.createElement('span');
+        colorDot.className = 'color-dot';
+        colorDot.style.cssText = 'width:12px;height:12px;border-radius:50%;margin-right:10px;';
+        colorDot.style.background = getSafeEditorColor(item?.color);
+
+        const text = document.createElement('span');
+        text.className = 'text-content';
+        text.style.cssText = 'flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+        text.textContent = String(item?.text || '');
+
+        const size = document.createElement('span');
+        size.style.cssText = 'font-size:12px;color:#888;margin-right:10px;';
+        size.textContent = `${getSafeEditorFontSize(item?.size)}px`;
+
+        const deleteButton = document.createElement('button');
+        deleteButton.type = 'button';
+        deleteButton.className = 'delete-btn';
+        deleteButton.style.cssText = 'background:none;border:none;cursor:pointer;color:#f56565;padding:4px;';
+        deleteButton.textContent = '🗑️';
+        deleteButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            deleteTextItem(id);
+        });
+
+        row.append(colorDot, text, size, deleteButton);
+        container.appendChild(row);
+    });
 }
 
 // 别名，兼容新版UI
@@ -1419,7 +1437,7 @@ function processTemplateImage() {
     updateProgress(10);
 
     // 调用后端 6色抖动处理接口（与图片/文字模式共用同一接口）
-    fetch(`${API_BASE}/api/epd/process-sixcolor`, {
+    authFetch(`${API_BASE}/api/epd/process-sixcolor`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({
@@ -1527,7 +1545,7 @@ function processTextImage() {
     log(`正在调用后端6色算法处理（${algorithmName}）...`);
 
     // 调用后端 API
-    fetch(`${API_BASE}/api/epd/process-sixcolor`, {
+    authFetch(`${API_BASE}/api/epd/process-sixcolor`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -1749,23 +1767,46 @@ function updateMixedTextItemsList() {
     const container = document.getElementById('mixedTextItemsList') || document.getElementById('mixedTextList');
     if (!container) return;
 
+    container.replaceChildren();
+
     if (mixedTextItems.length === 0) {
-        container.innerHTML = '<div style="padding: 15px; text-align: center; color: #888;">暂无文字</div>';
+        const empty = document.createElement('div');
+        empty.style.cssText = 'padding:15px;text-align:center;color:#888;';
+        empty.textContent = '暂无文字';
+        container.appendChild(empty);
         return;
     }
 
-    container.innerHTML = mixedTextItems.map(item => `
-        <div style="display: flex; align-items: center; padding: 8px; margin-bottom: 5px;
-                    background: ${item.id === selectedMixedTextId ? '#e7f3ff' : '#f8f9fa'};
-                    border-radius: 5px; cursor: pointer;"
-             onclick="selectMixedTextItem(${item.id})">
-            <span style="flex: 1; color: ${item.color}; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.text}</span>
-            <span style="font-size: 12px; color: #888; margin: 0 8px;">${item.size}px</span>
-            <button onclick="event.stopPropagation(); deleteMixedTextItem(${item.id})"
-                    style="background: #dc3545; color: white; border: none; border-radius: 3px;
-                           padding: 2px 8px; cursor: pointer;">✕</button>
-        </div>
-    `).join('');
+    mixedTextItems.forEach((item) => {
+        const id = getSafeEditorItemId(item?.id);
+        if (id === null) return;
+
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;padding:8px;margin-bottom:5px;border-radius:5px;cursor:pointer;';
+        row.style.background = id === selectedMixedTextId ? '#e7f3ff' : '#f8f9fa';
+        row.addEventListener('click', () => selectMixedTextItem(id));
+
+        const text = document.createElement('span');
+        text.style.cssText = 'flex:1;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+        text.style.color = getSafeEditorColor(item?.color);
+        text.textContent = String(item?.text || '');
+
+        const size = document.createElement('span');
+        size.style.cssText = 'font-size:12px;color:#888;margin:0 8px;';
+        size.textContent = `${getSafeEditorFontSize(item?.size)}px`;
+
+        const deleteButton = document.createElement('button');
+        deleteButton.type = 'button';
+        deleteButton.style.cssText = 'background:#dc3545;color:white;border:none;border-radius:3px;padding:2px 8px;cursor:pointer;';
+        deleteButton.textContent = '✕';
+        deleteButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            deleteMixedTextItem(id);
+        });
+
+        row.append(text, size, deleteButton);
+        container.appendChild(row);
+    });
 }
 
 function selectMixedTextItem(id) {
@@ -1972,7 +2013,7 @@ function processMixedImage() {
     updateProgress(10);
 
     // 调用后端 API
-    fetch(`${API_BASE}/api/epd/process-sixcolor`, {
+    authFetch(`${API_BASE}/api/epd/process-sixcolor`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',

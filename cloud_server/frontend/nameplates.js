@@ -1,5 +1,6 @@
 let devices = [];
 let savedNameplateTemplates = [];
+let activeNameplateLogoConfig = {};
 
 const API_BASE = '';
 const BUILTIN_NAMEPLATE_TEMPLATES = [
@@ -33,20 +34,23 @@ function authHeaders() {
     return token ? { 'Authorization': 'Bearer ' + token } : {};
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     const start = async () => {
         bindNameplateInputs();
         await loadSavedNameplateTemplates();
-        loadDevices();
+        await loadDevices();
         log('名单下发页面初始化完成');
     };
 
-    if (typeof requireAuth === 'function') {
-        requireAuth().then(user => {
-            if (user) start();
-        });
-    } else {
-        start();
+    try {
+        if (typeof requireAuth === 'function') {
+            const user = await requireAuth();
+            if (!user) return;
+        }
+        await start();
+    } catch (error) {
+        console.error('名单下发页面初始化失败:', error);
+        log(error?.message || '认证服务暂不可用，请稍后重试', 'error');
     }
 });
 
@@ -62,7 +66,11 @@ function bindNameplateInputs() {
     const savedTemplateSelect = document.getElementById('nameplateSavedTemplateSelect');
     if (savedTemplateSelect) {
         savedTemplateSelect.addEventListener('change', () => {
-            applySavedNameplateTemplateById(savedTemplateSelect.value);
+            if (savedTemplateSelect.value) {
+                applySavedNameplateTemplateById(savedTemplateSelect.value);
+            } else {
+                activeNameplateLogoConfig = {};
+            }
         });
     }
 }
@@ -77,7 +85,7 @@ function log(message, type = 'info') {
 
 async function loadDevices() {
     try {
-        const response = await fetch(`${API_BASE}/api/devices/list`, {
+        const response = await authFetch(`${API_BASE}/api/devices/list`, {
             headers: { ...authHeaders() }
         });
         const result = await response.json();
@@ -123,12 +131,24 @@ function getCurrentTemplateConfig() {
         title: document.getElementById('nameplateBatchTitle')?.value?.trim() || '',
         subtitle: document.getElementById('nameplateBatchSubtitle')?.value?.trim() || '',
         sleepIntervalSeconds: parseInt(document.getElementById('nameplateBatchWakeInterval')?.value || '43200', 10),
+        ...activeNameplateLogoConfig,
     };
+}
+
+function pickNameplateLogoConfig(config) {
+    const source = config && typeof config === 'object' ? config : {};
+    const logoConfig = {};
+    ['logoDataUrl', 'logoFileName', 'logoX', 'logoY'].forEach(key => {
+        if (source[key] !== undefined && source[key] !== null && source[key] !== '') {
+            logoConfig[key] = source[key];
+        }
+    });
+    return logoConfig;
 }
 
 async function loadSavedNameplateTemplates() {
     try {
-        const response = await fetch(`${API_BASE}/api/nameplate/templates`, {
+        const response = await authFetch(`${API_BASE}/api/nameplate/templates`, {
             headers: { ...authHeaders() }
         });
         const result = await response.json().catch(() => ({}));
@@ -174,6 +194,7 @@ function applySavedNameplateTemplateById(templateId) {
     if (!template) return;
 
     const config = template.templateConfig || {};
+    activeNameplateLogoConfig = pickNameplateLogoConfig(config);
 
     const styleSelect = document.getElementById('nameplateBatchStyle');
     const titleInput = document.getElementById('nameplateBatchTitle');
@@ -197,6 +218,7 @@ function applyParsedDraft(parsed) {
     }
 
     const config = parsed.templateConfig || {};
+    activeNameplateLogoConfig = pickNameplateLogoConfig(config);
     const styleSelect = document.getElementById('nameplateBatchStyle');
     const titleInput = document.getElementById('nameplateBatchTitle');
     const subtitleInput = document.getElementById('nameplateBatchSubtitle');
@@ -258,7 +280,7 @@ async function parseNameplateDraft() {
         formData.append('templateConfig', JSON.stringify(getCurrentTemplateConfig()));
         files.forEach(file => formData.append('files', file));
 
-        const response = await fetch(`${API_BASE}/api/nameplates/parse`, {
+        const response = await authFetch(`${API_BASE}/api/nameplates/parse`, {
             method: 'POST',
             headers: { ...authHeaders() },
             body: formData
@@ -424,7 +446,7 @@ async function dispatchNameplates() {
     try {
         const templateConfig = getCurrentTemplateConfig();
 
-        const response = await fetch(`${API_BASE}/api/nameplates/dispatch`, {
+        const response = await authFetch(`${API_BASE}/api/nameplates/dispatch`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -487,16 +509,4 @@ function renderNameplateResult(result) {
             <span>${escapeHtml(item.deviceName || item.deviceId)} · v${escapeHtml(item.imageVersion || '')}</span>
         </div>
     `).join('');
-}
-
-function logout() {
-    if (confirm('确定要退出登录吗？')) {
-        if (typeof clearAuth === 'function') {
-            clearAuth();
-        } else {
-            localStorage.removeItem('authToken');
-            localStorage.removeItem('authUser');
-        }
-        window.location.href = 'login.html?v=20260707fit1';
-    }
 }

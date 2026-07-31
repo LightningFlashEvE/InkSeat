@@ -19,9 +19,19 @@ var imageCropper = null;
 var imageFilePond = null;
 var filePondPluginsRegistered = false;
 var imageEditingAssetsPromise = null;
+var currentNameplateLogoDataUrl = '';
+var currentNameplateLogoFileName = '';
+var currentNameplateLogoPosition = null;
+var currentNameplateLogoBounds = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260707fit1';
+const CONTROL_LAZY_ASSET_VERSION = '20260731logo1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
+const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
+const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
+const NAMEPLATE_LOGO_MAX_PIXELS = 4096 * 4096;
+const NAMEPLATE_LOGO_OUTPUT_MAX_WIDTH = 640;
+const NAMEPLATE_LOGO_OUTPUT_MAX_HEIGHT = 320;
+const NAMEPLATE_LOGO_ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const NAMEPLATE_COMPANY_CN = '现象创新（深圳）科技有限公司';
 const NAMEPLATE_COMPANY_EN = 'Pheno Innovations Technology Co., Ltd.';
 const NAMEPLATE_BRAND_ASSET_PATHS = {
@@ -85,6 +95,187 @@ function loadNameplateBrandAssets() {
         img.src = src;
         nameplateBrandAssets[key] = img;
     });
+}
+
+function isSupportedNameplateLogoDataUrl(value) {
+    return typeof value === 'string'
+        && /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/=]+$/i.test(value);
+}
+
+function getNameplateLogoConfig() {
+    const config = {};
+    if (currentNameplateLogoDataUrl) {
+        config.logoDataUrl = currentNameplateLogoDataUrl;
+        if (currentNameplateLogoFileName) {
+            config.logoFileName = currentNameplateLogoFileName;
+        }
+    }
+    if (currentNameplateLogoPosition) {
+        config.logoX = Math.round(currentNameplateLogoPosition.x);
+        config.logoY = Math.round(currentNameplateLogoPosition.y);
+    }
+    return config;
+}
+
+function updateNameplateLogoControls() {
+    const preview = document.getElementById('nameplateLogoPreview');
+    const status = document.getElementById('nameplateLogoStatus');
+    const restoreButton = document.getElementById('restoreNameplateLogoButton');
+    const resetPositionButton = document.getElementById('resetNameplateLogoPositionButton');
+
+    if (preview) {
+        preview.src = currentNameplateLogoDataUrl || NAMEPLATE_BRAND_ASSET_PATHS.blackLogo;
+        preview.alt = currentNameplateLogoDataUrl ? '当前自定义 Logo' : '默认 Pheno Logo';
+    }
+    if (status) {
+        status.textContent = currentNameplateLogoDataUrl
+            ? (currentNameplateLogoFileName || '自定义 Logo')
+            : '默认 Pheno Logo';
+    }
+    if (restoreButton) restoreButton.disabled = !currentNameplateLogoDataUrl && !currentNameplateLogoPosition;
+    if (resetPositionButton) resetPositionButton.disabled = !currentNameplateLogoPosition;
+}
+
+function setNameplateLogoState(config = {}, options = {}) {
+    const logoDataUrl = isSupportedNameplateLogoDataUrl(config.logoDataUrl)
+        ? config.logoDataUrl
+        : '';
+    currentNameplateLogoDataUrl = logoDataUrl;
+    currentNameplateLogoFileName = logoDataUrl
+        ? String(config.logoFileName || '').trim().slice(0, 100)
+        : '';
+
+    const hasLogoPosition = config.logoX !== undefined && config.logoX !== null
+        && config.logoY !== undefined && config.logoY !== null;
+    const logoX = Number(config.logoX);
+    const logoY = Number(config.logoY);
+    currentNameplateLogoPosition = hasLogoPosition && Number.isFinite(logoX) && Number.isFinite(logoY)
+        ? { x: Math.round(logoX), y: Math.round(logoY) }
+        : null;
+
+    delete nameplateBrandAssets.customLogo;
+    if (logoDataUrl && typeof Image !== 'undefined') {
+        const img = new Image();
+        img.onload = () => {
+            if (currentNameplateLogoDataUrl !== logoDataUrl) return;
+            nameplateBrandAssets.customLogo = img;
+            if (currentMode === 'template' && currentTemplateId === NAMEPLATE_TEMPLATE_ID) {
+                renderCanvas();
+            }
+        };
+        img.onerror = () => {
+            if (currentNameplateLogoDataUrl === logoDataUrl) {
+                log('Logo 图片加载失败，请重新选择文件', 'error');
+            }
+        };
+        img.src = logoDataUrl;
+    }
+
+    updateNameplateLogoControls();
+    if (options.render !== false) renderNameplatePreview();
+}
+
+function getDataUrlDecodedByteLength(dataUrl) {
+    const payload = String(dataUrl || '').split(',', 2)[1] || '';
+    const padding = payload.endsWith('==') ? 2 : payload.endsWith('=') ? 1 : 0;
+    return Math.max(0, Math.floor(payload.length * 3 / 4) - padding);
+}
+
+function loadNameplateLogoFileImage(file) {
+    return new Promise((resolve, reject) => {
+        const objectUrl = URL.createObjectURL(file);
+        const image = new Image();
+        image.onload = () => {
+            URL.revokeObjectURL(objectUrl);
+            resolve(image);
+        };
+        image.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            reject(new Error('无法读取该图片'));
+        };
+        image.src = objectUrl;
+    });
+}
+
+async function normalizeNameplateLogoFile(file) {
+    if (!file || !NAMEPLATE_LOGO_ACCEPTED_TYPES.has(file.type)) {
+        throw new Error('仅支持 PNG、JPG 或 WebP 图片');
+    }
+    if (file.size <= 0 || file.size > NAMEPLATE_LOGO_MAX_SOURCE_BYTES) {
+        throw new Error('Logo 文件不能超过 5MB');
+    }
+
+    const image = await loadNameplateLogoFileImage(file);
+    if (!image.naturalWidth || !image.naturalHeight
+        || image.naturalWidth > 4096 || image.naturalHeight > 4096
+        || image.naturalWidth * image.naturalHeight > NAMEPLATE_LOGO_MAX_PIXELS) {
+        throw new Error('Logo 图片尺寸过大，长宽请控制在 4096 像素以内');
+    }
+
+    const baseScale = Math.min(
+        1,
+        NAMEPLATE_LOGO_OUTPUT_MAX_WIDTH / image.naturalWidth,
+        NAMEPLATE_LOGO_OUTPUT_MAX_HEIGHT / image.naturalHeight
+    );
+    const outputCanvas = document.createElement('canvas');
+    const outputContext = outputCanvas.getContext('2d');
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+        const scale = baseScale * Math.pow(0.8, attempt);
+        outputCanvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        outputCanvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        outputContext.imageSmoothingEnabled = true;
+        outputContext.imageSmoothingQuality = 'high';
+        outputContext.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+        outputContext.drawImage(image, 0, 0, outputCanvas.width, outputCanvas.height);
+
+        const candidates = [
+            outputCanvas.toDataURL('image/png'),
+            outputCanvas.toDataURL('image/webp', attempt < 2 ? 0.9 : 0.8),
+        ];
+        const accepted = candidates.find(dataUrl => (
+            isSupportedNameplateLogoDataUrl(dataUrl)
+            && getDataUrlDecodedByteLength(dataUrl) <= NAMEPLATE_LOGO_MAX_DATA_BYTES
+        ));
+        if (accepted) return accepted;
+    }
+
+    throw new Error('Logo 图片内容过于复杂，请压缩后重试');
+}
+
+async function handleNameplateLogoFile(event) {
+    const input = event?.target || document.getElementById('nameplateLogoInput');
+    const file = input?.files?.[0];
+    if (!file) return;
+
+    try {
+        const logoDataUrl = await normalizeNameplateLogoFile(file);
+        setNameplateLogoState({
+            logoDataUrl,
+            logoFileName: file.name,
+            ...(currentNameplateLogoPosition ? {
+                logoX: currentNameplateLogoPosition.x,
+                logoY: currentNameplateLogoPosition.y,
+            } : {}),
+        });
+        log('Logo 已替换，可在画布中直接拖动调整位置', 'success');
+    } catch (error) {
+        log('Logo 替换失败: ' + error.message, 'error');
+    } finally {
+        if (input) input.value = '';
+    }
+}
+
+function resetNameplateLogoPosition() {
+    currentNameplateLogoPosition = null;
+    updateNameplateLogoControls();
+    renderNameplatePreview();
+    log('Logo 已恢复为当前背景样式的默认位置', 'success');
+}
+
+function restoreDefaultNameplateLogo() {
+    setNameplateLogoState({});
+    log('已恢复默认 Pheno Logo 和默认位置', 'success');
 }
 
 loadNameplateBrandAssets();
@@ -228,7 +419,7 @@ function updateDeviceBoundControls() {
 // ==================== 模板管理 ====================
 async function loadTemplates() {
     try {
-        const response = await fetch(`${API_BASE}/api/templates`, {
+        const response = await authFetch(`${API_BASE}/api/templates`, {
             headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
         });
         const result = await response.json();
@@ -268,7 +459,9 @@ function ensureNameplateOnlyMode(options = {}) {
     currentTemplateId = NAMEPLATE_TEMPLATE_ID;
 
     document.querySelectorAll('.mode-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.mode === 'template');
+        const selected = btn.dataset.mode === 'template';
+        btn.classList.toggle('active', selected);
+        btn.setAttribute('aria-pressed', String(selected));
     });
 
     ['imageModeControls', 'textModeControls', 'mixedModeControls', 'weatherTemplateConfig', 'quoteTemplateConfig', 'qrcodeTemplateConfig'].forEach(id => {
@@ -295,11 +488,11 @@ function renderTemplateGrid() {
     if (!grid) return;
 
     grid.innerHTML = templates.map(t => `
-        <div class="template-card" onclick="selectTemplate('${t.templateId}')">
+        <button type="button" class="template-card" data-template-id="${escapeHtml(t.templateId)}" aria-pressed="${t.templateId === currentTemplateId ? 'true' : 'false'}" onclick="selectTemplate('${escapeHtml(escapeJsString(t.templateId))}')">
             ${renderTemplateIcon(t)}
-            <div class="name">${t.name}</div>
-            <div class="desc">${t.description}</div>
-        </div>
+            <span class="name">${escapeHtml(t.name)}</span>
+            <span class="desc">${escapeHtml(t.description)}</span>
+        </button>
     `).join('');
 }
 
@@ -308,24 +501,24 @@ function renderModalTemplateGrid() {
     if (!grid) return;
 
     grid.innerHTML = templates.map(t => `
-        <div class="template-card" onclick="createPageFromTemplate('${t.templateId}')">
+        <button type="button" class="template-card" onclick="createPageFromTemplate('${escapeHtml(escapeJsString(t.templateId))}')">
             ${renderTemplateIcon(t)}
-            <div class="name">${t.name}</div>
-            <div class="desc">${t.description}</div>
-        </div>
+            <span class="name">${escapeHtml(t.name)}</span>
+            <span class="desc">${escapeHtml(t.description)}</span>
+        </button>
     `).join('');
 }
 
 function renderTemplateIcon(template) {
     if (template?.templateId === NAMEPLATE_TEMPLATE_ID || template?.icon === 'meeting-nameplate') {
         return `
-            <div class="icon nameplate-template-icon" aria-hidden="true">
+            <span class="icon nameplate-template-icon" aria-hidden="true">
                 <img src="${NAMEPLATE_BRAND_ASSET_PATHS.mark}" alt="">
-            </div>
+            </span>
         `;
     }
 
-    return `<div class="icon">${template?.icon || ''}</div>`;
+    return `<span class="icon" aria-hidden="true">${escapeHtml(template?.icon || '')}</span>`;
 }
 
 function getLoadedTemplate(templateId) {
@@ -339,7 +532,7 @@ function selectTemplate(templateId) {
     const template = getLoadedTemplate(templateId);
     if (template) {
         log(`选择模板: ${template.name}`);
-        // TODO: 应用模板到画布
+        // 通过统一渲染入口应用模板，保证预览和下发配置一致。
         applyTemplate(template);
     }
 }
@@ -351,6 +544,10 @@ function applyTemplate(template) {
     // 统一用 renderCanvas 渲染，避免"加载模板页面后白屏/不显示"
     currentMode = 'template';
     currentTemplateId = template.templateId;
+    document.querySelectorAll('.template-card').forEach(card => {
+        if (!card.hasAttribute('aria-pressed')) return;
+        card.setAttribute('aria-pressed', String(card.dataset.templateId === template.templateId));
+    });
     renderCanvas();
     updateTemplateConfigVisibility(template.templateId);
     log(`已应用模板: ${template.name}`, 'success');
@@ -384,6 +581,7 @@ function getCurrentTemplateConfig() {
             subtitle: document.getElementById('nameplateSubtitleInput')?.value?.trim() || '',
             backgroundStyle: document.getElementById('nameplateStyleSelect')?.value || 'formal_red',
             sleepIntervalSeconds: parseInt(document.getElementById('nameplateWakeInterval')?.value || '43200', 10),
+            ...getNameplateLogoConfig(),
         };
     }
     // todo 等模板暂无配置
@@ -396,7 +594,8 @@ function getSavableNameplateTemplateConfig() {
         backgroundStyle: config.backgroundStyle || 'formal_red',
         title: config.title || '',
         subtitle: config.subtitle || '',
-        sleepIntervalSeconds: parseInt(config.sleepIntervalSeconds || '43200', 10) || 43200
+        sleepIntervalSeconds: parseInt(config.sleepIntervalSeconds || '43200', 10) || 43200,
+        ...getNameplateLogoConfig(),
     };
 }
 
@@ -416,6 +615,7 @@ function applyNameplateTemplateConfig(config, options = {}) {
     if (titleInput && config.title !== undefined) titleInput.value = config.title || '';
     if (subtitleInput && config.subtitle !== undefined) subtitleInput.value = config.subtitle || '';
     if (wakeSelect && config.sleepIntervalSeconds) wakeSelect.value = String(config.sleepIntervalSeconds);
+    setNameplateLogoState(config, { render: false });
 
     if (options.render !== false) {
         renderNameplatePreview();
@@ -440,7 +640,7 @@ async function loadSavedNameplateTemplates(options = {}) {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/api/nameplate/templates`, {
+        const response = await authFetch(`${API_BASE}/api/nameplate/templates`, {
             headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
         });
         const result = await response.json().catch(() => ({}));
@@ -478,16 +678,21 @@ function renderSavedNameplateTemplateList(errorMessage = '') {
     const rows = allTemplates.map(template => {
         const config = template.templateConfig || {};
         const active = template.templateId === activeSavedNameplateTemplateId ? ' active' : '';
+        const templateIdForHandler = escapeHtml(escapeJsString(template.templateId));
         const meta = [
             config.title || '无职务',
-            config.subtitle || '默认公司'
+            config.subtitle || '默认公司',
+            config.logoDataUrl ? '自定义 Logo' : '默认 Logo',
         ].join(' / ');
         const badge = template.builtin ? '<em>内置</em>' : '<em>已保存</em>';
         const deleteButton = template.builtin
             ? ''
-            : `<button type="button" onclick="event.stopPropagation(); deleteSavedNameplateTemplate('${escapeJsString(template.templateId)}')">删除</button>`;
+            : `<button type="button" onclick="event.stopPropagation(); deleteSavedNameplateTemplate('${templateIdForHandler}')">删除</button>`;
         return `
-            <div class="saved-template-row${active}" onclick="selectSavedNameplateTemplate('${escapeJsString(template.templateId)}')">
+            <div class="saved-template-row${active}" role="button" tabindex="0"
+                aria-pressed="${template.templateId === activeSavedNameplateTemplateId ? 'true' : 'false'}"
+                onclick="selectSavedNameplateTemplate('${templateIdForHandler}')"
+                onkeydown="if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); selectSavedNameplateTemplate('${templateIdForHandler}'); }">
                 <div>
                     <strong>${escapeHtml(template.name)} ${badge}</strong>
                     <span>${escapeHtml(meta)}</span>
@@ -535,6 +740,7 @@ function startNewNameplateTemplate() {
     if (subtitleInput) subtitleInput.value = '';
     if (styleSelect) styleSelect.value = 'formal_red';
     if (wakeSelect) wakeSelect.value = '43200';
+    setNameplateLogoState({}, { render: false });
     renderNameplatePreview();
     renderSavedNameplateTemplateList();
     log('已新建空白模板，保存后会加入模板列表', 'info');
@@ -544,7 +750,7 @@ async function saveNameplateTemplate(options = {}) {
     const config = getSavableNameplateTemplateConfig();
     try {
         const templateId = options.asNew ? '' : activeSavedNameplateTemplateId;
-        const response = await fetch(`${API_BASE}/api/nameplate/templates`, {
+        const response = await authFetch(`${API_BASE}/api/nameplate/templates`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -589,7 +795,7 @@ async function deleteSavedNameplateTemplate(templateId) {
     if (!confirm(`删除模板「${template.name}」？`)) return;
 
     try {
-        const response = await fetch(`${API_BASE}/api/nameplate/templates/${encodeURIComponent(templateId)}`, {
+        const response = await authFetch(`${API_BASE}/api/nameplate/templates/${encodeURIComponent(templateId)}`, {
             method: 'DELETE',
             headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
         });
@@ -851,13 +1057,59 @@ function getLoadedNameplateAsset(key) {
     return img && img.complete && img.naturalWidth ? img : null;
 }
 
-function drawNameplateAsset(ctx, key, x, y, width, height) {
-    const img = getLoadedNameplateAsset(key);
+function getConfiguredNameplateLogoAsset(fallbackKey) {
+    if (currentNameplateLogoDataUrl) {
+        return getLoadedNameplateAsset('customLogo');
+    }
+    return getLoadedNameplateAsset(fallbackKey);
+}
+
+function resolveNameplateLogoBounds(defaultX, defaultY, width, height, canvasWidth, canvasHeight) {
+    const rawX = currentNameplateLogoPosition?.x ?? defaultX;
+    const rawY = currentNameplateLogoPosition?.y ?? defaultY;
+    return {
+        x: Math.max(0, Math.min(canvasWidth - width, Math.round(rawX))),
+        y: Math.max(0, Math.min(canvasHeight - height, Math.round(rawY))),
+        width,
+        height,
+    };
+}
+
+function drawImageContained(ctx, img, bounds) {
+    const scale = Math.min(bounds.width / img.naturalWidth, bounds.height / img.naturalHeight);
+    const width = Math.max(1, Math.round(img.naturalWidth * scale));
+    const height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const x = bounds.x + Math.round((bounds.width - width) / 2);
+    const y = bounds.y + Math.round((bounds.height - height) / 2);
+    ctx.drawImage(img, x, y, width, height);
+}
+
+function drawConfiguredNameplateLogo(ctx, fallbackKey, defaultX, defaultY, width, height,
+                                     canvasWidth, canvasHeight) {
+    const bounds = resolveNameplateLogoBounds(
+        defaultX, defaultY, width, height, canvasWidth, canvasHeight
+    );
+    currentNameplateLogoBounds = bounds;
+
+    const img = getConfiguredNameplateLogoAsset(fallbackKey);
     if (!img) {
         loadNameplateBrandAssets();
         return false;
     }
-    ctx.drawImage(img, x, y, width, height);
+    if (currentNameplateLogoDataUrl) {
+        drawImageContained(ctx, img, bounds);
+    } else {
+        ctx.drawImage(img, bounds.x, bounds.y, bounds.width, bounds.height);
+    }
+
+    if (canvasDragState.isDragging && canvasDragState.dragTarget === 'nameplate-logo') {
+        ctx.save();
+        ctx.strokeStyle = '#2563eb';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([8, 6]);
+        ctx.strokeRect(bounds.x - 3, bounds.y - 3, bounds.width + 6, bounds.height + 6);
+        ctx.restore();
+    }
     return true;
 }
 
@@ -884,7 +1136,7 @@ function drawPhenoFooterNameplate(ctx, width, height, name, style, roleText, com
         ctx.fillText(roleText, width / 2, 276);
     }
 
-    drawNameplateAsset(ctx, 'blackLogo', 108, 410, 181, 39);
+    drawConfiguredNameplateLogo(ctx, 'blackLogo', 108, 410, 181, 39, width, height);
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
@@ -915,7 +1167,7 @@ function drawPhenoGreenBandNameplate(ctx, width, height, name, roleText) {
         ctx.fillText(roleText, width / 2, 276);
     }
 
-    drawNameplateAsset(ctx, 'whiteLogo', 276, 390, 248, 54);
+    drawConfiguredNameplateLogo(ctx, 'whiteLogo', 276, 390, 248, 54, width, height);
 }
 
 function drawPhenoProfileNameplate(ctx, width, height, name, roleText, companyText) {
@@ -944,7 +1196,9 @@ function drawPhenoProfileNameplate(ctx, width, height, name, roleText, companyTe
     const markTop = 153;
     const textLeft = groupLeft + markSize + gap;
 
-    drawNameplateAsset(ctx, 'mark', groupLeft, markTop, markSize, markSize);
+    drawConfiguredNameplateLogo(
+        ctx, 'mark', groupLeft, markTop, markSize, markSize, width, height
+    );
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
@@ -976,6 +1230,7 @@ function drawPhenoProfileNameplate(ctx, width, height, name, roleText, companyTe
 }
 
 function renderNameplateTemplate(ctx, width, height) {
+    currentNameplateLogoBounds = null;
     const name = document.getElementById('nameplateNameInput')?.value?.trim() || '姓名';
     const title = document.getElementById('nameplateTitleInput')?.value?.trim() || '';
     const subtitle = document.getElementById('nameplateSubtitleInput')?.value?.trim() || '';
@@ -1061,7 +1316,9 @@ async function fetchWeatherAndPreview() {
 
     log('正在获取天气数据...');
     try {
-        const resp = await fetch(`${API_BASE}/api/weather?city=${encodeURIComponent(city)}`);
+        const resp = await authFetch(`${API_BASE}/api/weather?city=${encodeURIComponent(city)}`, {
+            headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
+        });
         const result = await resp.json();
         if (result.success && result.data) {
             templateWeatherData = result.data;
@@ -1082,7 +1339,9 @@ async function fetchWeatherAndPreview() {
 async function fetchQuoteAndPreview() {
     log('正在获取每日一言...');
     try {
-        const resp = await fetch(`${API_BASE}/api/quote`);
+        const resp = await authFetch(`${API_BASE}/api/quote`, {
+            headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
+        });
         const result = await resp.json();
         if (result.success && result.data) {
             templateQuoteData = result.data;
@@ -1108,7 +1367,7 @@ async function loadPages() {
 
     try {
         // 限制列表数量，避免历史数据过多时卡顿
-        const response = await fetch(`${API_BASE}/api/pages/list/${deviceId}?limit=200`, {
+        const response = await authFetch(`${API_BASE}/api/pages/list/${deviceId}?limit=200`, {
             headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
         });
         const result = await response.json();
@@ -1123,7 +1382,37 @@ async function loadPages() {
 
 function isNameplatePage(page) {
     const data = page && page.data ? page.data : {};
-    return page && page.type === 'template' && data.template === NAMEPLATE_TEMPLATE_ID;
+    const templateId = page?.templateId
+        || page?.activeTemplateId
+        || page?.template
+        || data.templateId
+        || data.template
+        || '';
+
+    // The lightweight page-list API historically omitted page.data. Since the
+    // current editor exposes only the nameplate template, a template page with
+    // no template metadata is still a valid nameplate draft.
+    return Boolean(page && page.type === 'template' && (!templateId || templateId === NAMEPLATE_TEMPLATE_ID));
+}
+
+function getSafePageThumbnailUrl(value) {
+    const thumbnail = String(value || '').trim();
+    if (!thumbnail || thumbnail.length > 2_000_000) return '';
+
+    if (/^data:image\/(?:png|jpe?g|webp);base64,[a-z0-9+/=\s]+$/i.test(thumbnail)) {
+        return thumbnail;
+    }
+
+    try {
+        const url = new URL(thumbnail, window.location.href);
+        if (url.origin === window.location.origin && /\.(?:png|jpe?g|webp)(?:\?.*)?$/i.test(url.pathname + url.search)) {
+            return url.href;
+        }
+    } catch (error) {
+        // Invalid or unsupported thumbnail URLs fall back to the page icon.
+    }
+
+    return '';
 }
 
 function renderPageList() {
@@ -1141,25 +1430,76 @@ function renderPageList() {
         return;
     }
 
-    list.innerHTML = pages.map(page => `
-        <div class="page-item ${page.pageId === currentPageId ? 'active' : ''}"
-             onclick="selectPage('${page.pageId}')" data-page-id="${page.pageId}">
-            <div class="page-thumb">
-                ${page.thumbnail ?
-                    `<img src="${page.thumbnail}" alt="">` :
-                    `<span class="icon">${getPageIcon(page.type)}</span>`
-                }
-            </div>
-            <div class="page-info">
-                <div class="page-name">${page.name}</div>
-                <div class="page-type">${getPageTypeName(page.type)}</div>
-            </div>
-            <div class="page-actions">
-                <button onclick="event.stopPropagation(); duplicatePage('${page.pageId}')" title="复制">📋</button>
-                <button class="delete" onclick="event.stopPropagation(); deletePage('${page.pageId}')" title="删除">🗑️</button>
-            </div>
-        </div>
-    `).join('');
+    list.replaceChildren();
+
+    pages.forEach((page) => {
+        const pageId = String(page?.pageId || '');
+        if (!pageId) return;
+
+        const item = document.createElement('div');
+        const selected = pageId === currentPageId;
+        item.className = `page-item${selected ? ' active' : ''}`;
+        item.dataset.pageId = pageId;
+        item.setAttribute('role', 'button');
+        item.setAttribute('aria-pressed', String(selected));
+        item.tabIndex = 0;
+        item.addEventListener('click', () => selectPage(pageId));
+        item.addEventListener('keydown', (event) => {
+            if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
+            event.preventDefault();
+            selectPage(pageId);
+        });
+
+        const thumb = document.createElement('div');
+        thumb.className = 'page-thumb';
+        const thumbnailUrl = getSafePageThumbnailUrl(page?.thumbnail);
+        if (thumbnailUrl) {
+            const image = document.createElement('img');
+            image.src = thumbnailUrl;
+            image.alt = '';
+            image.decoding = 'async';
+            thumb.appendChild(image);
+        } else {
+            const icon = document.createElement('span');
+            icon.className = 'icon';
+            icon.textContent = getPageIcon(page?.type);
+            thumb.appendChild(icon);
+        }
+
+        const info = document.createElement('div');
+        info.className = 'page-info';
+        const name = document.createElement('div');
+        name.className = 'page-name';
+        name.textContent = String(page?.name || '未命名页面');
+        const type = document.createElement('div');
+        type.className = 'page-type';
+        type.textContent = getPageTypeName(page?.type);
+        info.append(name, type);
+
+        const actions = document.createElement('div');
+        actions.className = 'page-actions';
+        const duplicateButton = document.createElement('button');
+        duplicateButton.type = 'button';
+        duplicateButton.title = '复制';
+        duplicateButton.textContent = '📋';
+        duplicateButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            duplicatePage(pageId);
+        });
+        const deleteButton = document.createElement('button');
+        deleteButton.type = 'button';
+        deleteButton.className = 'delete';
+        deleteButton.title = '删除';
+        deleteButton.textContent = '🗑️';
+        deleteButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            deletePage(pageId);
+        });
+        actions.append(duplicateButton, deleteButton);
+
+        item.append(thumb, info, actions);
+        list.appendChild(item);
+    });
 }
 
 function getPageIcon(type) {
@@ -1186,7 +1526,7 @@ function getPageTypeName(type) {
 
 async function selectPage(pageId) {
     try {
-        const response = await fetch(`${API_BASE}/api/pages/${pageId}`, {
+        const response = await authFetch(`${API_BASE}/api/pages/${pageId}`, {
             headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
         });
         const result = await response.json();
@@ -1327,7 +1667,7 @@ async function savePage() {
 
     try {
         log('正在保存页面...', 'info');
-        const response = await fetch(`${API_BASE}/api/pages/save`, {
+        const response = await authFetch(`${API_BASE}/api/pages/save`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...(typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}) },
             body: JSON.stringify({
@@ -1362,7 +1702,7 @@ async function deletePage(pageId) {
         if (currentPageId === pageId) currentPageId = null;
         renderPageList();
 
-        const response = await fetch(`${API_BASE}/api/pages/${pageId}`, {
+        const response = await authFetch(`${API_BASE}/api/pages/${pageId}`, {
             method: 'DELETE',
             headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
         });
@@ -1389,7 +1729,7 @@ async function duplicatePage(pageId) {
 
     try {
         // 列表接口已做轻量化（不再返回 page.data），复制前先拉取完整页面
-        const detailResp = await fetch(`${API_BASE}/api/pages/${pageId}`, {
+        const detailResp = await authFetch(`${API_BASE}/api/pages/${pageId}`, {
             headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
         });
         const detail = await detailResp.json();
@@ -1399,7 +1739,7 @@ async function duplicatePage(pageId) {
         }
         const src = detail.page;
 
-        const response = await fetch(`${API_BASE}/api/pages/save`, {
+        const response = await authFetch(`${API_BASE}/api/pages/save`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...(typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}) },
             body: JSON.stringify({
@@ -1467,7 +1807,7 @@ async function createPageFromTemplate(templateId) {
         const canvas = document.getElementById('mainCanvas');
         const thumbnail = canvas.toDataURL('image/jpeg', 0.5);
 
-        const response = await fetch(`${API_BASE}/api/pages/save`, {
+        const response = await authFetch(`${API_BASE}/api/pages/save`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...(typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}) },
             body: JSON.stringify({
@@ -1508,7 +1848,9 @@ async function deployToDevice() {
 // ==================== 面板切换 ====================
 function switchPanel(panelId) {
     document.querySelectorAll('.panel-tab').forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.panel === panelId);
+        const selected = tab.dataset.panel === panelId;
+        tab.classList.toggle('active', selected);
+        tab.setAttribute('aria-pressed', String(selected));
     });
 
     document.getElementById('editPanel').classList.toggle('hidden', panelId !== 'edit');
@@ -1869,7 +2211,9 @@ function switchMode(mode) {
 
     // 更新按钮状态
     document.querySelectorAll('.mode-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.mode === mode);
+        const selected = btn.dataset.mode === mode;
+        btn.classList.toggle('active', selected);
+        btn.setAttribute('aria-pressed', String(selected));
     });
 
     // 显示对应控件
@@ -2227,11 +2571,41 @@ function resetCrop() {
 // 使用全局变量来跟踪拖动状态，确保即使鼠标移出画布也能继续拖动
 var canvasDragState = {
     isDragging: false,
+    dragTarget: null,
     dragStartX: 0,
     dragStartY: 0,
     itemOffsetX: 0,
     itemOffsetY: 0
 };
+
+function isPointInsideNameplateLogo(x, y) {
+    const bounds = currentNameplateLogoBounds;
+    return Boolean(bounds
+        && x >= bounds.x && x <= bounds.x + bounds.width
+        && y >= bounds.y && y <= bounds.y + bounds.height);
+}
+
+function moveDraggedNameplateLogo(x, y, canvas) {
+    const bounds = currentNameplateLogoBounds;
+    if (!bounds || !canvas) return false;
+    currentNameplateLogoPosition = {
+        x: Math.max(0, Math.min(canvas.width - bounds.width, x - canvasDragState.itemOffsetX)),
+        y: Math.max(0, Math.min(canvas.height - bounds.height, y - canvasDragState.itemOffsetY)),
+    };
+    updateNameplateLogoControls();
+    renderCanvas();
+    return true;
+}
+
+function finishCanvasDrag() {
+    const wasDraggingLogo = canvasDragState.dragTarget === 'nameplate-logo';
+    canvasDragState.isDragging = false;
+    canvasDragState.dragTarget = null;
+    if (wasDraggingLogo) {
+        updateNameplateLogoControls();
+        renderCanvas();
+    }
+}
 
 function initCanvasEvents() {
     const canvas = document.getElementById('mainCanvas');
@@ -2280,7 +2654,19 @@ function initCanvasEvents() {
         const x = coords.x;
         const y = coords.y;
 
-        if (currentMode === 'text') {
+        if (currentMode === 'template' && currentTemplateId === NAMEPLATE_TEMPLATE_ID
+            && isPointInsideNameplateLogo(x, y)) {
+            canvasDragState.isDragging = true;
+            canvasDragState.dragTarget = 'nameplate-logo';
+            canvasDragState.itemOffsetX = x - currentNameplateLogoBounds.x;
+            canvasDragState.itemOffsetY = y - currentNameplateLogoBounds.y;
+            currentNameplateLogoPosition = {
+                x: currentNameplateLogoBounds.x,
+                y: currentNameplateLogoBounds.y,
+            };
+            canvas.style.cursor = 'grabbing';
+            renderCanvas();
+        } else if (currentMode === 'text') {
             // 文字模式：检查点击了哪个文字
             const clickedItem = findClickedTextItem(x, y, textItems);
 
@@ -2344,14 +2730,22 @@ function initCanvasEvents() {
     };
 
     canvas.onmousemove = function(e) {
-        if (!canvasDragState.isDragging) return;
+        const coords = getCanvasCoords(e);
+        if (!canvasDragState.isDragging) {
+            const hoveringLogo = currentMode === 'template'
+                && currentTemplateId === NAMEPLATE_TEMPLATE_ID
+                && isPointInsideNameplateLogo(coords.x, coords.y);
+            canvas.style.cursor = hoveringLogo ? 'move' : 'default';
+            return;
+        }
         e.preventDefault();
 
-        const coords = getCanvasCoords(e);
         const x = coords.x;
         const y = coords.y;
 
-        if (currentMode === 'text' && selectedTextId) {
+        if (canvasDragState.dragTarget === 'nameplate-logo') {
+            moveDraggedNameplateLogo(x, y, canvas);
+        } else if (currentMode === 'text' && selectedTextId) {
             const item = textItems.find(t => t.id === selectedTextId);
             if (item) {
                 const newX = x - canvasDragState.itemOffsetX;
@@ -2405,7 +2799,10 @@ function initCanvasEvents() {
 
     canvas.onmouseup = function(e) {
         e.preventDefault();
-        canvasDragState.isDragging = false;
+        finishCanvasDrag();
+        canvas.style.cursor = isPointInsideNameplateLogo(
+            getCanvasCoords(e).x, getCanvasCoords(e).y
+        ) ? 'move' : 'default';
     };
 
     canvas.onmouseleave = function(e) {
@@ -2428,7 +2825,9 @@ function initCanvasEvents() {
         // 限制在画布范围内
         if (x < 0 || x > canvas.width || y < 0 || y > canvas.height) return;
 
-        if (currentMode === 'text' && selectedTextId) {
+        if (canvasDragState.dragTarget === 'nameplate-logo') {
+            moveDraggedNameplateLogo(x, y, canvas);
+        } else if (currentMode === 'text' && selectedTextId) {
             const item = textItems.find(t => t.id === selectedTextId);
             if (item) {
                 const newX = x - canvasDragState.itemOffsetX;
@@ -2472,11 +2871,11 @@ function initCanvasEvents() {
     });
 
     document.addEventListener('mouseup', function(e) {
-        canvasDragState.isDragging = false;
+        finishCanvasDrag();
     });
 
     // 设置鼠标样式
-    canvas.style.cursor = 'grab';
+    canvas.style.cursor = 'default';
     console.log('[Editor] 画布事件已绑定');
 }
 

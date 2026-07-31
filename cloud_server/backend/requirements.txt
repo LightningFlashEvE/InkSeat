@@ -1,13 +1,13 @@
-flask==3.0.0
-flask-cors==4.0.0
-# 不固定 pymongo 具体小版本，避免镜像源缺少 4.6.1 导致构建失败
-pymongo
+flask==3.1.3
+flask-cors==6.0.0
+# 保留镜像源选择 4.x 小版本的余地，同时阻止未来不兼容的大版本自动漂移。
+pymongo>=4.6,<5
 # paho-mqtt 已移除，本架构使用 HTTP 拉取模式，不需要 MQTT
-python-dotenv==1.0.0
-gunicorn==21.2.0
+python-dotenv==1.2.2
+gunicorn==22.0.0
 numpy==1.26.4
-Pillow==10.3.0
+Pillow==12.3.0
 opencv-python-headless==4.8.1.78
 qrcode[pil]==7.4.2
-requests==2.32.3
+requests==2.33.0
 openpyxl==3.1.5

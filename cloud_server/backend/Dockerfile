@@ -22,9 +22,14 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
 
-COPY app.py config.py six_color_epd.py template_renderer.py ./
+COPY app.py config.py db_indexes.py six_color_epd.py template_renderer.py ./
 COPY assets ./assets
 
 EXPOSE 5000
 
-CMD ["python", "app.py"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health', timeout=4).read()" || exit 1
+
+# One threaded worker avoids running database/bootstrap initialization once per
+# process while still serving concurrent sleeping devices and browser requests.
+CMD ["gunicorn", "--bind=0.0.0.0:5000", "--workers=1", "--threads=4", "--timeout=120", "--graceful-timeout=30", "--keep-alive=5", "--max-requests=1000", "--max-requests-jitter=100", "--access-logfile=-", "--error-logfile=-", "app:app"]

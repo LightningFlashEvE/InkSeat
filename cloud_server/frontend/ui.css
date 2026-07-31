@@ -1027,6 +1027,69 @@ body.control-page {
     border: 1px solid var(--ui-line-soft);
 }
 
+.control-page .nameplate-logo-current {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 9px;
+    border: 1px solid var(--ui-line-soft);
+    border-radius: 8px;
+    background: rgba(237, 244, 230, 0.04);
+}
+
+.control-page .nameplate-logo-current img {
+    width: 76px;
+    height: 42px;
+    flex: 0 0 auto;
+    object-fit: contain;
+    padding: 4px;
+    border-radius: 5px;
+    background: #fff;
+}
+
+.control-page .nameplate-logo-current div {
+    min-width: 0;
+}
+
+.control-page .nameplate-logo-current strong,
+.control-page .nameplate-logo-current span {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.control-page .nameplate-logo-current strong {
+    color: var(--ui-text);
+    font-size: 0.8rem;
+}
+
+.control-page .nameplate-logo-current span,
+.control-page .nameplate-logo-help {
+    color: var(--ui-text-muted);
+    font-size: 0.72rem;
+}
+
+.control-page .nameplate-logo-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.control-page .nameplate-logo-actions .btn {
+    min-width: 0;
+    padding: 7px 5px;
+    font-size: 0.72rem;
+    white-space: nowrap;
+}
+
+.control-page .nameplate-logo-help {
+    margin: 7px 0 0;
+    line-height: 1.45;
+}
+
 .control-page .canvas-area {
     background: #0b0f0c !important;
     background-image: none !important;
@@ -2662,6 +2725,15 @@ body.meeting-device-page button:disabled {
     background: rgba(45, 124, 255, 0.16);
 }
 
+.meeting-quick-danger {
+    color: rgba(255, 132, 132, 0.92);
+}
+
+.meeting-quick-danger:hover .meeting-quick-icon {
+    border-color: rgba(239, 68, 68, 0.62);
+    background: rgba(239, 68, 68, 0.16);
+}
+
 .meeting-status-bar {
     grid-area: status;
     justify-self: start;
@@ -2756,6 +2828,12 @@ body.meeting-device-page button:disabled {
     font-size: 13px;
 }
 
+.meeting-add-form small {
+    color: var(--meeting-text-3);
+    font-size: 12px;
+    line-height: 1.5;
+}
+
 .meeting-add-form input {
     min-height: 46px;
     border-radius: 13px;
@@ -2775,6 +2853,12 @@ body.meeting-device-page button:disabled {
     margin-top: 4px;
     background: #2779ff;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24), 0 18px 36px rgba(24, 108, 255, 0.22);
+}
+
+.meeting-add-submit:disabled {
+    cursor: wait;
+    opacity: 0.64;
+    transform: none;
 }
 
 @media (max-width: 1260px) {
@@ -4098,7 +4182,7 @@ html[data-theme="light"] body.meeting-device-page {
     --meeting-line-soft: rgba(40, 82, 96, 0.10);
     --meeting-text: #0f2732;
     --meeting-text-2: rgba(15, 39, 50, 0.68);
-    --meeting-text-3: rgba(15, 39, 50, 0.46);
+    --meeting-text-3: rgba(15, 39, 50, 0.60);
     --meeting-blue: #2278ee;
     --meeting-blue-2: #2d8df7;
     --meeting-green: #18b86f;
@@ -4121,7 +4205,7 @@ html[data-theme="light"] body.login-page {
     --ui-line-soft: rgba(40, 82, 96, 0.10);
     --ui-text: #0f2732;
     --ui-text-muted: rgba(15, 39, 50, 0.68);
-    --ui-text-dim: rgba(15, 39, 50, 0.46);
+    --ui-text-dim: rgba(15, 39, 50, 0.60);
     --ui-accent: #2278ee;
     --ui-accent-2: #2d8df7;
     --ui-ok: #18b86f;
@@ -4237,7 +4321,7 @@ html[data-theme="light"] .settings-theme-state {
 }
 
 html[data-theme="light"] .meeting-table thead {
-    background: rgba(224, 243, 248, 0.96);
+    background: transparent;
 }
 
 html[data-theme="light"] .meeting-table th,
@@ -4442,14 +4526,14 @@ body.theme-light.login-page {
     --meeting-line-soft: rgba(36, 63, 76, 0.08);
     --meeting-text: #0b1720;
     --meeting-text-2: rgba(11, 23, 32, 0.72);
-    --meeting-text-3: rgba(11, 23, 32, 0.52);
+    --meeting-text-3: rgba(11, 23, 32, 0.60);
     --meeting-blue: #1687f2;
     --meeting-blue-2: #2a91f4;
     --meeting-green: #18c878;
     --meeting-red: #e44449;
     --meeting-orange: #d88b15;
     --meeting-purple: #846bff;
-    --meeting-glass: #f8fcfd;
+    --meeting-glass: rgba(255, 255, 255, 0.54);
     --ui-bg: #eef5f7;
     --ui-surface: #ffffff;
     --ui-surface-2: #f8fcfd;
@@ -4458,13 +4542,13 @@ body.theme-light.login-page {
     --ui-line-soft: rgba(36, 63, 76, 0.08);
     --ui-text: #0b1720;
     --ui-text-muted: rgba(11, 23, 32, 0.72);
-    --ui-text-dim: rgba(11, 23, 32, 0.52);
+    --ui-text-dim: rgba(11, 23, 32, 0.60);
     --ui-accent: #1687f2;
     --ui-accent-2: #2a91f4;
     --ui-ok: #18c878;
     --ui-warn: #d88b15;
     --ui-danger: #e44449;
-    --ui-glass: #f8fcfd;
+    --ui-glass: rgba(255, 255, 255, 0.54);
     color: #0b1720 !important;
     background: #eef5f7 !important;
     background-image: none !important;
@@ -4488,14 +4572,15 @@ html.theme-light .login-page .card,
 html[data-theme="light"] .meeting-shell,
 html[data-theme="light"] .nameplates-page .app-shell,
 html[data-theme="light"] .login-page .card {
-    border-color: rgba(36, 63, 76, 0.12) !important;
-    background: #f8fcfd !important;
+    border-color: rgba(255, 255, 255, 0.62) !important;
+    background: rgba(248, 252, 253, 0.58) !important;
     background-image: none !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
+    backdrop-filter: blur(34px) saturate(165%) brightness(1.03) !important;
+    -webkit-backdrop-filter: blur(34px) saturate(165%) brightness(1.03) !important;
     box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.88),
-        0 20px 54px rgba(42, 86, 106, 0.14) !important;
+        inset 0 1px 0 rgba(255, 255, 255, 0.92),
+        inset 0 -1px 0 rgba(36, 63, 76, 0.06),
+        0 24px 72px rgba(42, 86, 106, 0.16) !important;
 }
 
 html.theme-light .meeting-sidebar,
@@ -4504,12 +4589,12 @@ html.theme-light .nameplates-page .insight-panel,
 html[data-theme="light"] .meeting-sidebar,
 html[data-theme="light"] .nameplates-page .side-nav,
 html[data-theme="light"] .nameplates-page .insight-panel {
-    border-color: rgba(36, 63, 76, 0.12) !important;
-    background: #f2f9fb !important;
+    border-color: rgba(255, 255, 255, 0.52) !important;
+    background: rgba(242, 249, 251, 0.46) !important;
     background-image: none !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-    box-shadow: none !important;
+    backdrop-filter: blur(30px) saturate(155%) !important;
+    -webkit-backdrop-filter: blur(30px) saturate(155%) !important;
+    box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.42) !important;
 }
 
 html.theme-light .meeting-glass,
@@ -4564,22 +4649,22 @@ html[data-theme="light"] .control-page .page-item:hover,
 html[data-theme="light"] .control-page .page-item.active,
 html[data-theme="light"] .control-page .progress-overlay,
 html[data-theme="light"] .control-page .modal {
-    background: #f8fcfd !important;
+    background: rgba(255, 255, 255, 0.48) !important;
     background-image: none !important;
-    border-color: rgba(36, 63, 76, 0.12) !important;
+    border-color: rgba(255, 255, 255, 0.58) !important;
     color: #0b1720 !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
+    backdrop-filter: blur(26px) saturate(150%) !important;
+    -webkit-backdrop-filter: blur(26px) saturate(150%) !important;
 }
 
 html.theme-light .meeting-stats,
 html.theme-light .control-page .top-bar,
 html[data-theme="light"] .meeting-stats,
 html[data-theme="light"] .control-page .top-bar {
-    background: #ffffff !important;
+    background: rgba(255, 255, 255, 0.42) !important;
     background-image: none !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
+    backdrop-filter: blur(28px) saturate(150%) !important;
+    -webkit-backdrop-filter: blur(28px) saturate(150%) !important;
 }
 
 html.theme-light .meeting-table-card,
@@ -4596,10 +4681,10 @@ html[data-theme="light"] .nameplates-page .insight-card,
 html[data-theme="light"] .control-page .main-layout,
 html[data-theme="light"] .control-page .left-sidebar,
 html[data-theme="light"] .control-page .right-panel {
-    background: #ffffff !important;
+    background: rgba(255, 255, 255, 0.46) !important;
     background-image: none !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
+    backdrop-filter: blur(24px) saturate(145%) !important;
+    -webkit-backdrop-filter: blur(24px) saturate(145%) !important;
 }
 
 html.theme-light .meeting-nav-item:hover,
@@ -4629,7 +4714,7 @@ html[data-theme="light"] .meeting-nav-item.active {
 
 html.theme-light .meeting-table thead,
 html[data-theme="light"] .meeting-table thead {
-    background-color: #eef6f8 !important;
+    background-color: transparent !important;
 }
 
 html.theme-light .meeting-legend-row,
@@ -4950,6 +5035,291 @@ html:not(.theme-light):not([data-theme="light"]) .meeting-nav-item.active {
     -webkit-backdrop-filter: none !important;
 }
 
+/* Frosted glass pass: translucent Apple-style surfaces with Gaussian blur. */
+html:is(.theme-light, [data-theme="light"]) body {
+    --meeting-glass: rgba(255, 255, 255, 0.18);
+    --ui-glass: rgba(255, 255, 255, 0.18);
+    background: #dff6fa !important;
+}
+
+html:is(.theme-light, [data-theme="light"]) .meeting-page {
+    position: relative;
+    overflow: hidden;
+}
+
+html:is(.theme-light, [data-theme="light"]) .meeting-page::before {
+    content: "";
+    position: absolute;
+    inset: -18%;
+    z-index: 0;
+    pointer-events: none;
+    background:
+        repeating-linear-gradient(116deg, transparent 0 56px, rgba(64, 148, 188, 0.052) 58px, transparent 74px),
+        repeating-linear-gradient(28deg, transparent 0 82px, rgba(58, 151, 184, 0.034) 84px, transparent 102px);
+    filter: blur(16px) saturate(118%);
+    opacity: 0.46;
+    transform: rotate(-4deg);
+}
+
+html:is(.theme-light, [data-theme="light"]) .meeting-page::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background:
+        repeating-linear-gradient(0deg, rgba(52, 120, 150, 0.024) 0 1px, transparent 1px 5px),
+        repeating-linear-gradient(90deg, rgba(52, 120, 150, 0.022) 0 1px, transparent 1px 6px);
+    mix-blend-mode: overlay;
+    opacity: 0.32;
+}
+
+html:is(.theme-light, [data-theme="light"]) :is(
+    .meeting-shell,
+    .nameplates-page .app-shell,
+    .login-page .card
+) {
+    position: relative;
+    z-index: 1;
+    overflow: hidden;
+    isolation: isolate;
+    background: rgba(248, 252, 253, 0.18) !important;
+    border-color: rgba(255, 255, 255, 0.58) !important;
+    backdrop-filter: blur(36px) saturate(170%) brightness(1.03) !important;
+    -webkit-backdrop-filter: blur(36px) saturate(170%) brightness(1.03) !important;
+    backdrop-filter: url("#meetingGlassRefractStrong") blur(38px) saturate(188%) brightness(1.055) contrast(1.03) !important;
+    -webkit-backdrop-filter: url("#meetingGlassRefractStrong") blur(38px) saturate(188%) brightness(1.055) contrast(1.03) !important;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.98),
+        inset 1px 0 0 rgba(255, 255, 255, 0.48),
+        inset -1px -1px 0 rgba(38, 93, 118, 0.10),
+        inset 0 0 46px rgba(255, 255, 255, 0.13),
+        0 30px 90px rgba(42, 86, 106, 0.15) !important;
+}
+
+html:is(.theme-light, [data-theme="light"]) :is(
+    .meeting-sidebar,
+    .nameplates-page .side-nav,
+    .nameplates-page .insight-panel
+) {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+    background: rgba(242, 249, 251, 0.16) !important;
+    border-color: rgba(255, 255, 255, 0.48) !important;
+    backdrop-filter: blur(30px) saturate(155%) !important;
+    -webkit-backdrop-filter: blur(30px) saturate(155%) !important;
+    backdrop-filter: url("#meetingGlassRefractSoft") blur(34px) saturate(172%) brightness(1.035) contrast(1.02) !important;
+    -webkit-backdrop-filter: url("#meetingGlassRefractSoft") blur(34px) saturate(172%) brightness(1.035) contrast(1.02) !important;
+    box-shadow:
+        inset 1px 0 0 rgba(255, 255, 255, 0.68),
+        inset -1px 0 0 rgba(38, 93, 118, 0.08) !important;
+}
+
+html:is(.theme-light, [data-theme="light"]) :is(
+    .meeting-glass,
+    .settings-theme-state,
+    .meeting-search,
+    .meeting-status-bar,
+    .meeting-modal-panel,
+    .meeting-page-btn,
+    .meeting-page-text,
+    .meeting-table-action,
+    .nameplates-page .dashboard-hero,
+    .nameplates-page .command-panel,
+    .nameplates-page .insight-card,
+    .nameplates-page .status-bar,
+    .control-page .top-bar,
+    .control-page .toolbar,
+    .control-page .canvas-container,
+    .control-page .panel-section,
+    .control-page .mode-btn,
+    .control-page .template-card,
+    .control-page .saved-template-row,
+    .control-page .saved-template-empty,
+    .control-page .process-option,
+    .control-page .drop-zone,
+    .control-page .text-list,
+    .control-page .modal
+) {
+    background: rgba(255, 255, 255, 0.14) !important;
+    border-color: rgba(255, 255, 255, 0.46) !important;
+    backdrop-filter: blur(30px) saturate(160%) brightness(1.02) !important;
+    -webkit-backdrop-filter: blur(30px) saturate(160%) brightness(1.02) !important;
+    backdrop-filter: url("#meetingGlassRefractSoft") blur(34px) saturate(174%) brightness(1.04) contrast(1.02) !important;
+    -webkit-backdrop-filter: url("#meetingGlassRefractSoft") blur(34px) saturate(174%) brightness(1.04) contrast(1.02) !important;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.84),
+        inset 1px 0 0 rgba(255, 255, 255, 0.36),
+        inset -1px -1px 0 rgba(36, 63, 76, 0.08),
+        0 18px 50px rgba(42, 86, 106, 0.08) !important;
+}
+
+html:is(.theme-light, [data-theme="light"]) :is(
+    .meeting-table-card,
+    .meeting-side-card,
+    .control-page .left-sidebar,
+    .control-page .right-panel
+) {
+    background: rgba(255, 255, 255, 0.14) !important;
+    border-color: rgba(255, 255, 255, 0.48) !important;
+    backdrop-filter: blur(42px) saturate(172%) brightness(1.025) !important;
+    -webkit-backdrop-filter: blur(42px) saturate(172%) brightness(1.025) !important;
+    backdrop-filter: url("#meetingGlassRefractStrong") blur(46px) saturate(192%) brightness(1.052) contrast(1.03) !important;
+    -webkit-backdrop-filter: url("#meetingGlassRefractStrong") blur(46px) saturate(192%) brightness(1.052) contrast(1.03) !important;
+}
+
+html:is(.theme-light, [data-theme="light"]) :is(
+    .meeting-stat,
+    .meeting-quick,
+    .meeting-page-btn,
+    .meeting-page-text,
+    .meeting-table-action
+) {
+    background: rgba(255, 255, 255, 0.12) !important;
+    border-color: rgba(255, 255, 255, 0.36) !important;
+    backdrop-filter: blur(18px) saturate(148%) !important;
+    -webkit-backdrop-filter: blur(18px) saturate(148%) !important;
+    backdrop-filter: url("#meetingGlassRefractSoft") blur(22px) saturate(160%) brightness(1.02) !important;
+    -webkit-backdrop-filter: url("#meetingGlassRefractSoft") blur(22px) saturate(160%) brightness(1.02) !important;
+}
+
+html:is(.theme-light, [data-theme="light"]) :is(.meeting-stat-icon, .meeting-quick-icon) {
+    background: rgba(255, 255, 255, 0.16) !important;
+    backdrop-filter: blur(12px) saturate(140%) !important;
+    -webkit-backdrop-filter: blur(12px) saturate(140%) !important;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.52);
+}
+
+html:is(.theme-light, [data-theme="light"]) :is(
+    .meeting-shell,
+    .meeting-sidebar,
+    .meeting-glass,
+    .nameplates-page .app-shell,
+    .nameplates-page .side-nav,
+    .nameplates-page .insight-panel,
+    .login-page .card
+) > * {
+    position: relative;
+    z-index: 1;
+}
+
+html:is(.theme-light, [data-theme="light"]) :is(
+    .meeting-shell,
+    .meeting-sidebar,
+    .meeting-glass,
+    .nameplates-page .app-shell,
+    .nameplates-page .side-nav,
+    .nameplates-page .insight-panel,
+    .login-page .card
+)::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background:
+        linear-gradient(112deg, rgba(255, 255, 255, 0.46) 0%, transparent 18%, rgba(255, 255, 255, 0.11) 44%, transparent 64%, rgba(255, 255, 255, 0.24) 100%),
+        linear-gradient(28deg, transparent 0%, rgba(70, 154, 190, 0.16) 36%, transparent 58%),
+        repeating-linear-gradient(118deg, transparent 0 42px, rgba(255, 255, 255, 0.09) 43px, transparent 52px);
+    mix-blend-mode: screen;
+    opacity: 0.46;
+}
+
+html:is(.theme-light, [data-theme="light"]) :is(
+    .meeting-shell,
+    .meeting-sidebar,
+    .meeting-glass,
+    .nameplates-page .app-shell,
+    .nameplates-page .side-nav,
+    .nameplates-page .insight-panel,
+    .login-page .card
+)::after {
+    content: "";
+    position: absolute;
+    inset: 1px;
+    z-index: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    box-shadow:
+        inset 1px 1px 0 rgba(255, 255, 255, 0.76),
+        inset 0 2px 10px rgba(255, 255, 255, 0.18),
+        inset -1px -1px 0 rgba(34, 80, 100, 0.14),
+        inset 0 0 36px rgba(255, 255, 255, 0.12);
+}
+
+html:is(.theme-light, [data-theme="light"]) :is(
+    .meeting-table-card,
+    .meeting-side-card,
+    .meeting-stats
+)::before {
+    opacity: 0.34;
+}
+
+html:is(.theme-light, [data-theme="light"]) .meeting-table thead {
+    background-color: transparent !important;
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.025)) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.42),
+        inset 0 -1px 0 rgba(42, 86, 106, 0.08);
+}
+
+html:is(.theme-light, [data-theme="light"]) .meeting-table th {
+    border-bottom-color: rgba(42, 86, 106, 0.08) !important;
+}
+
+html:not(:is(.theme-light, [data-theme="light"])) body:is(
+    .meeting-device-page,
+    .dashboard-page,
+    .control-page,
+    .login-page
+) {
+    --meeting-glass: rgba(36, 38, 42, 0.58);
+    --ui-glass: rgba(36, 38, 42, 0.58);
+}
+
+html:not(:is(.theme-light, [data-theme="light"])) :is(
+    .meeting-shell,
+    .nameplates-page .app-shell,
+    .login-page .card
+) {
+    background: rgba(28, 30, 33, 0.62) !important;
+    border-color: rgba(255, 255, 255, 0.22) !important;
+    backdrop-filter: blur(36px) saturate(155%) !important;
+    -webkit-backdrop-filter: blur(36px) saturate(155%) !important;
+}
+
+html:not(:is(.theme-light, [data-theme="light"])) :is(
+    .meeting-sidebar,
+    .nameplates-page .side-nav,
+    .nameplates-page .insight-panel,
+    .meeting-glass,
+    .settings-theme-state,
+    .meeting-search,
+    .meeting-status-bar,
+    .meeting-modal-panel,
+    .meeting-page-btn,
+    .meeting-page-text,
+    .meeting-table-action,
+    .nameplates-page .dashboard-hero,
+    .nameplates-page .command-panel,
+    .nameplates-page .insight-card,
+    .control-page .top-bar,
+    .control-page .toolbar,
+    .control-page .canvas-container,
+    .control-page .panel-section,
+    .control-page .template-card,
+    .control-page .saved-template-row,
+    .control-page .modal
+) {
+    background: rgba(36, 38, 42, 0.54) !important;
+    backdrop-filter: blur(26px) saturate(145%) !important;
+    -webkit-backdrop-filter: blur(26px) saturate(145%) !important;
+}
+
 /* 20260706 interaction and mobile performance pass */
 .meeting-page-btn,
 .meeting-modal-close,
@@ -5255,5 +5625,103 @@ body.control-page .panel-tab {
     .control-page .template-grid,
     .control-page .mode-buttons {
         grid-template-columns: 1fr;
+    }
+}
+
+/* Keep the glass8 look on capable desktop browsers, but avoid full-viewport
+   blur/displacement compositing on mobile and reduced-performance displays. */
+@media (max-width: 900px),
+       (prefers-reduced-motion: reduce),
+       (prefers-reduced-transparency: reduce),
+       (update: slow),
+       (hover: none) and (pointer: coarse) {
+    .meeting-page::before,
+    .meeting-page::after {
+        display: none !important;
+        filter: none !important;
+    }
+
+    :is(
+        .meeting-shell,
+        .meeting-sidebar,
+        .meeting-glass,
+        .meeting-stats,
+        .meeting-table-card,
+        .meeting-side-card,
+        .meeting-search,
+        .meeting-status-bar,
+        .meeting-modal-backdrop,
+        .meeting-modal-panel,
+        .meeting-page-btn,
+        .meeting-page-text,
+        .meeting-table-action,
+        .settings-theme-state,
+        .nameplates-page .app-shell,
+        .nameplates-page .side-nav,
+        .nameplates-page .insight-panel,
+        .nameplates-page .dashboard-hero,
+        .nameplates-page .command-panel,
+        .nameplates-page .insight-card,
+        .control-page .top-bar,
+        .control-page .main-layout,
+        .control-page .left-sidebar,
+        .control-page .right-panel,
+        .control-page .toolbar,
+        .control-page .canvas-container,
+        .control-page .panel-section,
+        .control-page .template-card,
+        .control-page .saved-template-row,
+        .control-page .process-option,
+        .control-page .drop-zone,
+        .control-page .text-list,
+        .control-page .modal,
+        .login-page .card
+    ) {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+}
+
+/* Keyboard semantics and compact mobile table guidance. */
+.control-page .panel-tab {
+    appearance: none;
+    border-top: 0;
+    border-right: 0;
+    border-left: 0;
+    background: transparent;
+}
+
+.control-page .template-card .icon,
+.control-page .template-card .name,
+.control-page .template-card .desc {
+    display: block;
+}
+
+.control-page .panel-tab:focus-visible,
+.control-page .mode-btn:focus-visible,
+.control-page .template-card:focus-visible,
+.control-page .saved-template-row:focus-visible,
+.control-page .page-item:focus-visible {
+    outline: 3px solid rgba(74, 163, 255, 0.72);
+    outline-offset: 2px;
+}
+
+.meeting-table-scroll-hint {
+    display: none;
+    margin: 0;
+    padding: 0 26px 10px;
+    color: var(--meeting-text-2);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+@media (max-width: 900px) {
+    .meeting-table-scroll-hint {
+        display: block;
+    }
+
+    .meeting-table-wrap {
+        overscroll-behavior-x: contain;
+        scrollbar-width: thin;
     }
 }

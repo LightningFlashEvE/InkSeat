@@ -16,6 +16,9 @@ import secrets
 import re
 import base64
 import mimetypes
+import shutil
+import math
+import zipfile
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
@@ -24,29 +27,80 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import requests
+from PIL import Image
 
 from flask import Flask, request, jsonify, send_file, Response
 from flask_cors import CORS
-from pymongo import MongoClient
+from pymongo import MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
+from werkzeug.security import check_password_hash, generate_password_hash
 import tempfile
 import io
 
 from config import Config
+from db_indexes import ensure_all_indexes
 from six_color_epd import process_e6_image_from_base64
 from template_renderer import render_template_with_preview, _fetch_weather, _fetch_quote, _encode_epd_string
 
 # ==================== Flask 应用初始化 ====================
 app = Flask(__name__)
 app.config.from_object(Config)
-CORS(app)  # 允许跨域请求
+if Config.CORS_ORIGINS:
+    CORS(
+        app,
+        resources={r'/api/*': {'origins': Config.CORS_ORIGINS}},
+        allow_headers=[
+            'Authorization', 'Content-Type', 'X-Device-Key',
+            'X-Admin-Bootstrap-Token',
+        ],
+    )
 
 # ==================== EPD 数据格式（7.3" E6，800x480，4bit a~p） ====================
 EPD_WIDTH = 800
 EPD_HEIGHT = 480
 EPD_EXPECTED_CHARS = EPD_WIDTH * EPD_HEIGHT  # 384000
 EPD_ALLOWED_CHARS = set('abcdefghijklmnop')
+DEVICE_ID_PATTERN = re.compile(r'^(?:[0-9A-F]{6}|[0-9A-F]{12})$')
 DEFAULT_SLEEP_INTERVAL_SECONDS = 12 * 60 * 60
+MIN_SLEEP_INTERVAL_SECONDS = 5 * 60
+MAX_SLEEP_INTERVAL_SECONDS = 30 * 24 * 60 * 60
+ALLOW_REGISTRATION = os.environ.get('ALLOW_REGISTRATION', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
+AUTH_TOKEN_TTL_SECONDS = max(300, int(os.environ.get('AUTH_TOKEN_TTL_SECONDS', 7 * 24 * 60 * 60)))
+DEVICE_AUTH_REQUIRED = Config.DEVICE_AUTH_REQUIRED
+ADMIN_BOOTSTRAP_TOKEN = Config.ADMIN_BOOTSTRAP_TOKEN
+PAIRING_MAX_FAILED_ATTEMPTS = Config.PAIRING_MAX_FAILED_ATTEMPTS
+PAIRING_LOCK_SECONDS = Config.PAIRING_LOCK_SECONDS
+DEVICE_STATUS_MAX_BODY_BYTES = Config.DEVICE_STATUS_MAX_BODY_BYTES
+DEVICE_KEY_RESET_WINDOW_SECONDS = Config.DEVICE_KEY_RESET_WINDOW_SECONDS
+UNCLAIMED_DEVICE_TTL_SECONDS = Config.UNCLAIMED_DEVICE_TTL_SECONDS
+TELEMETRY_NUMERIC_LIMITS = {
+    'rssi': (-150, 20),
+    'uptime_ms': (0, 7 * 24 * 60 * 60 * 1000),
+    'freeHeap': (0, 16 * 1024 * 1024),
+    'currentSleepSeconds': (0, 366 * 24 * 60 * 60),
+}
+
+
+def sanitize_telemetry_text(value, limit: int) -> str:
+    if not isinstance(value, str):
+        return ''
+    normalized = re.sub(r'[\x00-\x1f\x7f]+', ' ', value).strip()
+    return normalized[:limit]
+
+
+PAGE_MAX_NAME_CHARS = 100
+PAGE_MAX_TYPE_CHARS = 32
+PAGE_MAX_DATA_BYTES = 4 * 1024 * 1024
+PAGE_MAX_THUMBNAIL_BYTES = 256 * 1024
+NAMEPLATE_LOGO_MAX_BYTES = 512 * 1024
+NAMEPLATE_LOGO_MAX_DIMENSION = 4096
+NAMEPLATE_LOGO_MAX_PIXELS = 4096 * 4096
+NAMEPLATE_LOGO_MIME_FORMATS = {
+    'image/png': 'PNG',
+    'image/jpeg': 'JPEG',
+    'image/webp': 'WEBP',
+}
+NAMEPLATE_LOGO_CONFIG_KEYS = ('logoDataUrl', 'logoFileName', 'logoX', 'logoY')
 TEMPLATE_DAY_TIMEZONE = os.environ.get('TEMPLATE_DAY_TIMEZONE', 'Asia/Shanghai')
 try:
     TEMPLATE_DAY_TZ = ZoneInfo(TEMPLATE_DAY_TIMEZONE)
@@ -66,6 +120,23 @@ CONTENT_MODE_LABELS = {
     'mixed': '图文内容',
     'custom': '自定义内容',
 }
+
+
+def utcnow() -> datetime:
+    """Naive UTC for compatibility with existing PyMongo documents."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def normalize_sleep_interval(value, fallback: int) -> int:
+    """Return a finite, firmware-safe sleep interval in seconds."""
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and (isinstance(value, int) or math.isfinite(value))
+        and value > 0
+    ):
+        return min(max(int(value), MIN_SLEEP_INTERVAL_SECONDS), MAX_SLEEP_INTERVAL_SECONDS)
+    return min(max(int(fallback), MIN_SLEEP_INTERVAL_SECONDS), MAX_SLEEP_INTERVAL_SECONDS)
 
 def get_template_meta(template_id: str):
     """查找当前仍可用的内置模板。"""
@@ -87,10 +158,10 @@ def build_content_metadata(content_mode=None, template_id=None, custom_sleep_int
         template = get_template_meta(template_id)
         if template:
             # 优先使用用户自定义间隔，否则用模板默认间隔
-            if custom_sleep_interval and isinstance(custom_sleep_interval, (int, float)) and custom_sleep_interval > 0:
-                sleep_interval = int(custom_sleep_interval)
-            else:
-                sleep_interval = TEMPLATE_SLEEP_INTERVAL_SECONDS.get(template_id, DEFAULT_SLEEP_INTERVAL_SECONDS)
+            sleep_interval = normalize_sleep_interval(
+                custom_sleep_interval,
+                TEMPLATE_SLEEP_INTERVAL_SECONDS.get(template_id, DEFAULT_SLEEP_INTERVAL_SECONDS),
+            )
             return {
                 'activeContentMode': 'template',
                 'activeTemplateId': template_id,
@@ -206,7 +277,19 @@ def render_template_epd_data(template_id: str, config: dict) -> str:
 
 
 NAMEPLATE_MAX_NAME_LEN = 16
+NAMEPLATE_MAX_NAMES = 500
+NAMEPLATE_MAX_TARGET_DEVICES = 500
 NAMEPLATE_MAX_PARSE_FILE_BYTES = int(os.environ.get('NAMEPLATE_MAX_PARSE_FILE_BYTES', 8 * 1024 * 1024))
+NAMEPLATE_MAX_PARSE_FILES = max(1, int(os.environ.get('NAMEPLATE_MAX_PARSE_FILES', 8)))
+NAMEPLATE_MAX_PARSE_TOTAL_BYTES = int(os.environ.get('NAMEPLATE_MAX_PARSE_TOTAL_BYTES', 16 * 1024 * 1024))
+NAMEPLATE_MAX_PARSE_TEXT_CHARS = int(os.environ.get('NAMEPLATE_MAX_PARSE_TEXT_CHARS', 20_000))
+NAMEPLATE_MAX_XLSX_ENTRIES = 200
+NAMEPLATE_MAX_XLSX_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
+# Keep upstream AI parsing and serial batch rendering below Gunicorn's 120s
+# worker timeout. The request helpers consume these as end-to-end deadlines,
+# rather than granting every retry a fresh timeout.
+NAMEPLATE_AI_TOTAL_BUDGET_SECONDS = 90.0
+NAMEPLATE_DISPATCH_DEADLINE_SECONDS = 90.0
 NAMEPLATE_AI_API_KEY = (
     os.environ.get('NAMEPLATE_AI_API_KEY')
     or os.environ.get('OPENAI_API_KEY')
@@ -300,12 +383,17 @@ def parse_nameplate_names(data: dict) -> list[str]:
     normalized names array after completing intent extraction.
     """
     names = []
+
+    def append_name(raw_value):
+        name = _clean_nameplate_candidate(raw_value)
+        if name and len(names) <= NAMEPLATE_MAX_NAMES:
+            names.append(name)
     raw_names = data.get('names')
     if isinstance(raw_names, list):
         for item in raw_names:
-            name = _clean_nameplate_candidate(item)
-            if name:
-                names.append(name)
+            append_name(item)
+            if len(names) > NAMEPLATE_MAX_NAMES:
+                break
         return names
 
     text = data.get('text') or data.get('message') or ''
@@ -316,9 +404,9 @@ def parse_nameplate_names(data: dict) -> list[str]:
     normalized = re.sub(r'[、,，;；\t]+', '\n', normalized)
 
     for line in normalized.split('\n'):
-        name = _clean_nameplate_candidate(line)
-        if name:
-            names.append(name)
+        append_name(line)
+        if len(names) > NAMEPLATE_MAX_NAMES:
+            break
 
     return names
 
@@ -336,6 +424,8 @@ def parse_nameplate_names_from_text(text: str) -> list[str]:
             if name:
                 names.append(name)
                 break
+        if len(names) > NAMEPLATE_MAX_NAMES:
+            break
     return names
 
 
@@ -349,6 +439,8 @@ def resolve_nameplate_target_devices(owner: str, requested_device_ids) -> tuple[
             clean_id = normalize_device_id(str(raw_id))
             if clean_id and clean_id not in clean_ids:
                 clean_ids.append(clean_id)
+            if len(clean_ids) > NAMEPLATE_MAX_TARGET_DEVICES:
+                break
 
         docs = list(devices_collection.find({'owner': owner, 'deviceId': {'$in': clean_ids}}))
         by_id = {doc.get('deviceId'): doc for doc in docs}
@@ -356,7 +448,61 @@ def resolve_nameplate_target_devices(owner: str, requested_device_ids) -> tuple[
         missing = [device_id for device_id in clean_ids if device_id not in by_id]
         return target_devices, missing
 
-    return list(devices_collection.find({'owner': owner, 'claimed': True}).sort('addedAt', 1)), []
+    return list(
+        devices_collection.find({'owner': owner, 'claimed': True})
+        .sort('addedAt', 1)
+        .limit(NAMEPLATE_MAX_TARGET_DEVICES)
+    ), []
+
+
+def normalize_nameplate_logo_data_url(value) -> str:
+    """Validate and canonicalize a user-supplied raster logo data URL."""
+    if not isinstance(value, str) or not value.startswith('data:image/'):
+        return ''
+
+    header, separator, payload = value.partition(',')
+    if not separator or not header.endswith(';base64'):
+        return ''
+    mime_type = header[5:-7].lower()
+    expected_format = NAMEPLATE_LOGO_MIME_FORMATS.get(mime_type)
+    if not expected_format or not payload:
+        return ''
+
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except Exception:
+        return ''
+    if not raw or len(raw) > NAMEPLATE_LOGO_MAX_BYTES:
+        return ''
+
+    try:
+        with Image.open(io.BytesIO(raw)) as logo:
+            if (logo.format or '').upper() != expected_format:
+                return ''
+            width, height = logo.size
+            if (
+                width <= 0 or height <= 0
+                or width > NAMEPLATE_LOGO_MAX_DIMENSION
+                or height > NAMEPLATE_LOGO_MAX_DIMENSION
+                or width * height > NAMEPLATE_LOGO_MAX_PIXELS
+            ):
+                return ''
+            logo.verify()
+    except Exception:
+        return ''
+
+    encoded = base64.b64encode(raw).decode('ascii')
+    return f'data:{mime_type};base64,{encoded}'
+
+
+def merge_nameplate_logo_config(config: dict, source_config: dict) -> dict:
+    """Keep logo payload and placement out of AI edits while preserving the template design."""
+    merged = dict(config or {})
+    source = source_config if isinstance(source_config, dict) else {}
+    for key in NAMEPLATE_LOGO_CONFIG_KEYS:
+        if key in source:
+            merged[key] = source[key]
+    return merged
 
 
 def normalize_nameplate_template_config(raw_config) -> dict:
@@ -371,9 +517,28 @@ def normalize_nameplate_template_config(raw_config) -> dict:
         'subtitle': str(raw_config.get('subtitle') or '').strip()[:40],
     }
 
+    logo_data_url = normalize_nameplate_logo_data_url(raw_config.get('logoDataUrl'))
+    if logo_data_url:
+        config['logoDataUrl'] = logo_data_url
+        logo_file_name = str(raw_config.get('logoFileName') or '').strip()
+        if logo_file_name:
+            config['logoFileName'] = logo_file_name[:100]
+
+    logo_x = raw_config.get('logoX')
+    logo_y = raw_config.get('logoY')
+    if (
+        isinstance(logo_x, (int, float)) and not isinstance(logo_x, bool)
+        and isinstance(logo_y, (int, float)) and not isinstance(logo_y, bool)
+        and math.isfinite(logo_x) and math.isfinite(logo_y)
+    ):
+        config['logoX'] = min(max(int(round(logo_x)), 0), EPD_WIDTH - 1)
+        config['logoY'] = min(max(int(round(logo_y)), 0), EPD_HEIGHT - 1)
+
     sleep_interval = raw_config.get('sleepIntervalSeconds')
-    if isinstance(sleep_interval, (int, float)) and sleep_interval > 0:
-        config['sleepIntervalSeconds'] = int(sleep_interval)
+    if isinstance(sleep_interval, (int, float)) and not isinstance(sleep_interval, bool):
+        config['sleepIntervalSeconds'] = normalize_sleep_interval(
+            sleep_interval, DEFAULT_SLEEP_INTERVAL_SECONDS
+        )
     return config
 
 
@@ -401,6 +566,20 @@ def serialize_saved_nameplate_template(doc):
     return result
 
 
+def find_page_for_owner(page_id: str, owner: str, projection=None):
+    """Prefer owner-scoped pages, then fall back to one legacy ownerless page."""
+    if pages_collection is None or not owner:
+        return None
+    page = pages_collection.find_one(
+        {'pageId': page_id, 'owner': owner}, projection,
+    )
+    if page:
+        return page
+    return pages_collection.find_one(
+        {'pageId': page_id, 'owner': {'$exists': False}}, projection,
+    )
+
+
 def decode_uploaded_text(raw: bytes) -> str:
     for encoding in ('utf-8-sig', 'utf-8', 'gb18030', 'latin-1'):
         try:
@@ -408,6 +587,26 @@ def decode_uploaded_text(raw: bytes) -> str:
         except Exception:
             continue
     return raw.decode('utf-8', errors='ignore')
+
+
+def validate_xlsx_archive(raw: bytes) -> None:
+    """Reject malformed or excessively expanded XLSX/ZIP containers before parsing."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            entries = archive.infolist()
+            if len(entries) > NAMEPLATE_MAX_XLSX_ENTRIES:
+                raise ValueError('表格压缩包文件项过多')
+            total_uncompressed = 0
+            for entry in entries:
+                if entry.is_dir():
+                    continue
+                if entry.file_size < 0 or entry.compress_size < 0:
+                    raise ValueError('表格压缩包元数据无效')
+                total_uncompressed += entry.file_size
+                if total_uncompressed > NAMEPLATE_MAX_XLSX_UNCOMPRESSED_BYTES:
+                    raise ValueError('表格解压后体积超过限制')
+    except zipfile.BadZipFile as exc:
+        raise ValueError('表格不是有效的 XLSX 压缩包') from exc
 
 
 def extract_spreadsheet_text(raw: bytes, filename: str) -> tuple[str, list[str]]:
@@ -418,12 +617,19 @@ def extract_spreadsheet_text(raw: bytes, filename: str) -> tuple[str, list[str]]
 
     if suffix in ('.xlsx', '.xlsm'):
         try:
+            validate_xlsx_archive(raw)
+        except ValueError as exc:
+            return '', [str(exc)]
+
+        try:
             from openpyxl import load_workbook
         except Exception:
             return '', ['服务器缺少 openpyxl，暂不能解析 XLSX 表格']
 
         try:
-            wb = load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+            wb = load_workbook(
+                io.BytesIO(raw), read_only=True, data_only=True, keep_links=False,
+            )
             lines = []
             for sheet in wb.worksheets[:5]:
                 lines.append(f'工作表: {sheet.title}')
@@ -439,7 +645,8 @@ def extract_spreadsheet_text(raw: bytes, filename: str) -> tuple[str, list[str]]
                         lines.append('\t'.join(cells))
             return '\n'.join(lines), warnings
         except Exception as e:
-            return '', [f'表格解析失败: {e}']
+            print(f'❌ 表格解析失败: {e}')
+            return '', ['表格解析失败']
 
     return '', [f'不支持的表格格式: {suffix or filename}']
 
@@ -454,22 +661,33 @@ def collect_nameplate_parse_sources(req) -> tuple[str, list[dict], list[str], li
         data = req.get_json() or {}
         text = data.get('text') or data.get('message') or ''
         if isinstance(text, str) and text.strip():
+            if len(text) > NAMEPLATE_MAX_PARSE_TEXT_CHARS:
+                raise ValueError(f'文本长度不能超过 {NAMEPLATE_MAX_PARSE_TEXT_CHARS} 字符')
             text_parts.append(text)
         return '\n'.join(text_parts), image_parts, warnings, filenames
 
     form_text = req.form.get('text') or req.form.get('message') or ''
     if form_text.strip():
+        if len(form_text) > NAMEPLATE_MAX_PARSE_TEXT_CHARS:
+            raise ValueError(f'文本长度不能超过 {NAMEPLATE_MAX_PARSE_TEXT_CHARS} 字符')
         text_parts.append(form_text.strip())
 
-    for storage in req.files.getlist('files'):
+    uploads = req.files.getlist('files')
+    if len(uploads) > NAMEPLATE_MAX_PARSE_FILES:
+        raise ValueError(f'上传文件数不能超过 {NAMEPLATE_MAX_PARSE_FILES} 个')
+
+    total_bytes = 0
+    for storage in uploads:
         filename = storage.filename or 'upload'
-        raw = storage.read()
+        raw = storage.read(NAMEPLATE_MAX_PARSE_FILE_BYTES + 1)
         if not raw:
             continue
         filenames.append(filename)
         if len(raw) > NAMEPLATE_MAX_PARSE_FILE_BYTES:
-            warnings.append(f'{filename} 超过大小限制，已跳过')
-            continue
+            raise ValueError(f'{filename} 超过单文件大小限制')
+        total_bytes += len(raw)
+        if total_bytes > NAMEPLATE_MAX_PARSE_TOTAL_BYTES:
+            raise ValueError('上传文件总大小超过限制')
 
         mime_type = storage.mimetype or mimetypes.guess_type(filename)[0] or ''
         suffix = Path(filename).suffix.lower()
@@ -488,7 +706,10 @@ def collect_nameplate_parse_sources(req) -> tuple[str, list[dict], list[str], li
         if extracted_text:
             text_parts.append(f'文件: {filename}\n{extracted_text}')
 
-    return '\n\n'.join(text_parts), image_parts, warnings, filenames
+    combined_text = '\n\n'.join(text_parts)
+    if len(combined_text) > NAMEPLATE_MAX_PARSE_TEXT_CHARS:
+        raise ValueError(f'解析后文本长度不能超过 {NAMEPLATE_MAX_PARSE_TEXT_CHARS} 字符')
+    return combined_text, image_parts, warnings, filenames
 
 
 def build_nameplate_parse_result(names: list[str], template_config: dict, warnings=None,
@@ -498,11 +719,17 @@ def build_nameplate_parse_result(names: list[str], template_config: dict, warnin
         clean = _clean_nameplate_candidate(name)
         if clean:
             clean_names.append(clean)
+        if len(clean_names) >= NAMEPLATE_MAX_NAMES:
+            break
+
+    result_warnings = list(warnings or [])
+    if len(names) > len(clean_names) and len(clean_names) >= NAMEPLATE_MAX_NAMES:
+        result_warnings.append(f'名单最多保留前 {NAMEPLATE_MAX_NAMES} 个姓名')
 
     return {
         'names': clean_names,
         'templateConfig': normalize_nameplate_template_config(template_config),
-        'warnings': warnings or [],
+        'warnings': result_warnings,
         'aiUsed': bool(ai_used),
         'sourceSummary': source_summary or '',
     }
@@ -522,10 +749,21 @@ def _extract_openai_response_text(resp_json: dict) -> str:
     return '\n'.join(texts)
 
 
+def _nameplate_ai_request_timeout(deadline: float) -> tuple[float, float]:
+    """Return connect/read timeouts whose combined budget fits the deadline."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 2.0:
+        raise TimeoutError('AI解析时间预算已用尽')
+    connect_timeout = min(10.0, max(0.5, remaining * 0.2))
+    read_timeout = remaining - connect_timeout
+    return connect_timeout, read_timeout
+
+
 def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base_config: dict) -> dict:
     api_key = get_nameplate_ai_api_key()
     if not api_key:
         raise RuntimeError('NAMEPLATE_AI_API_KEY 未配置')
+    request_deadline = time.monotonic() + NAMEPLATE_AI_TOTAL_BUDGET_SECONDS
 
     schema = {
         'type': 'object',
@@ -553,13 +791,17 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
         },
     }
 
+    prompt_config = {
+        key: value for key, value in normalize_nameplate_template_config(base_config).items()
+        if key not in NAMEPLATE_LOGO_CONFIG_KEYS
+    }
     prompt_text = (
         '你是政务会议电子铭牌名单解析助手。请从用户上传的文字、图片或表格中提取需要下发到铭牌的姓名。'
         '输出必须符合 JSON Schema。只提取人名，不要把单位、职务、标题、设备编号、电话、序号当作姓名。'
         '保持名单原始顺序。若文本中出现职务或英文副标题，可作为 title；公司名称可作为 subtitle。'
         'backgroundStyle 可使用 formal_red=Pheno红色底栏、formal_green=Pheno绿色底栏、plain=Pheno绿色横幅、formal_blue=Pheno职务名片。'
         '如果不确定，请把疑问写入 warnings。'
-        f'\n当前默认模板: {json.dumps(base_config, ensure_ascii=False)}'
+        f'\n当前默认模板: {json.dumps(prompt_config, ensure_ascii=False)}'
         f'\n文本内容:\n{source_text[:12000]}'
     )
 
@@ -602,7 +844,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
                 'Content-Type': 'application/json',
             },
             json=payload,
-            timeout=75,
+            timeout=_nameplate_ai_request_timeout(request_deadline),
         )
         if resp.status_code >= 400 and 'response_format' in resp.text:
             retry_payload = dict(payload)
@@ -614,7 +856,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
                     'Content-Type': 'application/json',
                 },
                 json=retry_payload,
-                timeout=75,
+                timeout=_nameplate_ai_request_timeout(request_deadline),
             )
         if resp.status_code >= 400:
             raise RuntimeError(f'AI解析失败: HTTP {resp.status_code} {resp.text[:300]}')
@@ -629,9 +871,12 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
             raise RuntimeError('AI解析未返回文本')
 
         parsed = json.loads(output_text)
+        parsed_config = merge_nameplate_logo_config(
+            parsed.get('templateConfig', base_config), base_config
+        )
         return build_nameplate_parse_result(
             parsed.get('names', []),
-            parsed.get('templateConfig', base_config),
+            parsed_config,
             warnings=parsed.get('warnings', []),
             ai_used=True,
             source_summary=parsed.get('sourceSummary', 'AI解析'),
@@ -670,7 +915,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
             'Content-Type': 'application/json',
         },
         json=payload,
-        timeout=75,
+        timeout=_nameplate_ai_request_timeout(request_deadline),
     )
     if resp.status_code >= 400:
         raise RuntimeError(f'OpenAI 解析失败: HTTP {resp.status_code} {resp.text[:300]}')
@@ -683,9 +928,12 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
     except Exception as e:
         raise RuntimeError(f'OpenAI 解析结果不是 JSON: {e}')
 
+    parsed_config = merge_nameplate_logo_config(
+        parsed.get('templateConfig') or base_config, base_config
+    )
     return build_nameplate_parse_result(
         parsed.get('names', []),
-        parsed.get('templateConfig') or base_config,
+        parsed_config,
         parsed.get('warnings') or [],
         ai_used=True,
         source_summary=parsed.get('sourceSummary') or '',
@@ -732,24 +980,116 @@ saved_nameplate_templates_collection = None
 # 图片数据保存在 data/epd/<deviceId>/latest.txt
 DATA_DIR = Path(__file__).parent / 'data' / 'epd'
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+DEVICE_WRITE_LOCK_STRIPES = 128
+_device_write_locks = tuple(threading.Lock() for _ in range(DEVICE_WRITE_LOCK_STRIPES))
 
-def get_device_data_dir(device_id: str) -> Path:
+def is_valid_device_id(device_id: str) -> bool:
+    return bool(DEVICE_ID_PATTERN.fullmatch(normalize_device_id(device_id)))
+
+
+def get_device_write_lock(device_id: str):
+    clean_id = normalize_device_id(device_id)
+    if not is_valid_device_id(clean_id):
+        raise ValueError('Invalid deviceId format')
+    # A bounded striped pool preserves same-device serialization without an
+    # attacker being able to grow one permanent Lock object per arbitrary ID.
+    return _device_write_locks[int(clean_id, 16) % DEVICE_WRITE_LOCK_STRIPES]
+
+
+def get_device_data_dir(device_id: str, create: bool = False) -> Path:
     """获取设备数据目录"""
-    device_dir = DATA_DIR / device_id.upper()
-    device_dir.mkdir(parents=True, exist_ok=True)
+    clean_id = normalize_device_id(device_id)
+    if not is_valid_device_id(clean_id):
+        raise ValueError('Invalid deviceId format')
+    device_dir = DATA_DIR / clean_id
+    if create:
+        device_dir.mkdir(parents=True, exist_ok=True)
     return device_dir
 
-def get_device_image_path(device_id: str) -> Path:
+def get_device_image_path(device_id: str, create_parent: bool = False) -> Path:
     """获取设备最新图片文件路径"""
-    return get_device_data_dir(device_id) / 'latest.txt'
+    return get_device_data_dir(device_id, create=create_parent) / 'latest.txt'
+
+
+def get_ready_device_image_path(device_id: str, device=None):
+    image_path = get_device_image_path(device_id, create_parent=False)
+    try:
+        if not image_path.is_file() or image_path.stat().st_size != EPD_EXPECTED_CHARS:
+            return None
+        declared_hash = None
+        if device:
+            declared_size = device.get('imageSizeChars')
+            if declared_size is not None and declared_size != EPD_EXPECTED_CHARS:
+                return None
+            declared_hash = device.get('imageSha256')
+            if declared_hash is not None:
+                declared_hash = str(declared_hash).lower()
+                if not re.fullmatch(r'[0-9a-f]{64}', declared_hash):
+                    return None
+
+        digest = hashlib.sha256() if declared_hash is not None else None
+        actual_size = 0
+        with image_path.open('rb') as image_file:
+            for chunk in iter(lambda: image_file.read(64 * 1024), b''):
+                actual_size += len(chunk)
+                if any(value < ord('a') or value > ord('p') for value in chunk):
+                    return None
+                if digest is not None:
+                    digest.update(chunk)
+        if actual_size != EPD_EXPECTED_CHARS:
+            return None
+        if digest is not None and not secrets.compare_digest(digest.hexdigest(), declared_hash):
+            return None
+    except OSError:
+        return None
+    return image_path
+
+
+def build_raw_image_url(device_id: str, image_version: int) -> str:
+    clean_id = normalize_device_id(device_id)
+    if not is_valid_device_id(clean_id):
+        raise ValueError('Invalid deviceId format')
+    return f'{Config.PUBLIC_BASE_URL}/api/epd/raw/{clean_id}?v={int(image_version)}'
+
+
+def cleanup_device_artifacts(device_id: str) -> None:
+    """Remove tenant-scoped pages, pairing state, telemetry and image files."""
+    clean_id = normalize_device_id(device_id)
+    if not is_valid_device_id(clean_id):
+        raise ValueError('Invalid deviceId format')
+
+    page_device_ids = device_id_variants(clean_id)
+    if pages_collection is not None:
+        pages_collection.delete_many({'deviceId': {'$in': page_device_ids}})
+    if pairing_codes_collection is not None:
+        pairing_codes_collection.delete_one({'deviceId': clean_id})
+    if device_status_collection is not None:
+        # 保留 deviceKeyHash，避免解绑后攻击者重新 TOFU 抢占设备身份。
+        device_status_collection.update_one(
+            {'deviceId': clean_id},
+            {'$unset': {
+                'lastSeen': '', 'updatedAt': '', 'remoteIp': '', 'ip': '',
+                'rssi': '', 'uptime_ms': '', 'freeHeap': '',
+                'currentSleepSeconds': '', 'lastWakeType': '',
+                'lastWakeCause': '', 'lastManualWake': '', 'lastAutoWake': '',
+                'deviceKeyResetUntil': '', 'deviceKeyResetRequestedBy': '',
+                'deviceKeyResetRequestedAt': '',
+                'unclaimedExpiresAt': '',
+            }},
+        )
+
+    device_dir = get_device_data_dir(clean_id, create=False)
+    if device_dir.exists():
+        shutil.rmtree(device_dir)
 
 def save_device_image(device_id: str, image_data: str) -> bool:
     """保存设备图片数据到磁盘"""
+    tmp_path = None
     try:
-        image_path = get_device_image_path(device_id)
-        # 原子写入：先写临时文件，再 replace，避免出现“文件被半写入”的情况
-        tmp_path = image_path.with_suffix(image_path.suffix + '.tmp')
-        with open(tmp_path, 'w', encoding='utf-8', newline='') as f:
+        image_path = get_device_image_path(device_id, create_parent=True)
+        fd, tmp_name = tempfile.mkstemp(prefix='.latest-', suffix='.tmp', dir=str(image_path.parent))
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='') as f:
             f.write(image_data)
             f.flush()
             try:
@@ -757,18 +1097,25 @@ def save_device_image(device_id: str, image_data: str) -> bool:
             except Exception:
                 # 某些环境/文件系统可能不支持 fsync，忽略但仍然 replace
                 pass
-        tmp_path.replace(image_path)
+        os.replace(tmp_path, image_path)
+        tmp_path = None
 
         print(f'💾 图片已保存: {image_path} ({len(image_data)} 字符)')
         return True
     except Exception as e:
         print(f'❌ 保存图片失败: {e}')
         return False
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 def load_device_image(device_id: str) -> str:
     """从磁盘加载设备图片数据"""
     try:
-        image_path = get_device_image_path(device_id)
+        image_path = get_device_image_path(device_id, create_parent=False)
         if image_path.exists():
             with open(image_path, 'r', encoding='utf-8') as f:
                 return f.read()
@@ -807,48 +1154,66 @@ def connect_mongodb(max_retries: int = 10, retry_delay_seconds: int = 2):
             pairing_codes_collection = db['pairing_codes']
             saved_nameplate_templates_collection = db['saved_nameplate_templates']
 
-            # 创建索引
-            users_collection.create_index('username', unique=True)
-            users_collection.create_index('token', unique=True, sparse=True)
-
-            devices_collection.create_index('deviceId', unique=True)
-            devices_collection.create_index('owner')
-            devices_collection.create_index('claimed')
-
-            device_status_collection.create_index('deviceId', unique=True)
-            device_status_collection.create_index('lastSeen')
-
-            pages_collection.create_index('deviceId')
-            pages_collection.create_index([('deviceId', 1), ('name', 1)])
-            # 列表页按 updatedAt 排序：需要索引避免全表扫描（数据大时会非常慢）
-            pages_collection.create_index([('deviceId', 1), ('updatedAt', -1)])
-
-            pairing_codes_collection.create_index('deviceId', unique=True)
-            pairing_codes_collection.create_index('expiresAt', expireAfterSeconds=0)
-
-            saved_nameplate_templates_collection.create_index('templateId', unique=True)
-            saved_nameplate_templates_collection.create_index('owner')
-            saved_nameplate_templates_collection.create_index([('owner', 1), ('updatedAt', -1)])
+            ensure_all_indexes(db)
+            # 旧版明文 token 不再被接受，启动时主动失效。
+            users_collection.update_many(
+                {'token': {'$exists': True}},
+                {'$unset': {'token': ''}},
+            )
 
             print(f'✅ Connected to MongoDB: {redact_uri_secret(Config.MONGODB_URI)}')
             print(f'📊 Database: {Config.MONGODB_DB}')
             return True
         except Exception as e:
+            if mongo_client is not None:
+                try:
+                    mongo_client.close()
+                except Exception:
+                    pass
+            mongo_client = None
+            db = None
+            users_collection = None
+            devices_collection = None
+            device_status_collection = None
+            pages_collection = None
+            pairing_codes_collection = None
+            saved_nameplate_templates_collection = None
             if attempt < max_retries:
                 print(f'⚠️  MongoDB connection attempt {attempt}/{max_retries} failed: {e}')
                 time.sleep(retry_delay_seconds)
                 continue
             print(f'❌ MongoDB connection error after {max_retries} attempts: {e}')
-            print('⚠️  Server will continue without MongoDB-backed features')
-            return False
+            raise RuntimeError('MongoDB initialization failed') from e
 
 # ==================== 用户认证工具函数 ====================
 
 def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+    return generate_password_hash(password, method='scrypt')
+
+
+DUMMY_PASSWORD_HASH = generate_password_hash('invalid-login-timing-sentinel', method='scrypt')
+
+
+def verify_password(password_hash: str, password: str) -> tuple[bool, bool]:
+    """Return (valid, needs_migration) for scrypt and legacy SHA-256 hashes."""
+    if not password_hash:
+        return False, False
+    if password_hash.startswith('scrypt:'):
+        try:
+            return check_password_hash(password_hash, password), False
+        except (TypeError, ValueError):
+            return False, False
+
+    legacy_hash = hashlib.sha256(password.encode('utf-8')).hexdigest()
+    valid = len(password_hash) == 64 and secrets.compare_digest(password_hash.lower(), legacy_hash)
+    return valid, valid
 
 def generate_token() -> str:
     return secrets.token_hex(32)
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
 def get_current_user():
     """根据 Authorization: Bearer <token> 获取当前用户"""
@@ -863,7 +1228,10 @@ def get_current_user():
     if not token:
         return None
 
-    user = users_collection.find_one({'token': token})
+    user = users_collection.find_one({
+        'tokenHash': hash_token(token),
+        'tokenExpiresAt': {'$gt': utcnow()},
+    })
     return user
 
 def login_required(f):
@@ -886,6 +1254,133 @@ def normalize_device_id(device_id: str) -> str:
         return ''
     return (device_id or '').strip().upper().replace('-', '').replace(':', '')
 
+
+def device_id_variants(device_id: str) -> list[str]:
+    """Return normalized and legacy separator/case variants for page migration."""
+    raw_id = str(device_id or '').strip()
+    clean_id = normalize_device_id(raw_id)
+    variants = {raw_id, raw_id.upper(), raw_id.lower(), clean_id, clean_id.lower()}
+    if is_valid_device_id(clean_id):
+        pairs = [clean_id[index:index + 2] for index in range(0, len(clean_id), 2)]
+        variants.update({':'.join(pairs), '-'.join(pairs)})
+        variants.update({value.lower() for value in list(variants)})
+    return sorted(value for value in variants if value)
+
+
+def get_device_key_from_request() -> str:
+    key = request.headers.get('X-Device-Key', '').strip().lower()
+    if not re.fullmatch(r'[0-9a-f]{64}', key):
+        return ''
+    return key
+
+
+def authenticate_device_key(device_id: str, allow_tofu: bool) -> bool:
+    """Authenticate a device key, optionally registering it on first contact."""
+    if device_status_collection is None:
+        return False
+
+    clean_id = normalize_device_id(device_id)
+    raw_device_key = request.headers.get('X-Device-Key', '').strip()
+    device_key = get_device_key_from_request()
+    if not is_valid_device_id(clean_id):
+        return False
+    if raw_device_key and not device_key:
+        return False
+
+    existing = device_status_collection.find_one(
+        {'deviceId': clean_id},
+        {
+            'deviceKeyHash': 1,
+            'deviceKeyResetUntil': 1,
+            'deviceKeyResetRequestedBy': 1,
+        },
+    )
+    existing_hash = existing.get('deviceKeyHash') if existing else None
+    if existing_hash:
+        if not device_key:
+            return False
+        key_hash = hashlib.sha256(device_key.encode('ascii')).hexdigest()
+        if secrets.compare_digest(str(existing_hash), key_hash):
+            return True
+        reset_until = existing.get('deviceKeyResetUntil')
+        now = utcnow()
+        if not allow_tofu or not reset_until or reset_until <= now:
+            return False
+        with get_device_write_lock(clean_id):
+            fresh_now = utcnow()
+            fresh_status = device_status_collection.find_one(
+                {'deviceId': clean_id},
+                {
+                    'deviceKeyHash': 1,
+                    'deviceKeyResetUntil': 1,
+                    'deviceKeyResetRequestedBy': 1,
+                },
+            )
+            reset_owner = fresh_status.get('deviceKeyResetRequestedBy') if fresh_status else None
+            reset_until = fresh_status.get('deviceKeyResetUntil') if fresh_status else None
+            fresh_hash = fresh_status.get('deviceKeyHash') if fresh_status else None
+            if (
+                not fresh_hash
+                or not secrets.compare_digest(str(fresh_hash), str(existing_hash))
+                or not reset_until
+                or reset_until <= fresh_now
+                or devices_collection is None
+                or devices_collection.find_one({
+                    'deviceId': clean_id,
+                    'owner': reset_owner,
+                    'claimed': True,
+                }) is None
+            ):
+                return False
+            rotated = device_status_collection.find_one_and_update(
+                {
+                    'deviceId': clean_id,
+                    'deviceKeyHash': fresh_hash,
+                    'deviceKeyResetUntil': {'$gt': fresh_now},
+                    'deviceKeyResetRequestedBy': reset_owner,
+                },
+                {
+                    '$set': {
+                        'deviceKeyHash': key_hash,
+                        'deviceKeyRegisteredAt': fresh_now,
+                        'deviceKeyLastResetAt': fresh_now,
+                        'deviceKeyLastResetBy': reset_owner,
+                    },
+                    '$unset': {
+                        'deviceKeyResetUntil': '',
+                        'deviceKeyResetRequestedAt': '',
+                        'deviceKeyResetRequestedBy': '',
+                    },
+                },
+                return_document=ReturnDocument.AFTER,
+            )
+        rotated_hash = rotated.get('deviceKeyHash') if rotated else None
+        return bool(rotated_hash and secrets.compare_digest(str(rotated_hash), key_hash))
+    if not device_key:
+        return not DEVICE_AUTH_REQUIRED
+    if not allow_tofu:
+        return not DEVICE_AUTH_REQUIRED
+
+    key_hash = hashlib.sha256(device_key.encode('ascii')).hexdigest()
+    try:
+        device_status_collection.update_one(
+            {'deviceId': clean_id, 'deviceKeyHash': {'$exists': False}},
+            {
+                '$set': {
+                    'deviceKeyHash': key_hash,
+                    'deviceKeyRegisteredAt': utcnow(),
+                },
+                '$setOnInsert': {'deviceId': clean_id},
+            },
+            upsert=True,
+        )
+    except DuplicateKeyError:
+        pass
+
+    confirmed = device_status_collection.find_one({'deviceId': clean_id}, {'deviceKeyHash': 1})
+    confirmed_hash = confirmed.get('deviceKeyHash') if confirmed else None
+    return bool(confirmed_hash and secrets.compare_digest(str(confirmed_hash), key_hash))
+
 def ensure_device_owner(device_id: str, user) -> bool:
     """检查设备是否属于当前用户"""
     if devices_collection is None or not user:
@@ -897,6 +1392,177 @@ def ensure_device_owner(device_id: str, user) -> bool:
     device = devices_collection.find_one({'deviceId': clean_id, 'owner': owner})
     return device is not None
 
+
+def consume_valid_pairing_code(device_id: str, pairing_code: str):
+    if pairing_codes_collection is None:
+        return None
+    clean_id = normalize_device_id(device_id)
+    code = str(pairing_code or '').strip()
+    now = utcnow()
+    unlocked = {
+        '$or': [
+            {'lockedUntil': {'$exists': False}},
+            {'lockedUntil': {'$lte': now}},
+        ]
+    }
+    if re.fullmatch(r'\d{6}', code):
+        consumed = pairing_codes_collection.find_one_and_delete({
+            'deviceId': clean_id,
+            'code': code,
+            'expiresAt': {'$gt': now},
+            **unlocked,
+        })
+        if consumed:
+            return consumed
+
+    failed = pairing_codes_collection.find_one_and_update(
+        {
+            'deviceId': clean_id,
+            'expiresAt': {'$gt': now},
+            **unlocked,
+        },
+        {'$inc': {'failedAttempts': 1}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if failed and failed.get('failedAttempts', 0) >= PAIRING_MAX_FAILED_ATTEMPTS:
+        pairing_codes_collection.find_one_and_update(
+            {
+                'deviceId': clean_id,
+                'failedAttempts': {'$gte': PAIRING_MAX_FAILED_ATTEMPTS},
+            },
+            {
+                '$set': {
+                    'failedAttempts': 0,
+                    'lockedUntil': now + timedelta(seconds=PAIRING_LOCK_SECONDS),
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+    return None
+
+
+def get_or_create_pairing_code(device_id: str):
+    """Return one stable code even when status requests arrive concurrently."""
+    if pairing_codes_collection is None:
+        raise RuntimeError('Pairing code storage unavailable')
+
+    clean_id = normalize_device_id(device_id)
+    for _ in range(3):
+        now = utcnow()
+        existing = pairing_codes_collection.find_one({'deviceId': clean_id})
+        if existing and existing.get('code') and existing.get('expiresAt') and existing['expiresAt'] > now:
+            return existing
+
+        replacement = {
+            'code': f"{secrets.randbelow(900000) + 100000:06d}",
+            'expiresAt': now + timedelta(hours=24),
+            'createdAt': now,
+            'failedAttempts': 0,
+        }
+        if existing is None:
+            try:
+                candidate = pairing_codes_collection.find_one_and_update(
+                    {'deviceId': clean_id},
+                    {'$setOnInsert': {'deviceId': clean_id, **replacement}},
+                    upsert=True,
+                    return_document=ReturnDocument.AFTER,
+                )
+            except DuplicateKeyError:
+                candidate = None
+        else:
+            candidate = pairing_codes_collection.find_one_and_update(
+                {
+                    'deviceId': clean_id,
+                    'code': existing.get('code'),
+                    'expiresAt': existing.get('expiresAt'),
+                },
+                {'$set': replacement, '$unset': {'lockedUntil': ''}},
+                return_document=ReturnDocument.AFTER,
+            )
+
+        if candidate and candidate.get('code') and candidate.get('expiresAt') and candidate['expiresAt'] > now:
+            return candidate
+
+    raise RuntimeError('Failed to allocate pairing code')
+
+
+def claim_device_for_owner(device_id: str, owner: str, device_name: str, pairing_code: str):
+    """Atomically consume a pairing code and claim only an unowned device."""
+    clean_id = normalize_device_id(device_id)
+    if not is_valid_device_id(clean_id):
+        return None, 'Invalid deviceId format', 400
+    with get_device_write_lock(clean_id):
+        return _claim_device_for_owner_locked(clean_id, owner, device_name, pairing_code)
+
+
+def _claim_device_for_owner_locked(clean_id: str, owner: str, device_name: str, pairing_code: str):
+    if not owner:
+        return None, 'Unauthorized', 401
+    if devices_collection is None or pairing_codes_collection is None:
+        return None, 'Database not connected', 500
+
+    existing = devices_collection.find_one({'deviceId': clean_id})
+    if existing and existing.get('claimed'):
+        if existing.get('owner') != owner:
+            return None, 'Device already claimed by another user', 403
+        return None, 'Device is already claimed', 409
+
+    if not consume_valid_pairing_code(clean_id, pairing_code):
+        return None, 'Invalid or expired pairing code', 400
+
+    # Always clear tenant-scoped remnants before assigning an unclaimed device.
+    # deviceKeyHash is deliberately preserved by this helper.
+    cleanup_device_artifacts(clean_id)
+
+    now = utcnow()
+    normalized_name = ((device_name or clean_id).strip() or clean_id)[:80]
+    try:
+        claimed = devices_collection.find_one_and_update(
+            {
+                'deviceId': clean_id,
+                'claimed': {'$ne': True},
+            },
+            {
+                '$set': {
+                    'owner': owner,
+                    'deviceName': normalized_name,
+                    'claimed': True,
+                    'updatedAt': now,
+                },
+                '$setOnInsert': {
+                    'deviceId': clean_id,
+                    'imageVersion': 0,
+                    'activeContentMode': 'image',
+                    'activeContentLabel': CONTENT_MODE_LABELS['image'],
+                    'sleepIntervalSeconds': DEFAULT_SLEEP_INTERVAL_SECONDS,
+                    'addedAt': now,
+                    'createdAt': now,
+                },
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+    except DuplicateKeyError:
+        claimed = None
+
+    if claimed is None:
+        current = devices_collection.find_one({'deviceId': clean_id})
+        if current and current.get('claimed') and current.get('owner') != owner:
+            return None, 'Device already claimed by another user', 403
+        return None, 'Device claim conflict, request a new pairing code', 409
+    # Remove a code that may have been regenerated by a simultaneous status call
+    # after the original code was consumed but before the claim became visible.
+    pairing_codes_collection.delete_one({'deviceId': clean_id})
+    if device_status_collection is not None:
+        device_status_collection.update_one(
+            {'deviceId': clean_id},
+            {
+                '$set': {'everClaimed': True},
+                '$unset': {'unclaimedExpiresAt': ''},
+            },
+        )
+    return claimed, None, 200
+
 # ==================== API: 用户注册 / 登录 ====================
 
 @app.route('/api/auth/register', methods=['POST'])
@@ -906,27 +1572,46 @@ def register():
     if users_collection is None:
         return jsonify({'success': False, 'error': 'Database not connected'}), 500
 
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     username = (data.get('username') or '').strip()
     password = (data.get('password') or '').strip()
 
     if not username or not password:
         return jsonify({'success': False, 'error': '用户名和密码不能为空'}), 400
 
-    if len(username) < 3 or len(password) < 4:
-        return jsonify({'success': False, 'error': '用户名或密码太短'}), 400
+    if len(username) < 3 or len(username) > 64 or len(password) < 8 or len(password) > 256:
+        return jsonify({'success': False, 'error': '用户名或密码长度无效'}), 400
+
+    first_account_only = not ALLOW_REGISTRATION
+    if first_account_only and users_collection.find_one({}) is not None:
+        return jsonify({'success': False, 'error': '注册已关闭，请联系管理员'}), 403
+    if first_account_only:
+        if len(ADMIN_BOOTSTRAP_TOKEN) < 32:
+            return jsonify({'success': False, 'error': '管理员引导未配置'}), 503
+        provided_bootstrap_token = str(
+            request.headers.get('X-Admin-Bootstrap-Token')
+            or data.get('bootstrapToken')
+            or ''
+        ).strip()
+        if not secrets.compare_digest(provided_bootstrap_token, ADMIN_BOOTSTRAP_TOKEN):
+            return jsonify({'success': False, 'error': '管理员引导凭据无效'}), 403
 
     try:
-        users_collection.insert_one({
+        user_doc = {
             'username': username,
             'passwordHash': hash_password(password),
-            'createdAt': datetime.utcnow()
-        })
+            'createdAt': utcnow()
+        }
+        if first_account_only:
+            # 稀疏唯一索引保证并发首次注册只有一个成功。
+            user_doc['registrationSlot'] = 'first'
+        users_collection.insert_one(user_doc)
         return jsonify({'success': True, 'message': '注册成功'})
     except DuplicateKeyError:
-        return jsonify({'success': False, 'error': '用户名已存在'}), 400
+        return jsonify({'success': False, 'error': '用户名已存在或注册已关闭'}), 409
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        print(f'❌ Error registering user: {e}')
+        return jsonify({'success': False, 'error': '注册失败'}), 500
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
@@ -935,26 +1620,47 @@ def login():
     if users_collection is None:
         return jsonify({'success': False, 'error': 'Database not connected'}), 500
 
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     username = (data.get('username') or '').strip()
     password = (data.get('password') or '').strip()
 
     if not username or not password:
         return jsonify({'success': False, 'error': '用户名和密码不能为空'}), 400
+    if len(username) > 64 or len(password) > 256:
+        return jsonify({'success': False, 'error': '用户名或密码长度无效'}), 400
 
     user = users_collection.find_one({'username': username})
-    if not user or user.get('passwordHash') != hash_password(password):
+    stored_password_hash = user.get('passwordHash', '') if user else DUMMY_PASSWORD_HASH
+    valid_password, needs_migration = verify_password(stored_password_hash, password)
+    if not stored_password_hash.startswith('scrypt:'):
+        # Legacy SHA-256 and malformed hashes are fast to check; perform one
+        # dummy scrypt verification so account existence is not exposed by a
+        # large response-time difference. Valid legacy logins are migrated.
+        check_password_hash(DUMMY_PASSWORD_HASH, password)
+    if not user or not valid_password:
         return jsonify({'success': False, 'error': '用户名或密码错误'}), 400
 
     token = generate_token()
+    token_expires_at = utcnow() + timedelta(seconds=AUTH_TOKEN_TTL_SECONDS)
+    update_fields = {
+        'tokenHash': hash_token(token),
+        'tokenExpiresAt': token_expires_at,
+        'lastLoginAt': utcnow(),
+    }
+    if needs_migration:
+        update_fields['passwordHash'] = hash_password(password)
     users_collection.update_one(
         {'_id': user['_id']},
-        {'$set': {'token': token, 'lastLoginAt': datetime.utcnow()}}
+        {
+            '$set': update_fields,
+            '$unset': {'token': ''},
+        }
     )
 
     return jsonify({
         'success': True,
         'token': token,
+        'expiresAt': token_expires_at.isoformat() + 'Z',
         'user': {'username': username}
     })
 
@@ -969,7 +1675,7 @@ def logout():
 
     users_collection.update_one(
         {'_id': user['_id']},
-        {'$unset': {'token': ''}}
+        {'$unset': {'token': '', 'tokenHash': '', 'tokenExpiresAt': ''}}
     )
     return jsonify({'success': True, 'message': 'Logged out'})
 
@@ -1054,7 +1760,7 @@ def device_preflight():
         print(f'❌ Error in preflight check: {e}')
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Device preflight failed'}), 500
 
 @app.route('/api/devices/list', methods=['GET'])
 @login_required
@@ -1073,75 +1779,38 @@ def get_devices_list():
         return jsonify({'success': True, 'devices': devices})
     except Exception as e:
         print(f'❌ Error fetching devices: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to fetch devices'}), 500
 
 @app.route('/api/devices/add', methods=['POST'])
 @login_required
 def add_device():
-    """为当前用户添加设备"""
+    """使用设备端展示的一次性配对码添加设备。"""
     try:
         user = getattr(request, 'user', None)
         owner = user.get('username') if user else None
-
-        data = request.get_json()
-        device_id = data.get('deviceId', '').strip().upper()
-        device_name = data.get('deviceName', '').strip()
-
-        if not device_id:
+        data = request.get_json(silent=True) or {}
+        device_id = str(data.get('deviceId') or '')
+        if not device_id.strip():
             return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
+        clean_id = normalize_device_id(device_id)
+        claimed, error, status = claim_device_for_owner(
+            clean_id,
+            owner,
+            str(data.get('deviceName') or '').strip(),
+            data.get('pairingCode'),
+        )
+        if claimed is None:
+            return jsonify({'success': False, 'error': error}), status
 
-        clean_id = device_id.replace('-', '').replace(':', '')
-
-        import re
-        if not re.match(r'^[0-9A-F]{6}$|^[0-9A-F]{12}$', clean_id):
-            return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
-
-        if devices_collection is None or not owner:
-            return jsonify({'success': False, 'error': 'Database not connected'}), 500
-
-        device = {
-            'deviceId': clean_id,
-            'deviceName': device_name or clean_id,
-            'owner': owner,
-            'claimed': True,
-            'imageVersion': 0,
-            'activeContentMode': 'image',
-            'activeContentLabel': CONTENT_MODE_LABELS['image'],
-            'sleepIntervalSeconds': DEFAULT_SLEEP_INTERVAL_SECONDS,
-            'addedAt': datetime.utcnow(),
-            'createdAt': datetime.utcnow(),
-            'updatedAt': datetime.utcnow()
-        }
-
-        try:
-            devices_collection.insert_one(device)
-            if pairing_codes_collection is not None:
-                pairing_codes_collection.delete_one({'deviceId': clean_id})
-        except DuplicateKeyError:
-            devices_collection.update_one(
-                {'deviceId': clean_id},
-                {
-                    '$set': {
-                        'owner': owner,
-                        'deviceName': device_name or clean_id,
-                        'claimed': True,
-                        'updatedAt': datetime.utcnow()
-                    }
-                }
-            )
-            if pairing_codes_collection is not None:
-                pairing_codes_collection.delete_one({'deviceId': clean_id})
-
+        device = {key: value for key, value in claimed.items() if key != '_id'}
+        for key in ('addedAt', 'createdAt', 'updatedAt'):
+            if hasattr(device.get(key), 'isoformat'):
+                device[key] = device[key].isoformat()
         print(f'✅ Device added: {clean_id}')
-        device.pop('_id', None)
-        device['addedAt'] = device['addedAt'].isoformat()
-        device['createdAt'] = device['createdAt'].isoformat()
-        device['updatedAt'] = device['updatedAt'].isoformat()
-
         return jsonify({'success': True, 'device': device})
     except Exception as e:
         print(f'❌ Error adding device: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to add device'}), 500
 
 @app.route('/api/devices/<device_id>', methods=['DELETE'])
 @login_required
@@ -1151,22 +1820,23 @@ def delete_device(device_id):
         user = getattr(request, 'user', None)
         owner = user.get('username') if user else None
 
+        clean_id = normalize_device_id(device_id)
+        if not is_valid_device_id(clean_id):
+            return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
         if devices_collection is None or not owner:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
 
-        result = devices_collection.delete_one({'deviceId': device_id, 'owner': owner})
+        with get_device_write_lock(clean_id):
+            result = devices_collection.delete_one({'deviceId': clean_id, 'owner': owner})
+            if result.deleted_count == 0:
+                return jsonify({'success': False, 'error': 'Device not found'}), 404
+            cleanup_device_artifacts(clean_id)
 
-        if result.deleted_count == 0:
-            return jsonify({'success': False, 'error': 'Device not found'}), 404
-
-        if device_status_collection is not None:
-            device_status_collection.delete_one({'deviceId': device_id})
-
-        print(f'✅ Device deleted: {device_id}')
+        print(f'✅ Device deleted: {clean_id}')
         return jsonify({'success': True, 'message': 'Device deleted'})
     except Exception as e:
         print(f'❌ Error deleting device: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to delete device'}), 500
 
 @app.route('/api/devices', methods=['GET'])
 @login_required
@@ -1244,7 +1914,7 @@ def get_devices_status():
         return jsonify({'success': True, 'devices': devices})
     except Exception as e:
         print(f'❌ Error fetching device status: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to fetch device status'}), 500
 
 # ==================== API: 设备绑定状态查询和绑定 ====================
 
@@ -1259,41 +1929,55 @@ def device_status():
     - pairingCode: 配对码（仅未绑定时返回）
     """
     try:
-        data = request.get_json() or {}
-        device_id = (data.get('deviceId') or '').strip().upper()
+        if request.content_length is not None and request.content_length > DEVICE_STATUS_MAX_BODY_BYTES:
+            return jsonify({'success': False, 'error': 'Device status payload too large'}), 413
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400
+        device_id = str(data.get('deviceId') or '')
 
         if not device_id:
             return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
 
-        clean_id = device_id.replace('-', '').replace(':', '')
-
-        import re
-        if not re.match(r'^[0-9A-F]{6}$|^[0-9A-F]{12}$', clean_id):
+        clean_id = normalize_device_id(device_id)
+        if not is_valid_device_id(clean_id):
             return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
+        if devices_collection is None or device_status_collection is None:
+            return jsonify({'success': False, 'error': 'Database not connected'}), 500
+        if not authenticate_device_key(clean_id, allow_tofu=True):
+            return jsonify({'success': False, 'error': 'Invalid device credentials'}), 401
 
         telemetry = {
             'lastSeen': int(time.time() * 1000),
-            'updatedAt': datetime.utcnow()
+            'updatedAt': utcnow()
         }
         now_ms = telemetry['lastSeen']
 
         forwarded_for = request.headers.get('X-Forwarded-For', '')
         if forwarded_for:
-            telemetry['remoteIp'] = forwarded_for.split(',')[0].strip()
+            telemetry['remoteIp'] = sanitize_telemetry_text(
+                forwarded_for.split(',')[0], 64,
+            )
         elif request.remote_addr:
-            telemetry['remoteIp'] = request.remote_addr
+            telemetry['remoteIp'] = sanitize_telemetry_text(request.remote_addr, 64)
 
         ip = data.get('ip')
         if isinstance(ip, str) and ip.strip():
-            telemetry['ip'] = ip.strip()
+            telemetry['ip'] = sanitize_telemetry_text(ip, 64)
 
-        for field in ('rssi', 'uptime_ms', 'freeHeap', 'currentSleepSeconds'):
+        for field, (minimum, maximum) in TELEMETRY_NUMERIC_LIMITS.items():
             value = data.get(field)
-            if isinstance(value, (int, float)):
-                telemetry[field] = int(value)
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and (isinstance(value, int) or math.isfinite(value))
+            ):
+                telemetry[field] = min(max(int(value), minimum), maximum)
 
-        wake_type = (data.get('wakeType') or '').strip().lower()
-        wake_cause = (data.get('wakeCause') or '').strip()
+        raw_wake_type = data.get('wakeType')
+        raw_wake_cause = data.get('wakeCause')
+        wake_type = raw_wake_type.strip().lower()[:16] if isinstance(raw_wake_type, str) else ''
+        wake_cause = sanitize_telemetry_text(raw_wake_cause, 64)
         if wake_type in ('manual', 'auto', 'reset', 'other'):
             telemetry['lastWakeType'] = wake_type
             if wake_type == 'manual':
@@ -1315,19 +1999,29 @@ def device_status():
             f"currentSleepSeconds={telemetry.get('currentSleepSeconds', '-')}"
         )
 
-        # 更新设备最后活动时间和调试遥测
-        if device_status_collection is not None:
-            device_status_collection.update_one(
-                {'deviceId': clean_id},
-                {'$set': telemetry},
-                upsert=True
-            )
-
-        if devices_collection is None:
-            return jsonify({'success': False, 'error': 'Database not connected'}), 500
-
         device = devices_collection.find_one({'deviceId': clean_id})
         claimed = device is not None and device.get('claimed', False)
+
+        # 只给“从未绑定过”的 TOFU 记录设置滑动 TTL，限制任意设备码
+        # 导致的永久数据库增长。曾绑定设备必须永久保留密钥哈希，避免
+        # 解绑后重新抢占。
+        status_update = {'$set': telemetry}
+        if claimed:
+            telemetry['everClaimed'] = True
+            status_update['$unset'] = {'unclaimedExpiresAt': ''}
+        else:
+            current_status = device_status_collection.find_one(
+                {'deviceId': clean_id}, {'everClaimed': 1},
+            )
+            if current_status and current_status.get('everClaimed'):
+                status_update['$unset'] = {'unclaimedExpiresAt': ''}
+            else:
+                telemetry['unclaimedExpiresAt'] = (
+                    utcnow() + timedelta(seconds=UNCLAIMED_DEVICE_TTL_SECONDS)
+                )
+        device_status_collection.update_one(
+            {'deviceId': clean_id}, status_update, upsert=True,
+        )
 
         response = {
             'success': True,
@@ -1343,29 +2037,54 @@ def device_status():
             content_mode = device.get('activeContentMode', 'image')
 
             if content_mode == 'template' and template_id and isinstance(template_config, dict):
-                if _should_re_render_template(template_id, template_config, device, wake_type):
-                    try:
-                        print(f'🔄 设备唤醒触发渲染: {clean_id}, 模板={template_id}')
-                        epd_data = render_template_epd_data(template_id, template_config)
-                        if epd_data:
-                            save_device_image(clean_id, epd_data)
-                            new_version = device.get('imageVersion', 0) + 1
-                            devices_collection.update_one(
-                                {'deviceId': clean_id},
-                                {'$set': {
-                                    'imageVersion': new_version,
-                                    'imageSizeChars': len(epd_data),
-                                    'imageSha256': hashlib.sha256(epd_data.encode('utf-8')).hexdigest(),
-                                    'renderSource': 'pillow',
-                                    'activeContentUpdatedAt': datetime.utcnow(),
-                                    'updatedAt': datetime.utcnow(),
-                                }}
+                try:
+                    with get_device_write_lock(clean_id):
+                        latest_device = devices_collection.find_one({'deviceId': clean_id, 'claimed': True})
+                        if not latest_device:
+                            raise RuntimeError('Device ownership changed during rendering')
+                        latest_template_id = latest_device.get('activeTemplateId')
+                        latest_template_config = latest_device.get('templateConfig', {})
+                        latest_mode = latest_device.get('activeContentMode', 'image')
+                        should_render = (
+                            latest_mode == 'template'
+                            and latest_template_id == template_id
+                            and isinstance(latest_template_config, dict)
+                            and _should_re_render_template(
+                                latest_template_id, latest_template_config, latest_device, wake_type
                             )
-                            # 重新读取设备信息，使用新版本号
-                            device = devices_collection.find_one({'deviceId': clean_id})
-                            print(f'✅ 唤醒渲染完成: {clean_id}, 新版本={new_version}')
-                    except Exception as e:
-                        print(f'⚠️ 唤醒渲染失败: {clean_id} -> {e}（设备将使用旧数据）')
+                        )
+                        if not should_render:
+                            device = latest_device
+                        else:
+                            print(f'🔄 设备唤醒触发渲染: {clean_id}, 模板={template_id}')
+                            epd_data = render_template_epd_data(template_id, latest_template_config)
+                            if not save_device_image(clean_id, epd_data):
+                                raise RuntimeError('Failed to save rendered image')
+                            device = devices_collection.find_one_and_update(
+                                {
+                                    'deviceId': clean_id,
+                                    'claimed': True,
+                                    'activeContentMode': 'template',
+                                    'activeTemplateId': template_id,
+                                },
+                                {
+                                    '$inc': {'imageVersion': 1},
+                                    '$set': {
+                                        'imageSizeChars': len(epd_data),
+                                        'imageSizeBytes': len(epd_data.encode('utf-8')),
+                                        'imageSha256': hashlib.sha256(epd_data.encode('utf-8')).hexdigest(),
+                                        'renderSource': 'pillow',
+                                        'activeContentUpdatedAt': utcnow(),
+                                        'updatedAt': utcnow(),
+                                    },
+                                },
+                                return_document=ReturnDocument.AFTER,
+                            )
+                            if device is None:
+                                raise RuntimeError('Device content changed during rendering')
+                            print(f"✅ 唤醒渲染完成: {clean_id}, 新版本={device.get('imageVersion')}")
+                except Exception as e:
+                    print(f'⚠️ 唤醒渲染失败: {clean_id} -> {e}（设备将使用旧数据）')
 
             # 已绑定：返回图片版本和下载URL
             image_version = device.get('imageVersion', 0)
@@ -1374,10 +2093,10 @@ def device_status():
             response['nextSleepSeconds'] = content_meta['sleepIntervalSeconds']
 
             # 检查是否有持久化的图片
-            image_path = get_device_image_path(clean_id)
-            if image_path.exists() and image_version > 0:
+            image_path = get_ready_device_image_path(clean_id, device)
+            if image_path is not None and image_version > 0:
                 # 构建稳定的下载URL
-                response['imageUrl'] = f'http://{Config.FLASK_HOST}:{Config.FLASK_PORT}/api/epd/raw/{clean_id}?v={image_version}'
+                response['imageUrl'] = build_raw_image_url(clean_id, image_version)
                 # 返回云端侧元数据，设备可做轻量校验（不强制）
                 if device.get('imageSizeChars') is not None:
                     response['imageSizeChars'] = device.get('imageSizeChars')
@@ -1391,35 +2110,12 @@ def device_status():
             response['imageVersion'] = 0
             response['nextSleepSeconds'] = DEFAULT_SLEEP_INTERVAL_SECONDS
 
-            pairing_code = None
-            expires_at = None
-
-            if pairing_codes_collection is not None:
-                pairing_doc = pairing_codes_collection.find_one({'deviceId': clean_id})
-                if pairing_doc:
-                    pairing_code = pairing_doc.get('code')
-                    expires_at = pairing_doc.get('expiresAt')
-
-            if not pairing_code or (expires_at and expires_at < datetime.utcnow()):
-                import random
-                pairing_code = f"{random.randint(100000, 999999)}"
-                expires_at = datetime.utcnow() + timedelta(hours=24)
-
-                if pairing_codes_collection is not None:
-                    pairing_codes_collection.update_one(
-                        {'deviceId': clean_id},
-                        {
-                            '$set': {
-                                'code': pairing_code,
-                                'expiresAt': expires_at,
-                                'createdAt': datetime.utcnow()
-                            }
-                        },
-                        upsert=True
-                    )
+            pairing_doc = get_or_create_pairing_code(clean_id)
+            pairing_code = pairing_doc['code']
+            expires_at = pairing_doc['expiresAt']
 
             if expires_at:
-                expires_in = int((expires_at - datetime.utcnow()).total_seconds())
+                expires_in = int((expires_at - utcnow()).total_seconds())
                 if expires_in < 0:
                     expires_in = 0
             else:
@@ -1428,14 +2124,14 @@ def device_status():
             response['pairingCode'] = pairing_code
             response['expiresIn'] = expires_in
 
-            print(f'📊 设备 {clean_id} 查询状态: claimed=False, pairingCode={pairing_code}')
+            print(f'📊 设备 {clean_id} 查询状态: claimed=False, pairingCode=已生成')
 
         return jsonify(response)
     except Exception as e:
         print(f'❌ Error querying device status: {e}')
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to query device status'}), 500
 
 @app.route('/api/device/claim', methods=['POST'])
 @login_required
@@ -1448,86 +2144,34 @@ def device_claim():
         if not owner:
             return jsonify({'success': False, 'error': 'Unauthorized'}), 401
 
-        data = request.get_json() or {}
-        device_id = (data.get('deviceId') or '').strip().upper()
-        pairing_code = (data.get('pairingCode') or '').strip()
+        data = request.get_json(silent=True) or {}
+        device_id = str(data.get('deviceId') or '')
 
         if not device_id:
             return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
 
-        clean_id = device_id.replace('-', '').replace(':', '')
+        clean_id = normalize_device_id(device_id)
+        claimed, error, status = claim_device_for_owner(
+            clean_id,
+            owner,
+            str(data.get('deviceName') or '').strip(),
+            data.get('pairingCode'),
+        )
+        if claimed is None:
+            return jsonify({'success': False, 'error': error}), status
 
-        import re
-        if not re.match(r'^[0-9A-F]{6}$|^[0-9A-F]{12}$', clean_id):
-            return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
-
-        if devices_collection is None:
-            return jsonify({'success': False, 'error': 'Database not connected'}), 500
-
-        if pairing_code:
-            if pairing_codes_collection is None:
-                return jsonify({'success': False, 'error': 'Pairing code verification unavailable'}), 500
-
-            pairing_doc = pairing_codes_collection.find_one({'deviceId': clean_id})
-            if not pairing_doc:
-                return jsonify({'success': False, 'error': 'Pairing code not found'}), 404
-
-            if pairing_doc.get('code') != pairing_code:
-                return jsonify({'success': False, 'error': 'Invalid pairing code'}), 400
-
-            expires_at = pairing_doc.get('expiresAt')
-            if expires_at and expires_at < datetime.utcnow():
-                return jsonify({'success': False, 'error': 'Pairing code expired'}), 400
-
-        existing_device = devices_collection.find_one({'deviceId': clean_id})
-        if existing_device:
-            existing_owner = existing_device.get('owner')
-            existing_claimed = existing_device.get('claimed', False)
-
-            if existing_claimed and existing_owner != owner:
-                return jsonify({'success': False, 'error': 'Device already claimed by another user'}), 403
-
-            devices_collection.update_one(
-                {'deviceId': clean_id},
-                {
-                    '$set': {
-                        'owner': owner,
-                        'claimed': True,
-                        'updatedAt': datetime.utcnow()
-                    }
-                }
-            )
-            print(f'✅ Device claimed: {clean_id} by {owner}')
-        else:
-            device_name = data.get('deviceName', '').strip() or clean_id
-            device = {
-                'deviceId': clean_id,
-                'deviceName': device_name,
-                'owner': owner,
-                'claimed': True,
-                'imageVersion': 0,
-                'addedAt': datetime.utcnow(),
-                'createdAt': datetime.utcnow(),
-                'updatedAt': datetime.utcnow()
-            }
-            devices_collection.insert_one(device)
-            print(f'✅ New device claimed: {clean_id} by {owner}')
-
-        if pairing_codes_collection is not None:
-            pairing_codes_collection.delete_one({'deviceId': clean_id})
+        print(f'✅ Device claimed: {clean_id} by {owner}')
 
         return jsonify({
             'success': True,
             'message': 'Device claimed successfully',
             'deviceId': clean_id
         })
-    except DuplicateKeyError:
-        return jsonify({'success': False, 'error': 'Device already exists'}), 400
     except Exception as e:
         print(f'❌ Error claiming device: {e}')
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to claim device'}), 500
 
 @app.route('/api/device/unbind', methods=['POST'])
 @login_required
@@ -1540,33 +2184,42 @@ def device_unbind():
         if not owner:
             return jsonify({'success': False, 'error': 'Unauthorized'}), 401
 
-        data = request.get_json() or {}
-        device_id = (data.get('deviceId') or '').strip().upper()
+        data = request.get_json(silent=True) or {}
+        device_id = str(data.get('deviceId') or '')
 
         if not device_id:
             return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
 
-        clean_id = device_id.replace('-', '').replace(':', '')
+        clean_id = normalize_device_id(device_id)
+        if not is_valid_device_id(clean_id):
+            return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
 
         if devices_collection is None:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
 
-        device = devices_collection.find_one({'deviceId': clean_id, 'owner': owner})
-        if not device:
-            return jsonify({'success': False, 'error': 'Device not found or no permission'}), 404
-
-        devices_collection.update_one(
-            {'deviceId': clean_id},
-            {
-                '$set': {
-                    'claimed': False,
-                    'updatedAt': datetime.utcnow()
-                }
-            }
-        )
-
-        if pairing_codes_collection is not None:
-            pairing_codes_collection.delete_one({'deviceId': clean_id})
+        with get_device_write_lock(clean_id):
+            result = devices_collection.update_one(
+                {'deviceId': clean_id, 'owner': owner},
+                {
+                    '$set': {
+                        'claimed': False,
+                        'imageVersion': 0,
+                        'activeContentMode': 'image',
+                        'activeContentLabel': CONTENT_MODE_LABELS['image'],
+                        'sleepIntervalSeconds': DEFAULT_SLEEP_INTERVAL_SECONDS,
+                        'updatedAt': utcnow(),
+                    },
+                    '$unset': {
+                        'owner': '', 'activeTemplateId': '', 'templateConfig': '',
+                        'imageSizeChars': '', 'imageSizeBytes': '', 'imageSha256': '',
+                        'renderSource': '', 'activeContentUpdatedAt': '',
+                        'nameplateName': '', 'nameplateBatchId': '',
+                    },
+                },
+            )
+            if result.matched_count == 0:
+                return jsonify({'success': False, 'error': 'Device not found or no permission'}), 404
+            cleanup_device_artifacts(clean_id)
 
         print(f'✅ Device unbound: {clean_id} by {owner}')
 
@@ -1579,7 +2232,49 @@ def device_unbind():
         print(f'❌ Error unbinding device: {e}')
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to unbind device'}), 500
+
+
+@app.route('/api/device/auth/reset', methods=['POST'])
+@login_required
+def reset_device_credentials():
+    """Open one short, owner-authorized window for replacing a lost device key."""
+    data = request.get_json(silent=True) or {}
+    clean_id = normalize_device_id(str(data.get('deviceId') or ''))
+    user = getattr(request, 'user', None)
+    owner = user.get('username') if user else None
+    if not is_valid_device_id(clean_id):
+        return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
+    if devices_collection is None or device_status_collection is None:
+        return jsonify({'success': False, 'error': 'Database not connected'}), 500
+
+    now = utcnow()
+    reset_until = now + timedelta(seconds=DEVICE_KEY_RESET_WINDOW_SECONDS)
+    with get_device_write_lock(clean_id):
+        current_device = devices_collection.find_one({
+            'deviceId': clean_id,
+            'owner': owner,
+            'claimed': True,
+        })
+        if current_device is None:
+            return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
+        device_status_collection.update_one(
+            {'deviceId': clean_id},
+            {
+                '$set': {
+                    'deviceKeyResetUntil': reset_until,
+                    'deviceKeyResetRequestedAt': now,
+                    'deviceKeyResetRequestedBy': owner,
+                },
+                '$setOnInsert': {'deviceId': clean_id},
+            },
+            upsert=True,
+        )
+    return jsonify({
+        'success': True,
+        'deviceId': clean_id,
+        'resetUntil': reset_until.isoformat() + 'Z',
+    })
 
 # ==================== API: 页面管理 ====================
 
@@ -1597,12 +2292,7 @@ def get_pages(device_id):
             return jsonify({'success': True, 'pages': []})
 
         # 兼容历史数据：deviceId 可能未规范化写入（带分隔符/小写等）
-        candidates = list({
-            (device_id or '').strip(),
-            (device_id or '').strip().upper(),
-            normalize_device_id(device_id),
-        })
-        candidates = [c for c in candidates if c]
+        candidates = device_id_variants(device_id)
 
         # 列表接口仅返回轻量字段，避免把 data.imageData（base64）整包带回导致前端卡顿/不显示
         limit = request.args.get('limit', '200')
@@ -1613,7 +2303,14 @@ def get_pages(device_id):
         limit = max(1, min(limit, 500))
 
         pages = list(pages_collection.find(
-            {'deviceId': {'$in': candidates}},
+            {
+                'deviceId': {'$in': candidates},
+                '$or': [
+                    {'owner': user.get('username')},
+                    {'owner': {'$exists': False}},
+                    {'owner': None},
+                ],
+            },
             {
                 '_id': 0,
                 'pageId': 1,
@@ -1635,14 +2332,14 @@ def get_pages(device_id):
         return jsonify({'success': True, 'pages': pages})
     except Exception as e:
         print(f'❌ Error fetching pages: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to fetch pages'}), 500
 
 @app.route('/api/pages/save', methods=['POST'])
 @login_required
 def save_page():
     """保存页面"""
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         device_id = data.get('deviceId')
         page_id = data.get('pageId')
         page_name = data.get('name', '未命名页面')
@@ -1654,6 +2351,22 @@ def save_page():
             return jsonify({'success': False, 'error': 'Missing deviceId'}), 400
 
         clean_id = normalize_device_id(device_id)
+        if not is_valid_device_id(clean_id):
+            return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
+        if page_id is not None and not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', str(page_id)):
+            return jsonify({'success': False, 'error': 'Invalid pageId format'}), 400
+        if not isinstance(page_name, str) or not 1 <= len(page_name.strip()) <= PAGE_MAX_NAME_CHARS:
+            return jsonify({'success': False, 'error': 'Invalid page name'}), 400
+        if not isinstance(page_type, str) or not 1 <= len(page_type) <= PAGE_MAX_TYPE_CHARS:
+            return jsonify({'success': False, 'error': 'Invalid page type'}), 400
+        if not isinstance(page_data, dict):
+            return jsonify({'success': False, 'error': 'Page data must be an object'}), 400
+        if not isinstance(thumbnail, str) or len(thumbnail.encode('utf-8')) > PAGE_MAX_THUMBNAIL_BYTES:
+            return jsonify({'success': False, 'error': 'Page thumbnail is too large'}), 413
+        if len(json.dumps(page_data, ensure_ascii=False).encode('utf-8')) > PAGE_MAX_DATA_BYTES:
+            return jsonify({'success': False, 'error': 'Page data is too large'}), 413
+        page_name = page_name.strip()
+        page_id = str(page_id) if page_id is not None else None
 
         user = getattr(request, 'user', None)
         if not ensure_device_owner(clean_id, user):
@@ -1662,16 +2375,27 @@ def save_page():
         if pages_collection is None:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
 
-        now = datetime.utcnow()
+        now = utcnow()
+        owner = user.get('username') if user else None
 
         if page_id:
+            legacy_device_ids = device_id_variants(device_id)
             result = pages_collection.update_one(
-                {'pageId': page_id, 'deviceId': clean_id},
+                {
+                    'pageId': page_id,
+                    'deviceId': {'$in': legacy_device_ids},
+                    '$or': [
+                        {'owner': owner},
+                        {'owner': {'$exists': False}},
+                    ],
+                },
                 {'$set': {
+                    'deviceId': clean_id,
                     'name': page_name,
                     'type': page_type,
                     'data': page_data,
                     'thumbnail': thumbnail,
+                    'owner': owner,
                     'updatedAt': now
                 }}
             )
@@ -1681,7 +2405,7 @@ def save_page():
             print(f'✅ Page updated: {page_id}')
         else:
             import uuid
-            page_id = str(uuid.uuid4())[:8]
+            page_id = uuid.uuid4().hex
 
             page = {
                 'pageId': page_id,
@@ -1690,6 +2414,7 @@ def save_page():
                 'type': page_type,
                 'data': page_data,
                 'thumbnail': thumbnail,
+                'owner': owner,
                 'createdAt': now,
                 'updatedAt': now
             }
@@ -1703,7 +2428,7 @@ def save_page():
         })
     except Exception as e:
         print(f'❌ Error saving page: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to save page'}), 500
 
 @app.route('/api/pages/<page_id>', methods=['GET'])
 @login_required
@@ -1713,13 +2438,20 @@ def get_page(page_id):
         if pages_collection is None:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
 
-        page = pages_collection.find_one({'pageId': page_id}, {'_id': 0})
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', str(page_id)):
+            return jsonify({'success': False, 'error': 'Page not found'}), 404
+        user = getattr(request, 'user', None)
+        owner = user.get('username') if user else None
+        page = find_page_for_owner(page_id, owner, {'_id': 0})
         if not page:
             return jsonify({'success': False, 'error': 'Page not found'}), 404
 
-        user = getattr(request, 'user', None)
         device_id = page.get('deviceId')
-        if device_id and not ensure_device_owner(device_id, user):
+        if (
+            not is_valid_device_id(normalize_device_id(device_id))
+            or (page.get('owner') is not None and page.get('owner') != owner)
+            or not ensure_device_owner(device_id, user)
+        ):
             return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
 
         if hasattr(page.get('createdAt'), 'isoformat'):
@@ -1730,7 +2462,7 @@ def get_page(page_id):
         return jsonify({'success': True, 'page': page})
     except Exception as e:
         print(f'❌ Error fetching page: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to fetch page'}), 500
 
 @app.route('/api/pages/<page_id>', methods=['DELETE'])
 @login_required
@@ -1740,22 +2472,36 @@ def delete_page(page_id):
         if pages_collection is None:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
 
-        page = pages_collection.find_one({'pageId': page_id})
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', str(page_id)):
+            return jsonify({'success': False, 'error': 'Page not found'}), 404
+        user = getattr(request, 'user', None)
+        owner = user.get('username') if user else None
+        page = find_page_for_owner(page_id, owner)
         if not page:
             return jsonify({'success': False, 'error': 'Page not found'}), 404
 
-        user = getattr(request, 'user', None)
         device_id = page.get('deviceId')
-        if device_id and not ensure_device_owner(device_id, user):
+        if (
+            not is_valid_device_id(normalize_device_id(device_id))
+            or (page.get('owner') is not None and page.get('owner') != owner)
+            or not ensure_device_owner(device_id, user)
+        ):
             return jsonify({'success': False, 'error': 'Device not found or no permission'}), 403
 
-        pages_collection.delete_one({'pageId': page_id})
+        delete_filter = {'_id': page['_id']} if page.get('_id') is not None else {
+            'pageId': page_id,
+            'deviceId': device_id,
+            'owner': page.get('owner'),
+        }
+        result = pages_collection.delete_one(delete_filter)
+        if result.deleted_count == 0:
+            return jsonify({'success': False, 'error': 'Page not found'}), 404
 
         print(f'✅ Page deleted: {page_id}')
         return jsonify({'success': True, 'message': 'Page deleted'})
     except Exception as e:
         print(f'❌ Error deleting page: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to delete page'}), 500
 
 # ==================== API: 模板 ====================
 
@@ -1883,7 +2629,7 @@ def list_saved_nameplate_templates():
         })
     except Exception as e:
         print(f'❌ Error listing saved nameplate templates: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to list templates'}), 500
 
 
 @app.route('/api/nameplate/templates/<template_id>', methods=['GET'])
@@ -1906,7 +2652,7 @@ def get_saved_nameplate_template(template_id):
         return jsonify({'success': True, 'template': serialize_saved_nameplate_template(doc)})
     except Exception as e:
         print(f'❌ Error fetching saved nameplate template: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to fetch template'}), 500
 
 
 @app.route('/api/nameplate/templates', methods=['POST'])
@@ -1926,7 +2672,7 @@ def save_saved_nameplate_template():
         template_id = str(data.get('templateId') or '').strip()
         name = normalize_nameplate_template_name(data.get('name'))
         template_config = normalize_nameplate_template_config(data.get('templateConfig'))
-        now = datetime.utcnow()
+        now = utcnow()
 
         if template_id:
             result = saved_nameplate_templates_collection.update_one(
@@ -1961,7 +2707,7 @@ def save_saved_nameplate_template():
         return jsonify({'success': False, 'error': 'Template id conflict'}), 409
     except Exception as e:
         print(f'❌ Error saving nameplate template: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to save template'}), 500
 
 
 @app.route('/api/nameplate/templates/<template_id>', methods=['DELETE'])
@@ -1982,7 +2728,7 @@ def delete_saved_nameplate_template(template_id):
         return jsonify({'success': True})
     except Exception as e:
         print(f'❌ Error deleting saved nameplate template: {e}')
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Failed to delete template'}), 500
 
 # ==================== API: EPD 控制（HTTP拉取架构） ====================
 
@@ -1990,7 +2736,7 @@ def delete_saved_nameplate_template(template_id):
 @login_required
 def epd_init():
     """初始化 EPD（Deep-sleep架构下此接口仅用于记录，不直接控制设备）"""
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     device_id = data.get('deviceId')
     epd_type = data.get('epdType')
 
@@ -2009,7 +2755,7 @@ def epd_init():
 @login_required
 def epd_load():
     """上传图片数据（持久化保存，设备下次唤醒时拉取）"""
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     device_id = data.get('deviceId')
     image_data = data.get('data')
     content_meta = build_content_metadata(data.get('contentMode'), data.get('templateId'))
@@ -2034,18 +2780,9 @@ def epd_load():
     image_size_bytes = len(image_data.encode('utf-8'))
     image_sha256 = hashlib.sha256(image_data.encode('utf-8')).hexdigest()
 
-    # 持久化保存图片数据
-    if not save_device_image(clean_id, image_data):
-        return jsonify({'success': False, 'error': 'Failed to save image'}), 500
-
-    # 更新图片版本号（递增）
     if devices_collection is not None:
-        device = devices_collection.find_one({'deviceId': clean_id})
-        current_version = device.get('imageVersion', 0) if device else 0
-        new_version = current_version + 1
-        now = datetime.utcnow()
+        now = utcnow()
         update_fields = {
-            'imageVersion': new_version,
             'imageSizeChars': image_size_chars,
             'imageSizeBytes': image_size_bytes,
             'imageSha256': image_sha256,
@@ -2055,19 +2792,31 @@ def epd_load():
             'activeContentUpdatedAt': now,
             'updatedAt': now
         }
-        update_doc = {'$set': update_fields}
+        update_doc = {'$inc': {'imageVersion': 1}, '$set': update_fields}
         if content_meta['activeTemplateId']:
             update_fields['activeTemplateId'] = content_meta['activeTemplateId']
         else:
             update_doc['$unset'] = {'activeTemplateId': ''}
 
-        result = devices_collection.update_one(
-            {'deviceId': clean_id},
-            update_doc
-        )
+        owner = user.get('username') if user else None
+        with get_device_write_lock(clean_id):
+            current_device = devices_collection.find_one({
+                'deviceId': clean_id, 'owner': owner, 'claimed': True,
+            })
+            if current_device is None:
+                return jsonify({'success': False, 'error': 'Device changed during publish'}), 409
+            if not save_device_image(clean_id, image_data):
+                return jsonify({'success': False, 'error': 'Failed to save image'}), 500
+            updated_device = devices_collection.find_one_and_update(
+                {'deviceId': clean_id, 'owner': owner, 'claimed': True},
+                update_doc,
+                return_document=ReturnDocument.AFTER,
+            )
+        if updated_device is None:
+            return jsonify({'success': False, 'error': 'Device changed during publish'}), 409
+        new_version = updated_device.get('imageVersion', 0)
 
-        print(f'✅ 图片已保存: {clean_id}, 版本: {current_version} -> {new_version} '
-              f'(matched={result.matched_count}, modified={result.modified_count})')
+        print(f'✅ 图片已保存: {clean_id}, 新版本: {new_version}')
         print(f'   数据大小: {len(image_data)} 字符 ({len(image_data)/1024:.2f} KB)')
         print(f"   当前内容: {content_meta['activeContentLabel']}, "
               f"唤醒间隔: {content_meta['sleepIntervalSeconds']} 秒")
@@ -2077,7 +2826,7 @@ def epd_load():
             'success': True,
             'message': 'Image saved, device will update on next wake',
             'imageVersion': new_version,
-            'imageUrl': f'http://{Config.FLASK_HOST}:{Config.FLASK_PORT}/api/epd/raw/{clean_id}?v={new_version}',
+            'imageUrl': build_raw_image_url(clean_id, new_version),
             'imageSizeChars': image_size_chars,
             'imageSha256': image_sha256,
             'activeContentLabel': content_meta['activeContentLabel'],
@@ -2093,18 +2842,33 @@ def epd_raw_download(device_id):
     返回 text/plain 格式的 a~p 编码字符串
     """
     clean_id = normalize_device_id(device_id)
+    if not is_valid_device_id(clean_id):
+        return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
+    if not authenticate_device_key(clean_id, allow_tofu=False):
+        return jsonify({'success': False, 'error': 'Invalid device credentials'}), 401
 
-    image_path = get_device_image_path(clean_id)
-    if not image_path.exists():
+    image_path = get_device_image_path(clean_id, create_parent=False)
+    if not image_path.is_file():
         print(f'❌ 图片不存在: {clean_id}')
         return jsonify({'error': 'Image not found'}), 404
+
+    device = None
+    if devices_collection is not None:
+        device = devices_collection.find_one(
+            {'deviceId': clean_id},
+            {'_id': 0, 'imageSha256': 1, 'imageSizeChars': 1},
+        )
+    if get_ready_device_image_path(clean_id, device) is None:
+        print(f'❌ 存储图片或元数据校验失败: {clean_id}')
+        return jsonify({'success': False, 'error': 'Stored image is invalid'}), 503
 
     data_size_bytes = image_path.stat().st_size
     print(f'📥 ESP32下载图片: {clean_id}')
     print(f'   文件大小: {data_size_bytes} 字节 ({data_size_bytes/1024:.2f} KB)')
 
     if data_size_bytes != EPD_EXPECTED_CHARS:
-        print(f'⚠️  数据大小不匹配: 期望 {EPD_EXPECTED_CHARS}, 实际 {data_size_bytes}（磁盘文件可能异常）')
+        print(f'❌ 数据大小不匹配: 期望 {EPD_EXPECTED_CHARS}, 实际 {data_size_bytes}')
+        return jsonify({'success': False, 'error': 'Stored image is invalid'}), 503
 
     # 用 send_file 直接流式发送文件，减少内存占用，并提供条件请求/ETag（更利于代理/断点续传扩展）
     resp = send_file(
@@ -2122,16 +2886,11 @@ def epd_raw_download(device_id):
     resp.headers['X-EPD-Expected-Chars'] = str(EPD_EXPECTED_CHARS)
 
     # 如果 DB 里有 hash，就带上；没有也不强制（兼容旧数据）
-    try:
-        if devices_collection is not None:
-            d = devices_collection.find_one({'deviceId': clean_id}, {'_id': 0, 'imageSha256': 1, 'imageSizeChars': 1})
-            if d:
-                if d.get('imageSha256'):
-                    resp.headers['X-EPD-SHA256'] = d['imageSha256']
-                if d.get('imageSizeChars') is not None:
-                    resp.headers['X-EPD-Chars'] = str(d['imageSizeChars'])
-    except Exception:
-        pass
+    if device:
+        if device.get('imageSha256'):
+            resp.headers['X-EPD-SHA256'] = device['imageSha256']
+        if device.get('imageSizeChars') is not None:
+            resp.headers['X-EPD-Chars'] = str(device['imageSizeChars'])
 
     return resp
 
@@ -2139,7 +2898,7 @@ def epd_raw_download(device_id):
 @login_required
 def epd_show():
     """触发设备显示（Deep-sleep架构下此接口仅用于记录）"""
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     device_id = data.get('deviceId')
 
     if not device_id:
@@ -2160,7 +2919,7 @@ def epd_show():
 def process_sixcolor():
     """使用6色算法处理图片（7.3寸E6屏）"""
     try:
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         image_data = data.get('imageData')
         width = data.get('width', 800)
         height = data.get('height', 480)
@@ -2170,8 +2929,13 @@ def process_sixcolor():
         if not image_data:
             return jsonify({'success': False, 'error': 'Missing imageData'}), 400
 
+        if type(width) is not int or type(height) is not int or width != 800 or height != 480:
+            return jsonify({'success': False, 'error': 'Target size must be exactly 800x480'}), 400
+
         if algorithm not in ['floyd_steinberg', 'gradient_blend', 'grayscale_color_map']:
             return jsonify({'success': False, 'error': f'Invalid algorithm: {algorithm}'}), 400
+        if isinstance(grad_thresh, bool) or not isinstance(grad_thresh, (int, float)) or not 0 <= grad_thresh <= 255:
+            return jsonify({'success': False, 'error': 'gradThresh must be between 0 and 255'}), 400
 
         result = process_e6_image_from_base64(
             image_data,
@@ -2182,15 +2946,18 @@ def process_sixcolor():
         )
         return jsonify(result)
 
+    except ValueError:
+        return jsonify({'success': False, 'error': 'Invalid image input'}), 400
     except Exception as e:
         print(f'❌ 6色处理错误: {e}')
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': 'Image processing failed'}), 500
 
 # ==================== API: 模板数据代理 ====================
 
 @app.route('/api/weather', methods=['GET'])
+@login_required
 def api_weather():
     """天气数据代理（避免前端跨域）"""
     city = request.args.get('city', '').strip()
@@ -2203,6 +2970,7 @@ def api_weather():
 
 
 @app.route('/api/quote', methods=['GET'])
+@login_required
 def api_quote():
     """每日一言代理（避免前端跨域）"""
     data = _fetch_quote()
@@ -2220,10 +2988,12 @@ def device_set_template():
     否则用后端 Pillow 渲染（定时唤醒自动更新场景）。
     同时保存 templateConfig，供设备后续唤醒时按需更新。
     """
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     device_id = data.get('deviceId')
     template_id = data.get('templateId')
     template_config = data.get('templateConfig', {})
+    if not isinstance(template_config, dict):
+        return jsonify({'success': False, 'error': 'templateConfig must be an object'}), 400
 
     if not device_id or not template_id:
         return jsonify({'success': False, 'error': 'Missing deviceId or templateId'}), 400
@@ -2236,6 +3006,10 @@ def device_set_template():
     template_id = str(template_id).strip().lower()
     if template_id not in ACTIVE_TEMPLATE_IDS:
         return jsonify({'success': False, 'error': '当前只支持会议名牌模板'}), 400
+    raw_name = str(template_config.get('name') or template_config.get('personName') or '').strip()
+    normalized_config = normalize_nameplate_template_config(template_config)
+    normalized_config['name'] = raw_name[:NAMEPLATE_MAX_NAME_LEN]
+    template_config = normalized_config
 
     # ===== 渲染逻辑：前端截图优先，无截图时后端渲染 =====
     image_base64 = data.get('imageBase64')
@@ -2251,9 +3025,11 @@ def device_set_template():
             preview_image_b64 = result.get('previewImage')
             data_4bit_b64 = result.get('data4bit')
             print(f'✅ 模板通过前端Canvas截图处理: {clean_id}, EPD长度={len(epd_data)}')
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid image input'}), 400
         except Exception as e:
             print(f'❌ 前端Canvas截图处理失败: {e}')
-            return jsonify({'success': False, 'error': f'Image processing failed: {e}'}), 500
+            return jsonify({'success': False, 'error': 'Image processing failed'}), 500
     else:
         # 无前端截图时，后端 Pillow 渲染
         try:
@@ -2268,25 +3044,18 @@ def device_set_template():
             print(f'❌ 模板渲染失败: {e}')
             import traceback
             traceback.print_exc()
-            return jsonify({'success': False, 'error': f'Template rendering failed: {e}'}), 500
-
-    # 保存 EPD 数据
-    if not save_device_image(clean_id, epd_data):
-        return jsonify({'success': False, 'error': 'Failed to save rendered image'}), 500
+            return jsonify({'success': False, 'error': 'Template rendering failed'}), 500
 
     # 更新设备记录
     if devices_collection is not None:
         # 从 templateConfig 中读取用户自定义唤醒间隔
         custom_interval = template_config.get('sleepIntervalSeconds') if isinstance(template_config, dict) else None
         content_meta = build_content_metadata('template', template_id, custom_interval)
-        device = devices_collection.find_one({'deviceId': clean_id})
-        current_version = device.get('imageVersion', 0) if device else 0
-        new_version = current_version + 1
-        now = datetime.utcnow()
+        now = utcnow()
 
         update_fields = {
-            'imageVersion': new_version,
             'imageSizeChars': len(epd_data),
+            'imageSizeBytes': len(epd_data.encode('utf-8')),
             'imageSha256': hashlib.sha256(epd_data.encode('utf-8')).hexdigest(),
             'activeContentMode': content_meta['activeContentMode'],
             'activeContentLabel': content_meta['activeContentLabel'],
@@ -2298,17 +3067,30 @@ def device_set_template():
             'updatedAt': now,
         }
 
-        devices_collection.update_one(
-            {'deviceId': clean_id},
-            {'$set': update_fields}
-        )
+        owner = user.get('username') if user else None
+        with get_device_write_lock(clean_id):
+            current_device = devices_collection.find_one({
+                'deviceId': clean_id, 'owner': owner, 'claimed': True,
+            })
+            if current_device is None:
+                return jsonify({'success': False, 'error': 'Device changed during publish'}), 409
+            if not save_device_image(clean_id, epd_data):
+                return jsonify({'success': False, 'error': 'Failed to save rendered image'}), 500
+            updated_device = devices_collection.find_one_and_update(
+                {'deviceId': clean_id, 'owner': owner, 'claimed': True},
+                {'$inc': {'imageVersion': 1}, '$set': update_fields},
+                return_document=ReturnDocument.AFTER,
+            )
+        if updated_device is None:
+            return jsonify({'success': False, 'error': 'Device changed during publish'}), 409
+        new_version = updated_device.get('imageVersion', 0)
 
         print(f'✅ 模板已设置并渲染: {clean_id}, 模板={template_id}, 版本={new_version}')
         response_data = {
             'success': True,
             'message': 'Template set and rendered',
             'imageVersion': new_version,
-            'imageUrl': f'http://{Config.FLASK_HOST}:{Config.FLASK_PORT}/api/epd/raw/{clean_id}?v={new_version}',
+            'imageUrl': build_raw_image_url(clean_id, new_version),
             'activeContentLabel': content_meta['activeContentLabel'],
             'sleepIntervalSeconds': content_meta['sleepIntervalSeconds'],
         }
@@ -2330,18 +3112,38 @@ def dispatch_nameplates():
     第一版只处理姓名下发；微信/AI 入口后续可以把解析后的 names 数组提交到这里。
     """
     try:
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400
         user = getattr(request, 'user', None)
         owner = user.get('username') if user else None
 
         if devices_collection is None or not owner:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
 
+        raw_names = data.get('names')
+        raw_text = data.get('text') or data.get('message') or ''
+        requested_device_ids = data.get('deviceIds')
+        if isinstance(raw_names, list) and len(raw_names) > NAMEPLATE_MAX_NAMES:
+            return jsonify({'success': False, 'error': f'姓名数量不能超过 {NAMEPLATE_MAX_NAMES} 个'}), 400
+        if isinstance(raw_text, str) and len(raw_text) > NAMEPLATE_MAX_PARSE_TEXT_CHARS:
+            return jsonify({'success': False, 'error': '名单文本过长'}), 400
+        if (
+            isinstance(requested_device_ids, list)
+            and len(requested_device_ids) > NAMEPLATE_MAX_TARGET_DEVICES
+        ):
+            return jsonify({
+                'success': False,
+                'error': f'目标设备数量不能超过 {NAMEPLATE_MAX_TARGET_DEVICES} 台',
+            }), 400
+
         names = parse_nameplate_names(data)
+        if len(names) > NAMEPLATE_MAX_NAMES:
+            return jsonify({'success': False, 'error': f'姓名数量不能超过 {NAMEPLATE_MAX_NAMES} 个'}), 400
         if not names:
             return jsonify({'success': False, 'error': '未识别到可下发的人名，请使用一行一个姓名或用逗号/顿号分隔'}), 400
 
-        target_devices, missing_device_ids = resolve_nameplate_target_devices(owner, data.get('deviceIds'))
+        target_devices, missing_device_ids = resolve_nameplate_target_devices(owner, requested_device_ids)
         if missing_device_ids:
             return jsonify({
                 'success': False,
@@ -2360,8 +3162,15 @@ def dispatch_nameplates():
         assignments = []
         failed = []
         assign_count = min(len(names), len(target_devices))
+        dispatch_deadline = time.monotonic() + NAMEPLATE_DISPATCH_DEADLINE_SECONDS
+        processed_count = 0
+        deadline_reached = False
 
         for index in range(assign_count):
+            if time.monotonic() >= dispatch_deadline:
+                deadline_reached = True
+                break
+            processed_count = index + 1
             device = target_devices[index]
             clean_id = device.get('deviceId')
             name = names[index]
@@ -2374,34 +3183,42 @@ def dispatch_nameplates():
                 if not epd_data or len(epd_data) != EPD_EXPECTED_CHARS:
                     raise ValueError(f'Nameplate rendering failed or invalid length: {len(epd_data) if epd_data else 0}')
 
-                if not save_device_image(clean_id, epd_data):
-                    raise RuntimeError('Failed to save rendered image')
-
-                device_doc = devices_collection.find_one({'deviceId': clean_id, 'owner': owner})
-                current_version = device_doc.get('imageVersion', 0) if device_doc else 0
-                new_version = current_version + 1
-                now = datetime.utcnow()
+                now = utcnow()
                 active_label = f'铭牌：{name}'
 
-                devices_collection.update_one(
-                    {'deviceId': clean_id, 'owner': owner},
-                    {'$set': {
-                        'imageVersion': new_version,
-                        'imageSizeChars': len(epd_data),
-                        'imageSizeBytes': len(epd_data.encode('utf-8')),
-                        'imageSha256': hashlib.sha256(epd_data.encode('utf-8')).hexdigest(),
-                        'activeContentMode': content_meta['activeContentMode'],
-                        'activeContentLabel': active_label,
-                        'activeTemplateId': 'nameplate',
-                        'sleepIntervalSeconds': content_meta['sleepIntervalSeconds'],
-                        'templateConfig': template_config,
-                        'renderSource': 'nameplate_batch',
-                        'nameplateName': name,
-                        'nameplateBatchId': batch_id,
-                        'activeContentUpdatedAt': now,
-                        'updatedAt': now,
-                    }}
-                )
+                with get_device_write_lock(clean_id):
+                    current_device = devices_collection.find_one({
+                        'deviceId': clean_id, 'owner': owner, 'claimed': True,
+                    })
+                    if current_device is None:
+                        raise RuntimeError('Device changed during publish')
+                    if not save_device_image(clean_id, epd_data):
+                        raise RuntimeError('Failed to save rendered image')
+                    updated_device = devices_collection.find_one_and_update(
+                        {'deviceId': clean_id, 'owner': owner, 'claimed': True},
+                        {
+                            '$inc': {'imageVersion': 1},
+                            '$set': {
+                                'imageSizeChars': len(epd_data),
+                                'imageSizeBytes': len(epd_data.encode('utf-8')),
+                                'imageSha256': hashlib.sha256(epd_data.encode('utf-8')).hexdigest(),
+                                'activeContentMode': content_meta['activeContentMode'],
+                                'activeContentLabel': active_label,
+                                'activeTemplateId': 'nameplate',
+                                'sleepIntervalSeconds': content_meta['sleepIntervalSeconds'],
+                                'templateConfig': template_config,
+                                'renderSource': 'nameplate_batch',
+                                'nameplateName': name,
+                                'nameplateBatchId': batch_id,
+                                'activeContentUpdatedAt': now,
+                                'updatedAt': now,
+                            },
+                        },
+                        return_document=ReturnDocument.AFTER,
+                    )
+                if updated_device is None:
+                    raise RuntimeError('Device changed during publish')
+                new_version = updated_device.get('imageVersion', 0)
 
                 assignments.append({
                     'deviceId': clean_id,
@@ -2416,9 +3233,33 @@ def dispatch_nameplates():
                     'deviceId': clean_id,
                     'deviceName': device.get('deviceName', clean_id),
                     'name': name,
-                    'error': str(e),
+                    'error': '处理失败',
                 })
                 print(f'❌ 铭牌下发失败: {clean_id} -> {name}: {e}')
+
+        unprocessed_devices = [
+            {
+                'deviceId': target_devices[index].get('deviceId'),
+                'deviceName': target_devices[index].get(
+                    'deviceName', target_devices[index].get('deviceId')
+                ),
+                'name': names[index],
+                'reason': '批量处理时间预算已用尽，未处理',
+            }
+            for index in range(processed_count, assign_count)
+        ]
+        if unprocessed_devices:
+            deadline_reached = True
+            failed.extend([
+                {
+                    'deviceId': item['deviceId'],
+                    'deviceName': item['deviceName'],
+                    'name': item['name'],
+                    'error': item['reason'],
+                    'unprocessed': True,
+                }
+                for item in unprocessed_devices
+            ])
 
         skipped_names = names[assign_count:]
         unassigned_devices = [
@@ -2432,20 +3273,26 @@ def dispatch_nameplates():
         if not assignments:
             return jsonify({
                 'success': False,
-                'error': '铭牌渲染或保存失败',
+                'error': '批量处理时间预算已用尽' if deadline_reached else '铭牌渲染或保存失败',
                 'failed': failed,
                 'batchId': batch_id,
-            }), 500
+                'deadlineReached': deadline_reached,
+                'processedCount': processed_count,
+                'unprocessedDevices': unprocessed_devices,
+            }), 503 if deadline_reached else 500
 
         return jsonify({
             'success': True,
-            'message': 'Nameplates dispatched',
+            'message': 'Nameplates partially dispatched' if failed else 'Nameplates dispatched',
             'batchId': batch_id,
             'assignedCount': len(assignments),
             'nameCount': len(names),
             'deviceCount': len(target_devices),
+            'processedCount': processed_count,
+            'deadlineReached': deadline_reached,
             'assignments': assignments,
             'failed': failed,
+            'unprocessedDevices': unprocessed_devices,
             'skippedNames': skipped_names,
             'unassignedDevices': unassigned_devices,
             'sleepIntervalSeconds': content_meta['sleepIntervalSeconds'],
@@ -2454,7 +3301,7 @@ def dispatch_nameplates():
         print(f'❌ 批量铭牌下发异常: {e}')
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '批量下发失败'}), 500
 
 
 @app.route('/api/nameplates/parse', methods=['POST'])
@@ -2488,7 +3335,7 @@ def parse_nameplates():
                 result = call_openai_nameplate_parser(source_text, image_parts, base_template_config)
                 result['warnings'] = warnings + result.get('warnings', [])
             except Exception as e:
-                warnings.append(f'AI解析失败，已使用本地规则解析: {e}')
+                warnings.append('AI解析失败，已使用本地规则解析')
                 print(f'⚠️ 名单 AI 解析失败: {e}')
         elif image_parts:
             warnings.append('服务器未配置 NAMEPLATE_AI_API_KEY 或 OPENAI_API_KEY，图片内容暂不能识别')
@@ -2506,11 +3353,13 @@ def parse_nameplates():
             result['sourceFiles'] = filenames
 
         return jsonify({'success': True, 'parsed': result})
+    except ValueError:
+        return jsonify({'success': False, 'error': '上传内容超过限制或格式无效'}), 400
     except Exception as e:
         print(f'❌ 名单解析异常: {e}')
         import traceback
         traceback.print_exc()
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({'success': False, 'error': '名单解析失败'}), 500
 
 
 # ==================== 健康检查 ====================
@@ -2518,15 +3367,22 @@ def parse_nameplates():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """健康检查"""
-    mongo_ok = mongo_client is not None
+    mongo_ok = False
+    if mongo_client is not None:
+        try:
+            mongo_client.admin.command('ping')
+            mongo_ok = True
+        except Exception as e:
+            print(f'❌ MongoDB health ping failed: {e}')
 
-    return jsonify({
-        'success': True,
+    response = jsonify({
+        'success': mongo_ok,
         'status': 'healthy' if mongo_ok else 'degraded',
         'mongodb': 'connected' if mongo_ok else 'disconnected',
         'architecture': 'deep-sleep-http-pull',
         'mqtt': 'removed'  # 明确标注MQTT已移除
     })
+    return response, 200 if mongo_ok else 503
 
 # ==================== 启动服务器 ====================
 
@@ -2539,8 +3395,9 @@ def init_app():
 
     connect_mongodb()
 
-# 初始化
-init_app()
+# 单元测试使用 mock 集合，不得连接真实 MongoDB。
+if os.environ.get('APP_SKIP_INIT_FOR_TESTS', '').strip().lower() not in ('1', 'true', 'yes'):
+    init_app()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

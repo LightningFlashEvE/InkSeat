@@ -11,7 +11,7 @@
     <script>
         (function () {
             try {
-                if (localStorage.getItem('meetingThemeMode') === 'light') {
+                if (localStorage.getItem('meetingThemeMode') !== 'dark') {
                     document.documentElement.classList.add('theme-light');
                     document.documentElement.dataset.theme = 'light';
                     document.documentElement.style.colorScheme = 'light';
@@ -84,6 +84,13 @@
             border-color: #667eea;
             box-shadow: 0 0 0 1px rgba(102,126,234,0.3);
         }
+        .field small {
+            display: block;
+            margin-top: 5px;
+            color: #718096;
+            font-size: 0.78em;
+            line-height: 1.45;
+        }
         .actions {
             display: flex;
             gap: 10px;
@@ -127,8 +134,8 @@
             color: #38a169;
         }
     </style>
-    <script src="theme.js?v=20260707fit1"></script>
-    <link rel="stylesheet" href="ui.css?v=20260707fit1">
+    <script src="theme.js?v=20260731logo1"></script>
+    <link rel="stylesheet" href="ui.css?v=20260731logo1">
 </head>
 <body class="login-page">
     <div class="card">
@@ -137,24 +144,31 @@
             <p>登录后管理属于你的设备</p>
         </div>
 
-        <div class="field">
-            <label for="username">用户名</label>
-            <input id="username" type="text" placeholder="输入用户名">
-        </div>
-        <div class="field">
-            <label for="password">密码</label>
-            <input id="password" type="password" placeholder="输入密码">
-        </div>
+        <form id="authForm" onsubmit="onLogin(); return false;">
+            <div class="field">
+                <label for="username">用户名</label>
+                <input id="username" type="text" placeholder="输入用户名" autocomplete="username">
+            </div>
+            <div class="field">
+                <label for="password">密码</label>
+                <input id="password" type="password" placeholder="输入密码" autocomplete="current-password">
+            </div>
+            <div class="field">
+                <label for="bootstrapToken">首次管理员引导令牌</label>
+                <input id="bootstrapToken" type="password" placeholder="仅首次注册管理员时填写" autocomplete="off">
+                <small>取自服务器 <code>ADMIN_BOOTSTRAP_TOKEN</code>；普通登录请留空。</small>
+            </div>
 
-        <div class="actions">
-            <button class="btn btn-secondary" onclick="onRegister()">注册</button>
-            <button class="btn btn-primary" onclick="onLogin()">登录</button>
-        </div>
+            <div class="actions">
+                <button class="btn btn-secondary" type="button" onclick="onRegister()">注册</button>
+                <button class="btn btn-primary" type="submit">登录</button>
+            </div>
+        </form>
 
         <div id="status" class="status">首次使用请先注册账号</div>
     </div>
 
-    <script src="auth.js?v=20260707fit1"></script>
+    <script src="auth.js?v=20260731logo1"></script>
     <script>
         function setStatus(msg, type) {
             const el = document.getElementById('status');
@@ -165,6 +179,7 @@
         async function onRegister() {
             const username = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value.trim();
+            const bootstrapToken = document.getElementById('bootstrapToken').value.trim();
 
             if (!username || !password) {
                 setStatus('用户名和密码不能为空', 'error');
@@ -175,13 +190,16 @@
                 const res = await fetch('/api/auth/register', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password })
+                    body: JSON.stringify({ username, password, bootstrapToken })
                 });
-                const data = await res.json();
-                if (data.success) {
+                const data = await res.json().catch(() => ({}));
+                if (res.ok && data.success) {
+                    document.getElementById('bootstrapToken').value = '';
                     setStatus('注册成功，请点击登录', 'success');
+                } else if (res.status === 429) {
+                    setStatus('操作过于频繁，请稍后再试', 'error');
                 } else {
-                    setStatus(data.error || '注册失败', 'error');
+                    setStatus(data.error || `注册失败（HTTP ${res.status}）`, 'error');
                 }
             } catch (e) {
                 console.error(e);
@@ -204,15 +222,17 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ username, password })
                 });
-                const data = await res.json();
-                if (data.success && data.token) {
+                const data = await res.json().catch(() => ({}));
+                if (res.ok && data.success && data.token) {
                     setAuth(data.token, data.user);
                     setStatus('登录成功，正在跳转...', 'success');
                     setTimeout(() => {
-                        window.location.href = 'index.html?v=20260707fit1';
+                        window.location.href = 'index.html?v=20260731logo1';
                     }, 600);
+                } else if (res.status === 429) {
+                    setStatus('登录尝试过于频繁，请稍后再试', 'error');
                 } else {
-                    setStatus(data.error || '登录失败', 'error');
+                    setStatus(data.error || `登录失败（HTTP ${res.status}）`, 'error');
                 }
             } catch (e) {
                 console.error(e);

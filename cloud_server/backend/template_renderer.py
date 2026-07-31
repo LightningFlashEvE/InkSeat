@@ -20,6 +20,7 @@ import json
 import base64
 import urllib.parse
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Dict, Any
 from zoneinfo import ZoneInfo
@@ -41,6 +42,14 @@ NAMEPLATE_ASSET_DIR = Path(__file__).resolve().parent / 'assets' / 'nameplate'
 NAMEPLATE_COMPANY_CN = '现象创新（深圳）科技有限公司'
 NAMEPLATE_COMPANY_EN = 'Pheno Innovations Technology Co., Ltd.'
 _NAMEPLATE_ASSET_CACHE: dict[str, Image.Image] = {}
+NAMEPLATE_LOGO_MAX_BYTES = 512 * 1024
+NAMEPLATE_LOGO_MAX_DIMENSION = 4096
+NAMEPLATE_LOGO_MAX_PIXELS = 4096 * 4096
+NAMEPLATE_LOGO_MIME_FORMATS = {
+    'image/png': 'PNG',
+    'image/jpeg': 'JPEG',
+    'image/webp': 'WEBP',
+}
 
 
 def _local_now() -> datetime:
@@ -224,6 +233,73 @@ def _paste_nameplate_asset(img: Image.Image, filename: str, x: int, y: int, widt
         return
     asset = asset.resize((width, height), Image.LANCZOS)
     img.paste(asset, (x, y), asset)
+
+
+@lru_cache(maxsize=16)
+def _load_custom_nameplate_logo(data_url: str) -> Optional[Image.Image]:
+    if not isinstance(data_url, str) or not data_url.startswith('data:image/'):
+        return None
+
+    header, separator, payload = data_url.partition(',')
+    if not separator or not header.endswith(';base64'):
+        return None
+    mime_type = header[5:-7].lower()
+    expected_format = NAMEPLATE_LOGO_MIME_FORMATS.get(mime_type)
+    if not expected_format:
+        return None
+
+    try:
+        raw = base64.b64decode(payload, validate=True)
+        if not raw or len(raw) > NAMEPLATE_LOGO_MAX_BYTES:
+            return None
+        with Image.open(io.BytesIO(raw)) as logo:
+            if (logo.format or '').upper() != expected_format:
+                return None
+            width, height = logo.size
+            if (
+                width <= 0 or height <= 0
+                or width > NAMEPLATE_LOGO_MAX_DIMENSION
+                or height > NAMEPLATE_LOGO_MAX_DIMENSION
+                or width * height > NAMEPLATE_LOGO_MAX_PIXELS
+            ):
+                return None
+            logo.load()
+            return logo.convert('RGBA')
+    except Exception:
+        return None
+
+
+def _contain_nameplate_asset(asset: Image.Image, width: int, height: int) -> Image.Image:
+    scale = min(width / asset.width, height / asset.height)
+    target_width = max(1, round(asset.width * scale))
+    target_height = max(1, round(asset.height * scale))
+    return asset.resize((target_width, target_height), Image.LANCZOS)
+
+
+def _paste_configured_nameplate_logo(img: Image.Image, config: Dict[str, Any],
+                                     fallback_filename: str, default_x: int, default_y: int,
+                                     width: int, height: int) -> None:
+    custom_logo = _load_custom_nameplate_logo(str(config.get('logoDataUrl') or ''))
+    asset = custom_logo.copy() if custom_logo is not None else _load_nameplate_asset(fallback_filename)
+    if asset is None:
+        return
+
+    x = config.get('logoX')
+    y = config.get('logoY')
+    x = int(round(x)) if isinstance(x, (int, float)) and not isinstance(x, bool) else default_x
+    y = int(round(y)) if isinstance(y, (int, float)) and not isinstance(y, bool) else default_y
+    x = min(max(x, 0), 800 - width)
+    y = min(max(y, 0), 480 - height)
+
+    if custom_logo is not None:
+        asset = _contain_nameplate_asset(asset, width, height)
+        paste_x = x + (width - asset.width) // 2
+        paste_y = y + (height - asset.height) // 2
+    else:
+        asset = asset.resize((width, height), Image.LANCZOS)
+        paste_x = x
+        paste_y = y
+    img.paste(asset, (paste_x, paste_y), asset)
 
 
 # ==================== 天气模板 ====================
@@ -555,7 +631,8 @@ def _draw_left_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str,
 
 
 def _draw_pheno_footer_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, name: str,
-                                 style: str, role_text: str, company_text: str) -> None:
+                                 style: str, role_text: str, company_text: str,
+                                 config: Dict[str, Any]) -> None:
     accent = (0, 255, 0) if style == 'formal_green' else (255, 0, 0)
     footer_top = 385
     has_role = bool(role_text)
@@ -569,14 +646,16 @@ def _draw_pheno_footer_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, na
         font_role = _fit_single_line_font(draw, role_text, 590, 48, 28, bold=False)
         _draw_text_centered(draw, role_text, 400, 276, font_role, (255, 255, 255))
 
-    _paste_nameplate_asset(img, 'pheno-logo-black.png', 108, 410, 181, 39)
+    _paste_configured_nameplate_logo(
+        img, config, 'pheno-logo-black.png', 108, 410, 181, 39
+    )
 
     font_company = _fit_single_line_font(draw, company_text, 390, 25, 18)
     _draw_left_text(draw, (326, 433), company_text, font_company, (0, 0, 0), anchor='lm')
 
 
 def _draw_pheno_green_band_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, name: str,
-                                     role_text: str) -> None:
+                                     role_text: str, config: Dict[str, Any]) -> None:
     band_top = 361
     has_role = bool(role_text)
     draw.rectangle((0, 0, 799, band_top - 1), fill=(255, 255, 255))
@@ -589,11 +668,14 @@ def _draw_pheno_green_band_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw
         font_role = _fit_single_line_font(draw, role_text, 590, 48, 28, bold=False)
         _draw_text_centered(draw, role_text, 400, 276, font_role, (0, 0, 0))
 
-    _paste_nameplate_asset(img, 'pheno-logo-white.png', 276, 390, 248, 54)
+    _paste_configured_nameplate_logo(
+        img, config, 'pheno-logo-white.png', 276, 390, 248, 54
+    )
 
 
 def _draw_pheno_profile_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, name: str,
-                                  role_text: str, company_text: str) -> None:
+                                  role_text: str, company_text: str,
+                                  config: Dict[str, Any]) -> None:
     draw.rectangle((0, 0, 799, 479), fill=(255, 255, 255))
 
     mark_size = 128
@@ -616,7 +698,9 @@ def _draw_pheno_profile_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, n
     mark_top = 153
     text_left = group_left + mark_size + gap
 
-    _paste_nameplate_asset(img, 'pheno-mark-square.png', group_left, mark_top, mark_size, mark_size)
+    _paste_configured_nameplate_logo(
+        img, config, 'pheno-mark-square.png', group_left, mark_top, mark_size, mark_size
+    )
 
     _draw_left_text(draw, (text_left, 151), name, font_name, (0, 0, 0), anchor='lt')
     if role_text and font_role:
@@ -651,13 +735,24 @@ def _render_nameplate_image(config: Dict[str, Any]) -> Image.Image:
 
     img, draw = _create_base_canvas((255, 255, 255))
     if style == 'formal_blue':
-        _draw_pheno_profile_nameplate(img, draw, name, title, subtitle or NAMEPLATE_COMPANY_EN)
+        _draw_pheno_profile_nameplate(
+            img, draw, name, title, subtitle or NAMEPLATE_COMPANY_EN, config
+        )
     elif style == 'plain':
-        _draw_pheno_green_band_nameplate(img, draw, name, title)
+        _draw_pheno_green_band_nameplate(img, draw, name, title, config)
     else:
-        _draw_pheno_footer_nameplate(img, draw, name, style, title, subtitle or NAMEPLATE_COMPANY_CN)
+        _draw_pheno_footer_nameplate(
+            img, draw, name, style, title, subtitle or NAMEPLATE_COMPANY_CN, config
+        )
 
     return img
+
+
+def _safe_template_log_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    log_config = dict(config or {})
+    if log_config.get('logoDataUrl'):
+        log_config['logoDataUrl'] = f'<custom logo: {len(log_config["logoDataUrl"])} chars>'
+    return log_config
 
 
 # 渲染器映射（返回 PIL Image 的版本）
@@ -689,7 +784,7 @@ def render_template_image(template_id: str, config: Dict[str, Any]) -> Optional[
         return None
 
     try:
-        print(f'🎨 渲染模板图像: {template_id}, config={config}')
+        print(f'🎨 渲染模板图像: {template_id}, config={_safe_template_log_config(config)}')
         img = renderer(config)
         if img:
             # 确保尺寸正确
@@ -736,7 +831,7 @@ def render_template_with_preview(template_id: str, config: Dict[str, Any]) -> di
     template_id = str(template_id).strip().lower() if template_id else ''
 
     try:
-        print(f'🎨 渲染模板完整链路: {template_id}, config={config}')
+        print(f'🎨 渲染模板完整链路: {template_id}, config={_safe_template_log_config(config)}')
         # 1. 渲染原始 PIL Image（只渲染一次）
         img = render_template_image(template_id, config)
         if not img:

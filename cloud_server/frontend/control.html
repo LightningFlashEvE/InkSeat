@@ -11,7 +11,7 @@
     <script>
         (function () {
             try {
-                if (localStorage.getItem('meetingThemeMode') === 'light') {
+                if (localStorage.getItem('meetingThemeMode') !== 'dark') {
                     document.documentElement.classList.add('theme-light');
                     document.documentElement.dataset.theme = 'light';
                     document.documentElement.style.colorScheme = 'light';
@@ -805,32 +805,32 @@
             }
         }
     </style>
-    <script src="theme.js?v=20260707fit1"></script>
-    <link rel="stylesheet" href="ui.css?v=20260707fit1">
+    <script src="theme.js?v=20260731logo1"></script>
+    <link rel="stylesheet" href="ui.css?v=20260731logo1">
 </head>
 <body class="control-page meeting-device-page">
     <div class="meeting-page">
         <section class="meeting-shell control-shell">
             <aside class="meeting-sidebar" aria-label="主导航">
-                <a class="meeting-brand" href="index.html?v=20260707fit1" aria-label="会议牌管理">
+                <a class="meeting-brand" href="index.html?v=20260731logo1" aria-label="会议牌管理">
                     <span class="meeting-brand-mark" aria-hidden="true"></span>
                     <span>会议牌管理</span>
                 </a>
 
                 <nav class="meeting-nav">
-                    <a class="meeting-nav-item" href="index.html?v=20260707fit1">
+                    <a class="meeting-nav-item" href="index.html?v=20260731logo1">
                         <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
                         <span>设备</span>
                     </a>
-                    <a class="meeting-nav-item" href="nameplates.html?v=20260707fit1">
+                    <a class="meeting-nav-item" href="nameplates.html?v=20260731logo1">
                         <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
                         <span>名单下发</span>
                     </a>
-                    <a class="meeting-nav-item active" href="control.html?v=20260707fit1" aria-current="page">
+                    <a class="meeting-nav-item active" href="control.html?v=20260731logo1" aria-current="page">
                         <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
                         <span>模板设计</span>
                     </a>
-                    <a class="meeting-nav-item" href="settings.html?v=20260707fit1">
+                    <a class="meeting-nav-item" href="settings.html?v=20260731logo1">
                         <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
                         <span>设置</span>
                     </a>
@@ -907,32 +907,32 @@
 
         <!-- 右侧面板 -->
         <div class="right-panel">
-            <div class="panel-tabs">
-                <div class="panel-tab active" data-panel="edit" onclick="switchPanel('edit')">编辑</div>
-                <div class="panel-tab" data-panel="process" onclick="switchPanel('process')">处理</div>
+            <div class="panel-tabs" role="group" aria-label="编辑与处理面板">
+                <button class="panel-tab active" type="button" data-panel="edit" aria-pressed="true" onclick="switchPanel('edit')">编辑</button>
+                <button class="panel-tab" type="button" data-panel="process" aria-pressed="false" onclick="switchPanel('process')">处理</button>
             </div>
 
             <div class="panel-content" id="editPanel">
                 <!-- 内容模式选择 -->
                 <div class="panel-section hidden">
                     <h4>内容模式</h4>
-                    <div class="mode-buttons">
-                        <div class="mode-btn active" data-mode="image" onclick="switchMode('image')">
-                            <div class="icon">🖼️</div>
-                            <div class="label">图片</div>
-                        </div>
-                        <div class="mode-btn" data-mode="text" onclick="switchMode('text')">
-                            <div class="icon">📝</div>
-                            <div class="label">文字</div>
-                        </div>
-                        <div class="mode-btn" data-mode="mixed" onclick="switchMode('mixed')">
-                            <div class="icon">🎨</div>
-                            <div class="label">图文</div>
-                        </div>
-                        <div class="mode-btn" data-mode="template" onclick="switchMode('template')">
-                            <div class="icon">📋</div>
-                            <div class="label">模板</div>
-                        </div>
+                    <div class="mode-buttons" role="group" aria-label="内容模式">
+                        <button class="mode-btn" type="button" data-mode="image" aria-pressed="false" onclick="switchMode('image')">
+                            <span class="icon" aria-hidden="true">🖼️</span>
+                            <span class="label">图片</span>
+                        </button>
+                        <button class="mode-btn" type="button" data-mode="text" aria-pressed="false" onclick="switchMode('text')">
+                            <span class="icon" aria-hidden="true">📝</span>
+                            <span class="label">文字</span>
+                        </button>
+                        <button class="mode-btn" type="button" data-mode="mixed" aria-pressed="false" onclick="switchMode('mixed')">
+                            <span class="icon" aria-hidden="true">🎨</span>
+                            <span class="label">图文</span>
+                        </button>
+                        <button class="mode-btn active" type="button" data-mode="template" aria-pressed="true" onclick="switchMode('template')">
+                            <span class="icon" aria-hidden="true">📋</span>
+                            <span class="label">模板</span>
+                        </button>
                     </div>
                 </div>
 
@@ -1149,23 +1149,40 @@
                     <div id="nameplateTemplateConfig" class="panel-section">
                         <h4>会议名牌设置</h4>
                         <div class="form-group">
-                            <label>模板名称</label>
+                            <label for="nameplateTemplateNameInput">模板名称</label>
                             <input type="text" id="nameplateTemplateNameInput" placeholder="如：会务通用模板" value="会议名牌模板">
                         </div>
                         <div class="form-group">
-                            <label>人名</label>
+                            <label for="nameplateNameInput">人名</label>
                             <input type="text" id="nameplateNameInput" placeholder="如：张三" oninput="renderNameplatePreview()">
                         </div>
                         <div class="form-group">
-                            <label>职务 / 副标题（可选）</label>
+                            <label for="nameplateTitleInput">职务 / 副标题（可选）</label>
                             <input type="text" id="nameplateTitleInput" placeholder="如：CEO / Technical Expert" oninput="renderNameplatePreview()">
                         </div>
                         <div class="form-group">
-                            <label>公司名称（可选）</label>
+                            <label for="nameplateSubtitleInput">公司名称（可选）</label>
                             <input type="text" id="nameplateSubtitleInput" placeholder="留空使用默认公司名" oninput="renderNameplatePreview()">
                         </div>
+                        <div class="form-group nameplate-logo-control">
+                            <label for="nameplateLogoInput">Logo</label>
+                            <div class="nameplate-logo-current">
+                                <img id="nameplateLogoPreview" src="assets/nameplate/pheno-logo-black.png?v=20260731logo1" alt="默认 Pheno Logo">
+                                <div>
+                                    <strong id="nameplateLogoStatus">默认 Pheno Logo</strong>
+                                    <span>PNG、JPG 或 WebP，最大 5MB</span>
+                                </div>
+                            </div>
+                            <input class="hidden" type="file" id="nameplateLogoInput" accept="image/png,image/jpeg,image/webp" onchange="handleNameplateLogoFile(event)">
+                            <div class="nameplate-logo-actions">
+                                <button class="btn btn-secondary btn-small" type="button" onclick="document.getElementById('nameplateLogoInput').click()">上传 / 替换</button>
+                                <button class="btn btn-secondary btn-small" id="resetNameplateLogoPositionButton" type="button" onclick="resetNameplateLogoPosition()" disabled>默认位置</button>
+                                <button class="btn btn-secondary btn-small" id="restoreNameplateLogoButton" type="button" onclick="restoreDefaultNameplateLogo()" disabled>恢复 Pheno</button>
+                            </div>
+                            <p class="nameplate-logo-help">上传后可直接拖动画布中的 Logo；位置会随模板保存。</p>
+                        </div>
                         <div class="form-group">
-                            <label>背景样式</label>
+                            <label for="nameplateStyleSelect">背景样式</label>
                             <select id="nameplateStyleSelect" onchange="renderNameplatePreview()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-size:0.9em;">
                                 <option value="formal_red" selected>Pheno 红色底栏</option>
                                 <option value="formal_green">Pheno 绿色底栏</option>
@@ -1174,7 +1191,7 @@
                             </select>
                         </div>
                         <div class="form-group">
-                            <label>唤醒频率</label>
+                            <label for="nameplateWakeInterval">唤醒频率</label>
                             <select id="nameplateWakeInterval" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:4px;background:var(--bg-secondary);color:var(--text-primary);font-size:0.9em;">
                                 <option value="3600">每 1 小时</option>
                                 <option value="21600">每 6 小时</option>
@@ -1297,8 +1314,8 @@
     <input type="hidden" id="height" value="480">
 
     <script src="vendor/qrcode.min.js"></script>
-    <script src="auth.js?v=20260707fit1"></script>
-    <script src="app.js?v=20260707fit1"></script>
-    <script src="editor.js?v=20260707fit1"></script>
+    <script src="auth.js?v=20260731logo1"></script>
+    <script src="app.js?v=20260731logo1"></script>
+    <script src="editor.js?v=20260731logo1"></script>
 </body>
 </html>

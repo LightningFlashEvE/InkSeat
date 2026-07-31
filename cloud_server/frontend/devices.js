@@ -14,20 +14,22 @@ function authHeaders() {
     return token ? { Authorization: 'Bearer ' + token } : {};
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     setupDevicePage();
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    if (typeof requireAuth === 'function') {
-        requireAuth().then(() => {
-            loadDevices();
-            startPolling();
-            log('系统初始化完成');
-        });
-    } else {
-        loadDevices();
+    try {
+        if (typeof requireAuth === 'function') {
+            const user = await requireAuth();
+            if (!user) return;
+        }
+
+        await loadDevices();
         startPolling();
         log('系统初始化完成');
+    } catch (error) {
+        console.error('设备页面初始化失败:', error);
+        log(error?.message || '认证服务暂不可用，请稍后重试', 'error');
     }
 });
 
@@ -67,6 +69,16 @@ function setupDevicePage() {
         });
     }
 
+    const pairingCodeInput = document.getElementById('pairingCode');
+    if (pairingCodeInput) {
+        pairingCodeInput.addEventListener('input', () => {
+            pairingCodeInput.value = pairingCodeInput.value.replace(/\D/g, '').slice(0, 6);
+        });
+        pairingCodeInput.addEventListener('keypress', (event) => {
+            if (event.key === 'Enter') addDevice();
+        });
+    }
+
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') hideAddDeviceModal();
     });
@@ -84,7 +96,7 @@ function log(message, type = 'info') {
 
 async function loadDevices() {
     try {
-        const response = await fetch(`${API_BASE}/api/devices/list`, {
+        const response = await authFetch(`${API_BASE}/api/devices/list`, {
             headers: { ...authHeaders() }
         });
 
@@ -122,10 +134,13 @@ function normalizeDevice(device) {
 async function addDevice() {
     const deviceIdInput = document.getElementById('newDeviceId');
     const deviceNameInput = document.getElementById('deviceName');
-    if (!deviceIdInput || !deviceNameInput) return;
+    const pairingCodeInput = document.getElementById('pairingCode');
+    const submitButton = document.getElementById('addDeviceSubmit');
+    if (!deviceIdInput || !deviceNameInput || !pairingCodeInput) return;
 
     let deviceId = deviceIdInput.value.trim().toUpperCase();
     const deviceName = deviceNameInput.value.trim() || deviceId;
+    const pairingCode = pairingCodeInput.value.trim();
 
     if (!deviceId) {
         log('请输入设备ID或MAC地址', 'error');
@@ -148,8 +163,20 @@ async function addDevice() {
         return;
     }
 
+    if (!/^\d{6}$/.test(pairingCode)) {
+        log('请输入设备屏幕显示的6位配对码', 'error');
+        pairingCodeInput.focus();
+        pairingCodeInput.select();
+        return;
+    }
+
     try {
-        const response = await fetch(`${API_BASE}/api/devices/add`, {
+        if (submitButton) {
+            submitButton.disabled = true;
+            submitButton.textContent = '验证并添加中...';
+        }
+
+        const response = await authFetch(`${API_BASE}/api/devices/add`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -157,36 +184,34 @@ async function addDevice() {
             },
             body: JSON.stringify({
                 deviceId,
-                deviceName
+                deviceName,
+                pairingCode
             })
         });
 
-        const result = await response.json();
+        const result = await response.json().catch(() => ({}));
 
-        if (result.success) {
+        if (response.ok && result.success) {
             log(`设备 ${deviceName} 添加成功`, 'success');
             deviceIdInput.value = '';
             deviceNameInput.value = '';
+            pairingCodeInput.value = '';
             hideAddDeviceModal();
             selectedDeviceId = deviceId;
             await loadDevices();
-
-            if (!confirm(`设备已添加\n\n设备码：${deviceId}\n\n请对照设备屏幕显示的设备码，确认是否一致？\n\n点击“确定”表示一致，点击“取消”删除此设备。`)) {
-                log('检测到设备码不一致，正在删除...', 'warning');
-                await fetch(`${API_BASE}/api/devices/${deviceId}`, {
-                    method: 'DELETE',
-                    headers: { ...authHeaders() }
-                });
-                selectedDeviceId = null;
-                log('设备已删除，请重新核对后添加', 'error');
-                await loadDevices();
-            }
         } else {
-            log(result.error || '添加设备失败', 'error');
+            throw new Error(result.error || `添加设备失败（HTTP ${response.status}）`);
         }
     } catch (error) {
         console.error('添加设备错误:', error);
         log('添加设备失败: ' + error.message, 'error');
+        pairingCodeInput.value = '';
+        pairingCodeInput.focus();
+    } finally {
+        if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.textContent = '验证并添加';
+        }
     }
 }
 
@@ -196,7 +221,7 @@ async function removeDevice(deviceId) {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/api/devices/${deviceId}`, {
+        const response = await authFetch(`${API_BASE}/api/devices/${deviceId}`, {
             method: 'DELETE',
             headers: { ...authHeaders() }
         });
@@ -492,14 +517,15 @@ function setSignalIndicator(id, rssi) {
 }
 
 function openDevice(deviceId) {
-    window.location.href = `control.html?v=20260707fit1&deviceId=${encodeURIComponent(deviceId)}`;
+    window.location.href = `control.html?v=20260731logo1&deviceId=${encodeURIComponent(deviceId)}`;
 }
 
 let pollingInterval = null;
 let isPolling = false;
+let pollingDisabledByAuth = false;
 
 function startPolling() {
-    if (document.hidden) return;
+    if (pollingDisabledByAuth || document.hidden) return;
 
     pollDeviceStatus();
 
@@ -516,6 +542,13 @@ function stopPolling() {
     }
 }
 
+function handleAuthExpired() {
+    pollingDisabledByAuth = true;
+    stopPolling();
+}
+
+window.addEventListener('auth:expired', handleAuthExpired);
+
 function handleVisibilityChange() {
     if (document.hidden) {
         stopPolling();
@@ -529,7 +562,7 @@ async function pollDeviceStatus() {
 
     isPolling = true;
     try {
-        const response = await fetch(`${API_BASE}/api/devices`, {
+        const response = await authFetch(`${API_BASE}/api/devices`, {
             headers: { ...authHeaders() },
             cache: 'no-cache'
         });
@@ -615,7 +648,7 @@ function hideAddDeviceModal() {
     document.body.classList.remove('modal-open');
 }
 
-function runQuickAction(action) {
+async function runQuickAction(action) {
     if (!selectedDeviceId) {
         log('请先选择设备', 'error');
         return;
@@ -629,12 +662,51 @@ function runQuickAction(action) {
         return;
     }
 
+    if (action === 'reset-credentials') {
+        await resetDeviceCredentials(selectedDeviceId, deviceName);
+        return;
+    }
+
     const actionNames = {
         restart: '远程重启',
         capture: '远程截屏',
         group: '设备分组'
     };
     log(`${actionNames[action] || '操作'}暂未接入设备端接口：${deviceName}`, 'warning');
+}
+
+async function resetDeviceCredentials(deviceId, deviceName) {
+    const confirmation = window.prompt(
+        `高风险操作：这会允许设备在短时间内用新的本地密钥替换现有凭据。\n\n` +
+        `只有设备 NVS 已擦除或密钥确实丢失时才使用。解绑设备不会清除密钥。\n\n` +
+        `请输入设备编号 ${deviceId} 继续：`
+    );
+    if (confirmation === null) return;
+    if (confirmation.trim().toUpperCase() !== deviceId.toUpperCase()) {
+        log('设备编号不匹配，已取消凭据重置', 'error');
+        return;
+    }
+
+    try {
+        const response = await authFetch(`${API_BASE}/api/device/auth/reset`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...authHeaders()
+            },
+            body: JSON.stringify({ deviceId })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) {
+            throw new Error(result.error || `开启重置窗口失败（HTTP ${response.status}）`);
+        }
+
+        const resetUntil = result.resetUntil ? new Date(result.resetUntil).toLocaleString() : '数分钟后';
+        log(`已为 ${deviceName} 开启凭据重置窗口，请立即让设备联网（截止 ${resetUntil}）`, 'warning');
+    } catch (error) {
+        console.error('设备凭据重置失败:', error);
+        log('设备凭据重置失败: ' + error.message, 'error');
+    }
 }
 
 function getSignalBars(rssi) {
@@ -734,16 +806,4 @@ function escapeHtml(value) {
 
 function escapeJsString(value) {
     return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-}
-
-function logout() {
-    if (confirm('确定要退出登录吗？')) {
-        if (typeof clearAuth === 'function') {
-            clearAuth();
-        } else {
-            localStorage.removeItem('authToken');
-            localStorage.removeItem('authUser');
-        }
-        window.location.href = 'login.html?v=20260707fit1';
-    }
 }

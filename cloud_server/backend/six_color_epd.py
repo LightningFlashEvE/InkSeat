@@ -19,10 +19,17 @@ from __future__ import annotations
 from typing import Tuple, Optional, Literal
 import io
 import base64
+import os
 
 import numpy as np
 from PIL import Image
 import cv2
+
+
+EPD_TARGET_SIZE = (800, 480)
+MAX_SOURCE_IMAGE_BYTES = int(os.environ.get('MAX_SOURCE_IMAGE_BYTES', 8 * 1024 * 1024))
+MAX_SOURCE_IMAGE_PIXELS = int(os.environ.get('MAX_SOURCE_IMAGE_PIXELS', 20_000_000))
+MAX_SOURCE_BASE64_CHARS = ((MAX_SOURCE_IMAGE_BYTES + 2) // 3) * 4 + 16
 
 
 # ==================== E6 六色调色板 ====================
@@ -572,9 +579,27 @@ def process_e6_image_from_base64(
     返回：
         包含预览图base64、4bit数据base64等的字典
     """
-    # 解码base64
-    img_bytes = base64.b64decode(base64_data)
+    if type(width) is not int or type(height) is not int or (width, height) != EPD_TARGET_SIZE:
+        raise ValueError('目标尺寸必须为 800x480')
+    if not isinstance(base64_data, str) or not base64_data:
+        raise ValueError('图片数据为空')
+    if len(base64_data) > MAX_SOURCE_BASE64_CHARS:
+        raise ValueError('图片数据超过大小限制')
+
+    try:
+        img_bytes = base64.b64decode(base64_data, validate=True)
+    except Exception as exc:
+        raise ValueError('图片 Base64 格式无效') from exc
+    if len(img_bytes) > MAX_SOURCE_IMAGE_BYTES:
+        raise ValueError('图片数据超过大小限制')
+
     img = Image.open(io.BytesIO(img_bytes))
+    source_width, source_height = img.size
+    if source_width <= 0 or source_height <= 0:
+        raise ValueError('图片尺寸无效')
+    if source_width * source_height > MAX_SOURCE_IMAGE_PIXELS:
+        raise ValueError('源图像素数超过限制')
+    img.load()
     
     # 处理图像
     result = process_e6_image(
