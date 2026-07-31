@@ -1,6 +1,6 @@
 let devices = [];
 let savedNameplateTemplates = [];
-let activeNameplateLogoConfig = {};
+let activeNameplateDesignConfig = {};
 
 const API_BASE = '';
 const BUILTIN_NAMEPLATE_TEMPLATES = [
@@ -69,7 +69,7 @@ function bindNameplateInputs() {
             if (savedTemplateSelect.value) {
                 applySavedNameplateTemplateById(savedTemplateSelect.value);
             } else {
-                activeNameplateLogoConfig = {};
+                activeNameplateDesignConfig = {};
             }
         });
     }
@@ -131,19 +131,19 @@ function getCurrentTemplateConfig() {
         title: document.getElementById('nameplateBatchTitle')?.value?.trim() || '',
         subtitle: document.getElementById('nameplateBatchSubtitle')?.value?.trim() || '',
         sleepIntervalSeconds: parseInt(document.getElementById('nameplateBatchWakeInterval')?.value || '43200', 10),
-        ...activeNameplateLogoConfig,
+        ...activeNameplateDesignConfig,
     };
 }
 
-function pickNameplateLogoConfig(config) {
+function pickNameplateDesignConfig(config) {
     const source = config && typeof config === 'object' ? config : {};
-    const logoConfig = {};
-    ['logoDataUrl', 'logoFileName', 'logoX', 'logoY'].forEach(key => {
+    const designConfig = {};
+    ['logoDataUrl', 'logoFileName', 'logoX', 'logoY', 'companyX'].forEach(key => {
         if (source[key] !== undefined && source[key] !== null && source[key] !== '') {
-            logoConfig[key] = source[key];
+            designConfig[key] = source[key];
         }
     });
-    return logoConfig;
+    return designConfig;
 }
 
 async function loadSavedNameplateTemplates() {
@@ -194,7 +194,7 @@ function applySavedNameplateTemplateById(templateId) {
     if (!template) return;
 
     const config = template.templateConfig || {};
-    activeNameplateLogoConfig = pickNameplateLogoConfig(config);
+    activeNameplateDesignConfig = pickNameplateDesignConfig(config);
 
     const styleSelect = document.getElementById('nameplateBatchStyle');
     const titleInput = document.getElementById('nameplateBatchTitle');
@@ -218,7 +218,7 @@ function applyParsedDraft(parsed) {
     }
 
     const config = parsed.templateConfig || {};
-    activeNameplateLogoConfig = pickNameplateLogoConfig(config);
+    activeNameplateDesignConfig = pickNameplateDesignConfig(config);
     const styleSelect = document.getElementById('nameplateBatchStyle');
     const titleInput = document.getElementById('nameplateBatchTitle');
     const subtitleInput = document.getElementById('nameplateBatchSubtitle');

@@ -790,6 +790,7 @@ class BackendSecurityTests(unittest.TestCase):
                 'logoFileName': 'event-logo.png',
                 'logoX': 21,
                 'logoY': 34,
+                'companyX': 412,
             })
 
         timeouts = [call.kwargs['timeout'] for call in post_mock.call_args_list]
@@ -800,6 +801,7 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(result['templateConfig']['logoDataUrl'], logo_data_url)
         self.assertEqual(result['templateConfig']['logoX'], 21)
         self.assertEqual(result['templateConfig']['logoY'], 34)
+        self.assertEqual(result['templateConfig']['companyX'], 412)
 
     def test_nameplate_dispatch_deadline_reports_unprocessed_devices(self):
         backend.devices_collection = FakeCollection([
@@ -876,12 +878,14 @@ class NameplateRenderContractTests(unittest.TestCase):
             'logoFileName': '  event-logo.png  ',
             'logoX': -10,
             'logoY': 999,
+            'companyX': 999,
         })
 
         self.assertEqual(config['logoDataUrl'], logo_data_url)
         self.assertEqual(config['logoFileName'], 'event-logo.png')
         self.assertEqual(config['logoX'], 0)
         self.assertEqual(config['logoY'], 479)
+        self.assertEqual(config['companyX'], 799)
         self.assertNotIn(
             'logoDataUrl',
             backend.normalize_nameplate_template_config({
@@ -900,6 +904,33 @@ class NameplateRenderContractTests(unittest.TestCase):
         })
 
         self.assertEqual(image.getpixel((100, 30)), (0, 0, 255))
+
+    def test_nameplate_company_uses_saved_horizontal_position_and_stays_visible(self):
+        self.assertEqual(
+            template_renderer._resolve_nameplate_company_x({'companyX': 24}, 326, 120),
+            24,
+        )
+        self.assertEqual(
+            template_renderer._resolve_nameplate_company_x({'companyX': 999}, 326, 120),
+            680,
+        )
+        self.assertEqual(
+            template_renderer._resolve_nameplate_company_x({}, 326, 120),
+            326,
+        )
+
+        default_image = template_renderer.render_template_image('nameplate', {
+            'name': '张三',
+            'backgroundStyle': 'formal_red',
+            'subtitle': 'ACME',
+        })
+        moved_image = template_renderer.render_template_image('nameplate', {
+            'name': '张三',
+            'backgroundStyle': 'formal_red',
+            'subtitle': 'ACME',
+            'companyX': 650,
+        })
+        self.assertNotEqual(default_image.tobytes(), moved_image.tobytes())
 
     def test_real_nameplate_render_matches_firmware_contract(self):
         result = backend.render_template_with_preview('nameplate', {

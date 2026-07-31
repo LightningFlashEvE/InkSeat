@@ -1066,9 +1066,48 @@ body.control-page {
 }
 
 .control-page .nameplate-logo-current span,
-.control-page .nameplate-logo-help {
+.control-page .nameplate-logo-help,
+.control-page .nameplate-company-help {
     color: var(--ui-text-muted);
     font-size: 0.72rem;
+}
+
+.control-page .nameplate-company-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.control-page .nameplate-company-label-row label {
+    margin-bottom: 0;
+}
+
+.control-page .nameplate-inline-reset {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--ui-accent);
+    cursor: pointer;
+    flex: 0 0 auto;
+    font: inherit;
+    font-size: 0.7rem;
+    padding: 2px 0;
+}
+
+.control-page .nameplate-inline-reset:hover:not(:disabled) {
+    text-decoration: underline;
+}
+
+.control-page .nameplate-inline-reset:focus-visible {
+    outline: 2px solid var(--ui-accent);
+    outline-offset: 3px;
+}
+
+.control-page .nameplate-inline-reset:disabled {
+    color: var(--ui-text-muted);
+    cursor: default;
+    opacity: 0.55;
 }
 
 .control-page .nameplate-logo-actions {
@@ -1085,7 +1124,8 @@ body.control-page {
     white-space: nowrap;
 }
 
-.control-page .nameplate-logo-help {
+.control-page .nameplate-logo-help,
+.control-page .nameplate-company-help {
     margin: 7px 0 0;
     line-height: 1.45;
 }

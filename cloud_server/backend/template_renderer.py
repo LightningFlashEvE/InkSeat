@@ -18,6 +18,7 @@ import io
 import os
 import json
 import base64
+import math
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -630,6 +631,19 @@ def _draw_left_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str,
         draw.text((xy[0], y), text, font=font, fill=fill)
 
 
+def _resolve_nameplate_company_x(config: Dict[str, Any], default_x: int,
+                                 company_width: int) -> int:
+    raw_x = config.get('companyX')
+    if (
+        isinstance(raw_x, (int, float)) and not isinstance(raw_x, bool)
+        and math.isfinite(raw_x)
+    ):
+        x = int(round(raw_x))
+    else:
+        x = default_x
+    return min(max(x, 0), max(0, 800 - company_width))
+
+
 def _draw_pheno_footer_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, name: str,
                                  style: str, role_text: str, company_text: str,
                                  config: Dict[str, Any]) -> None:
@@ -651,7 +665,11 @@ def _draw_pheno_footer_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, na
     )
 
     font_company = _fit_single_line_font(draw, company_text, 390, 25, 18)
-    _draw_left_text(draw, (326, 433), company_text, font_company, (0, 0, 0), anchor='lm')
+    company_width = _text_width(draw, company_text, font_company)
+    company_x = _resolve_nameplate_company_x(config, 326, company_width)
+    _draw_left_text(
+        draw, (company_x, 433), company_text, font_company, (0, 0, 0), anchor='lm'
+    )
 
 
 def _draw_pheno_green_band_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, name: str,
@@ -708,7 +726,9 @@ def _draw_pheno_profile_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, n
 
     font_company = _fit_single_line_font(draw, company_text, 370, 22, 16, bold=False)
     company_width = _text_width(draw, company_text, font_company)
-    text_x = round((800 - company_width) / 2)
+    text_x = _resolve_nameplate_company_x(
+        config, round((800 - company_width) / 2), company_width
+    )
     line_gap = 20
     line_y = 406
     line_height = 16

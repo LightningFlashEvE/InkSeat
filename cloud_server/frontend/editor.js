@@ -23,8 +23,10 @@ var currentNameplateLogoDataUrl = '';
 var currentNameplateLogoFileName = '';
 var currentNameplateLogoPosition = null;
 var currentNameplateLogoBounds = null;
+var currentNameplateCompanyX = null;
+var currentNameplateCompanyBounds = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260731logo1';
+const CONTROL_LAZY_ASSET_VERSION = '20260731company1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -115,6 +117,28 @@ function getNameplateLogoConfig() {
         config.logoY = Math.round(currentNameplateLogoPosition.y);
     }
     return config;
+}
+
+function getNameplateCompanyConfig() {
+    return currentNameplateCompanyX === null
+        ? {}
+        : { companyX: Math.round(currentNameplateCompanyX) };
+}
+
+function updateNameplateCompanyControls() {
+    const resetButton = document.getElementById('resetNameplateCompanyPositionButton');
+    if (resetButton) resetButton.disabled = currentNameplateCompanyX === null;
+}
+
+function setNameplateCompanyState(config = {}, options = {}) {
+    const companyX = Number(config.companyX);
+    currentNameplateCompanyX = config.companyX !== undefined && config.companyX !== null
+        && Number.isFinite(companyX)
+        ? Math.round(companyX)
+        : null;
+    currentNameplateCompanyBounds = null;
+    updateNameplateCompanyControls();
+    if (options.render !== false) renderNameplatePreview();
 }
 
 function updateNameplateLogoControls() {
@@ -271,6 +295,14 @@ function resetNameplateLogoPosition() {
     updateNameplateLogoControls();
     renderNameplatePreview();
     log('Logo 已恢复为当前背景样式的默认位置', 'success');
+}
+
+function resetNameplateCompanyPosition() {
+    currentNameplateCompanyX = null;
+    currentNameplateCompanyBounds = null;
+    updateNameplateCompanyControls();
+    renderNameplatePreview();
+    log('公司名称已恢复为当前背景样式的默认位置', 'success');
 }
 
 function restoreDefaultNameplateLogo() {
@@ -582,6 +614,7 @@ function getCurrentTemplateConfig() {
             backgroundStyle: document.getElementById('nameplateStyleSelect')?.value || 'formal_red',
             sleepIntervalSeconds: parseInt(document.getElementById('nameplateWakeInterval')?.value || '43200', 10),
             ...getNameplateLogoConfig(),
+            ...getNameplateCompanyConfig(),
         };
     }
     // todo 等模板暂无配置
@@ -596,6 +629,7 @@ function getSavableNameplateTemplateConfig() {
         subtitle: config.subtitle || '',
         sleepIntervalSeconds: parseInt(config.sleepIntervalSeconds || '43200', 10) || 43200,
         ...getNameplateLogoConfig(),
+        ...getNameplateCompanyConfig(),
     };
 }
 
@@ -616,6 +650,7 @@ function applyNameplateTemplateConfig(config, options = {}) {
     if (subtitleInput && config.subtitle !== undefined) subtitleInput.value = config.subtitle || '';
     if (wakeSelect && config.sleepIntervalSeconds) wakeSelect.value = String(config.sleepIntervalSeconds);
     setNameplateLogoState(config, { render: false });
+    setNameplateCompanyState(config, { render: false });
 
     if (options.render !== false) {
         renderNameplatePreview();
@@ -741,6 +776,7 @@ function startNewNameplateTemplate() {
     if (styleSelect) styleSelect.value = 'formal_red';
     if (wakeSelect) wakeSelect.value = '43200';
     setNameplateLogoState({}, { render: false });
+    setNameplateCompanyState({}, { render: false });
     renderNameplatePreview();
     renderSavedNameplateTemplateList();
     log('已新建空白模板，保存后会加入模板列表', 'info');
@@ -1113,6 +1149,28 @@ function drawConfiguredNameplateLogo(ctx, fallbackKey, defaultX, defaultY, width
     return true;
 }
 
+function resolveNameplateCompanyX(defaultX, companyWidth, canvasWidth) {
+    const rawX = currentNameplateCompanyX ?? defaultX;
+    return Math.max(0, Math.min(canvasWidth - companyWidth, Math.round(rawX)));
+}
+
+function setNameplateCompanyBounds(ctx, x, y, width, height) {
+    currentNameplateCompanyBounds = {
+        x,
+        y,
+        width: Math.max(1, width),
+        height: Math.max(1, height),
+    };
+    if (canvasDragState.isDragging && canvasDragState.dragTarget === 'nameplate-company') {
+        ctx.save();
+        ctx.strokeStyle = '#2563eb';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([8, 6]);
+        ctx.strokeRect(x - 5, y - 5, Math.max(1, width) + 10, Math.max(1, height) + 10);
+        ctx.restore();
+    }
+}
+
 function drawPhenoFooterNameplate(ctx, width, height, name, style, roleText, companyText) {
     const accent = style === 'formal_green' ? '#00ff00' : '#ff0000';
     const footerTop = 385;
@@ -1142,8 +1200,13 @@ function drawPhenoFooterNameplate(ctx, width, height, name, style, roleText, com
     ctx.textBaseline = 'middle';
     const companySize = fitCanvasFontSizeWithWeight(ctx, companyText, 390, 25, 18, '700');
     ctx.font = nameplateCanvasFont(companySize, '700', companyText);
+    const companyWidth = ctx.measureText(companyText).width;
+    const companyX = resolveNameplateCompanyX(326, companyWidth, width);
     ctx.fillStyle = 'black';
-    ctx.fillText(companyText, 326, 433);
+    ctx.fillText(companyText, companyX, 433);
+    setNameplateCompanyBounds(
+        ctx, companyX, 433 - companySize / 2, companyWidth, companySize
+    );
 }
 
 function drawPhenoGreenBandNameplate(ctx, width, height, name, roleText) {
@@ -1214,7 +1277,9 @@ function drawPhenoProfileNameplate(ctx, width, height, name, roleText, companyTe
     const companySize = fitCanvasFontSizeWithWeight(ctx, companyText, 370, 22, 16, '400');
     ctx.font = nameplateCanvasFont(companySize, '400', companyText);
     const companyWidth = ctx.measureText(companyText).width;
-    const textX = Math.round((width - companyWidth) / 2);
+    const textX = resolveNameplateCompanyX(
+        Math.round((width - companyWidth) / 2), companyWidth, width
+    );
     const lineGap = 20;
     const lineY = 406;
     const lineHeight = 16;
@@ -1227,10 +1292,12 @@ function drawPhenoProfileNameplate(ctx, width, height, name, roleText, companyTe
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillText(companyText, textX, 402);
+    setNameplateCompanyBounds(ctx, textX, 402, companyWidth, companySize);
 }
 
 function renderNameplateTemplate(ctx, width, height) {
     currentNameplateLogoBounds = null;
+    currentNameplateCompanyBounds = null;
     const name = document.getElementById('nameplateNameInput')?.value?.trim() || '姓名';
     const title = document.getElementById('nameplateTitleInput')?.value?.trim() || '';
     const subtitle = document.getElementById('nameplateSubtitleInput')?.value?.trim() || '';
@@ -2585,6 +2652,27 @@ function isPointInsideNameplateLogo(x, y) {
         && y >= bounds.y && y <= bounds.y + bounds.height);
 }
 
+function isPointInsideNameplateCompany(x, y) {
+    const bounds = currentNameplateCompanyBounds;
+    const padding = 8;
+    return Boolean(bounds
+        && x >= bounds.x - padding && x <= bounds.x + bounds.width + padding
+        && y >= bounds.y - padding && y <= bounds.y + bounds.height + padding);
+}
+
+function getNameplateDragTarget(x, y) {
+    if (currentMode !== 'template' || currentTemplateId !== NAMEPLATE_TEMPLATE_ID) return null;
+    if (isPointInsideNameplateCompany(x, y)) return 'nameplate-company';
+    if (isPointInsideNameplateLogo(x, y)) return 'nameplate-logo';
+    return null;
+}
+
+function getNameplateDragCursor(target) {
+    if (target === 'nameplate-company') return 'ew-resize';
+    if (target === 'nameplate-logo') return 'move';
+    return 'default';
+}
+
 function moveDraggedNameplateLogo(x, y, canvas) {
     const bounds = currentNameplateLogoBounds;
     if (!bounds || !canvas) return false;
@@ -2597,12 +2685,27 @@ function moveDraggedNameplateLogo(x, y, canvas) {
     return true;
 }
 
+function moveDraggedNameplateCompany(x, canvas) {
+    const bounds = currentNameplateCompanyBounds;
+    if (!bounds || !canvas) return false;
+    currentNameplateCompanyX = Math.max(
+        0,
+        Math.min(canvas.width - bounds.width, x - canvasDragState.itemOffsetX)
+    );
+    updateNameplateCompanyControls();
+    renderCanvas();
+    return true;
+}
+
 function finishCanvasDrag() {
-    const wasDraggingLogo = canvasDragState.dragTarget === 'nameplate-logo';
+    const finishedTarget = canvasDragState.dragTarget;
     canvasDragState.isDragging = false;
     canvasDragState.dragTarget = null;
-    if (wasDraggingLogo) {
+    if (finishedTarget === 'nameplate-logo') {
         updateNameplateLogoControls();
+        renderCanvas();
+    } else if (finishedTarget === 'nameplate-company') {
+        updateNameplateCompanyControls();
         renderCanvas();
     }
 }
@@ -2654,8 +2757,16 @@ function initCanvasEvents() {
         const x = coords.x;
         const y = coords.y;
 
-        if (currentMode === 'template' && currentTemplateId === NAMEPLATE_TEMPLATE_ID
-            && isPointInsideNameplateLogo(x, y)) {
+        const nameplateTarget = getNameplateDragTarget(x, y);
+        if (nameplateTarget === 'nameplate-company') {
+            canvasDragState.isDragging = true;
+            canvasDragState.dragTarget = 'nameplate-company';
+            canvasDragState.itemOffsetX = x - currentNameplateCompanyBounds.x;
+            currentNameplateCompanyX = currentNameplateCompanyBounds.x;
+            canvas.style.cursor = 'ew-resize';
+            updateNameplateCompanyControls();
+            renderCanvas();
+        } else if (nameplateTarget === 'nameplate-logo') {
             canvasDragState.isDragging = true;
             canvasDragState.dragTarget = 'nameplate-logo';
             canvasDragState.itemOffsetX = x - currentNameplateLogoBounds.x;
@@ -2732,10 +2843,9 @@ function initCanvasEvents() {
     canvas.onmousemove = function(e) {
         const coords = getCanvasCoords(e);
         if (!canvasDragState.isDragging) {
-            const hoveringLogo = currentMode === 'template'
-                && currentTemplateId === NAMEPLATE_TEMPLATE_ID
-                && isPointInsideNameplateLogo(coords.x, coords.y);
-            canvas.style.cursor = hoveringLogo ? 'move' : 'default';
+            canvas.style.cursor = getNameplateDragCursor(
+                getNameplateDragTarget(coords.x, coords.y)
+            );
             return;
         }
         e.preventDefault();
@@ -2745,6 +2855,8 @@ function initCanvasEvents() {
 
         if (canvasDragState.dragTarget === 'nameplate-logo') {
             moveDraggedNameplateLogo(x, y, canvas);
+        } else if (canvasDragState.dragTarget === 'nameplate-company') {
+            moveDraggedNameplateCompany(x, canvas);
         } else if (currentMode === 'text' && selectedTextId) {
             const item = textItems.find(t => t.id === selectedTextId);
             if (item) {
@@ -2800,9 +2912,10 @@ function initCanvasEvents() {
     canvas.onmouseup = function(e) {
         e.preventDefault();
         finishCanvasDrag();
-        canvas.style.cursor = isPointInsideNameplateLogo(
-            getCanvasCoords(e).x, getCanvasCoords(e).y
-        ) ? 'move' : 'default';
+        const coords = getCanvasCoords(e);
+        canvas.style.cursor = getNameplateDragCursor(
+            getNameplateDragTarget(coords.x, coords.y)
+        );
     };
 
     canvas.onmouseleave = function(e) {
@@ -2827,6 +2940,8 @@ function initCanvasEvents() {
 
         if (canvasDragState.dragTarget === 'nameplate-logo') {
             moveDraggedNameplateLogo(x, y, canvas);
+        } else if (canvasDragState.dragTarget === 'nameplate-company') {
+            moveDraggedNameplateCompany(x, canvas);
         } else if (currentMode === 'text' && selectedTextId) {
             const item = textItems.find(t => t.id === selectedTextId);
             if (item) {

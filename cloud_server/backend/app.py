@@ -100,7 +100,9 @@ NAMEPLATE_LOGO_MIME_FORMATS = {
     'image/jpeg': 'JPEG',
     'image/webp': 'WEBP',
 }
-NAMEPLATE_LOGO_CONFIG_KEYS = ('logoDataUrl', 'logoFileName', 'logoX', 'logoY')
+NAMEPLATE_DESIGN_CONFIG_KEYS = (
+    'logoDataUrl', 'logoFileName', 'logoX', 'logoY', 'companyX',
+)
 TEMPLATE_DAY_TIMEZONE = os.environ.get('TEMPLATE_DAY_TIMEZONE', 'Asia/Shanghai')
 try:
     TEMPLATE_DAY_TZ = ZoneInfo(TEMPLATE_DAY_TIMEZONE)
@@ -495,11 +497,11 @@ def normalize_nameplate_logo_data_url(value) -> str:
     return f'data:{mime_type};base64,{encoded}'
 
 
-def merge_nameplate_logo_config(config: dict, source_config: dict) -> dict:
-    """Keep logo payload and placement out of AI edits while preserving the template design."""
+def merge_nameplate_design_config(config: dict, source_config: dict) -> dict:
+    """Keep logo and company placement out of AI edits while preserving the design."""
     merged = dict(config or {})
     source = source_config if isinstance(source_config, dict) else {}
-    for key in NAMEPLATE_LOGO_CONFIG_KEYS:
+    for key in NAMEPLATE_DESIGN_CONFIG_KEYS:
         if key in source:
             merged[key] = source[key]
     return merged
@@ -533,6 +535,13 @@ def normalize_nameplate_template_config(raw_config) -> dict:
     ):
         config['logoX'] = min(max(int(round(logo_x)), 0), EPD_WIDTH - 1)
         config['logoY'] = min(max(int(round(logo_y)), 0), EPD_HEIGHT - 1)
+
+    company_x = raw_config.get('companyX')
+    if (
+        isinstance(company_x, (int, float)) and not isinstance(company_x, bool)
+        and math.isfinite(company_x)
+    ):
+        config['companyX'] = min(max(int(round(company_x)), 0), EPD_WIDTH - 1)
 
     sleep_interval = raw_config.get('sleepIntervalSeconds')
     if isinstance(sleep_interval, (int, float)) and not isinstance(sleep_interval, bool):
@@ -793,7 +802,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
 
     prompt_config = {
         key: value for key, value in normalize_nameplate_template_config(base_config).items()
-        if key not in NAMEPLATE_LOGO_CONFIG_KEYS
+        if key not in NAMEPLATE_DESIGN_CONFIG_KEYS
     }
     prompt_text = (
         '你是政务会议电子铭牌名单解析助手。请从用户上传的文字、图片或表格中提取需要下发到铭牌的姓名。'
@@ -871,7 +880,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
             raise RuntimeError('AI解析未返回文本')
 
         parsed = json.loads(output_text)
-        parsed_config = merge_nameplate_logo_config(
+        parsed_config = merge_nameplate_design_config(
             parsed.get('templateConfig', base_config), base_config
         )
         return build_nameplate_parse_result(
@@ -928,7 +937,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
     except Exception as e:
         raise RuntimeError(f'OpenAI 解析结果不是 JSON: {e}')
 
-    parsed_config = merge_nameplate_logo_config(
+    parsed_config = merge_nameplate_design_config(
         parsed.get('templateConfig') or base_config, base_config
     )
     return build_nameplate_parse_result(
