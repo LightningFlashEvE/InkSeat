@@ -32,32 +32,32 @@
             background: #eef5f7 !important;
         }
     </style>
-    <script src="theme.js?v=20260803saved1"></script>
-    <link rel="stylesheet" href="ui.css?v=20260803saved1">
+    <script src="theme.js?v=20260803dispatch1"></script>
+    <link rel="stylesheet" href="ui.css?v=20260803dispatch1">
 </head>
 <body class="dashboard-page nameplates-page meeting-device-page">
     <div class="meeting-page">
         <div class="app-shell">
             <aside class="meeting-sidebar" aria-label="主导航">
-                <a class="meeting-brand" href="index.html?v=20260803saved1" aria-label="会议牌管理">
+                <a class="meeting-brand" href="index.html?v=20260803dispatch1" aria-label="会议牌管理">
                     <span class="meeting-brand-mark" aria-hidden="true"></span>
                     <span>会议牌管理</span>
                 </a>
 
                 <nav class="meeting-nav">
-                    <a class="meeting-nav-item" href="index.html?v=20260803saved1">
+                    <a class="meeting-nav-item" href="index.html?v=20260803dispatch1">
                         <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
                         <span>设备</span>
                     </a>
-                    <a class="meeting-nav-item active" href="nameplates.html?v=20260803saved1" aria-current="page">
+                    <a class="meeting-nav-item active" href="nameplates.html?v=20260803dispatch1" aria-current="page">
                         <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
                         <span>名单下发</span>
                     </a>
-                    <a class="meeting-nav-item" href="control.html?v=20260803saved1">
+                    <a class="meeting-nav-item" href="control.html?v=20260803dispatch1">
                         <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
                         <span>模板设计</span>
                     </a>
-                    <a class="meeting-nav-item" href="settings.html?v=20260803saved1">
+                    <a class="meeting-nav-item" href="settings.html?v=20260803dispatch1">
                         <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
                         <span>设置</span>
                     </a>
@@ -198,7 +198,24 @@
         </div>
     </div>
 
-    <script src="auth.js?v=20260803saved1"></script>
-    <script src="nameplates.js?v=20260803saved1"></script>
+    <div class="meeting-modal nameplate-dispatch-modal" id="nameplateDispatchModal" hidden>
+        <div class="meeting-modal-backdrop" data-close-nameplate-dispatch></div>
+        <section class="meeting-modal-panel" role="dialog" aria-modal="true" aria-labelledby="nameplateDispatchModalTitle" tabindex="-1">
+            <div class="meeting-modal-head">
+                <div>
+                    <span class="nameplate-dispatch-modal-state is-loading" id="nameplateDispatchModalState">下发中</span>
+                    <h2 id="nameplateDispatchModalTitle">下发情况</h2>
+                </div>
+                <button class="meeting-modal-close" type="button" data-close-nameplate-dispatch aria-label="关闭">×</button>
+            </div>
+            <div class="nameplate-dispatch-modal-body" id="nameplateDispatchModalBody" aria-live="polite"></div>
+            <div class="nameplate-dispatch-modal-actions">
+                <button class="btn btn-primary" type="button" data-close-nameplate-dispatch>关闭</button>
+            </div>
+        </section>
+    </div>
+
+    <script src="auth.js?v=20260803dispatch1"></script>
+    <script src="nameplates.js?v=20260803dispatch1"></script>
 </body>
 </html>

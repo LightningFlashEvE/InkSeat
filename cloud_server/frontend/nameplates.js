@@ -2,6 +2,7 @@ let devices = [];
 let savedNameplateTemplates = [];
 let activeNameplateDesignConfig = {};
 let activeNameplateBackgroundStyle = 'formal_red';
+let nameplateDispatchModalReturnFocus = null;
 
 const API_BASE = '';
 const BUILTIN_NAMEPLATE_TEMPLATES = [
@@ -56,6 +57,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 function bindNameplateInputs() {
+    bindNameplateDispatchModal();
     const namesInput = document.getElementById('nameplateNamesInput');
     if (namesInput) {
         namesInput.addEventListener('input', updateNameplateDispatchHint);
@@ -75,6 +77,150 @@ function bindNameplateInputs() {
             }
         });
     }
+}
+
+function bindNameplateDispatchModal() {
+    const modal = document.getElementById('nameplateDispatchModal');
+    if (!modal) return;
+
+    modal.querySelectorAll('[data-close-nameplate-dispatch]').forEach(control => {
+        control.addEventListener('click', closeNameplateDispatchModal);
+    });
+
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && !modal.hidden) {
+            closeNameplateDispatchModal();
+        }
+    });
+}
+
+function openNameplateDispatchModal() {
+    const modal = document.getElementById('nameplateDispatchModal');
+    const panel = modal?.querySelector('.meeting-modal-panel');
+    if (!modal) return;
+
+    if (modal.hidden) {
+        nameplateDispatchModalReturnFocus = document.activeElement;
+    }
+    modal.hidden = false;
+    document.body.classList.add('nameplate-modal-open');
+    panel?.focus();
+}
+
+function closeNameplateDispatchModal() {
+    const modal = document.getElementById('nameplateDispatchModal');
+    if (!modal) return;
+
+    modal.hidden = true;
+    document.body.classList.remove('nameplate-modal-open');
+    if (nameplateDispatchModalReturnFocus?.focus) {
+        nameplateDispatchModalReturnFocus.focus();
+    }
+    nameplateDispatchModalReturnFocus = null;
+}
+
+function setNameplateDispatchModalState(text, tone) {
+    const state = document.getElementById('nameplateDispatchModalState');
+    if (!state) return;
+    state.textContent = text;
+    state.className = `nameplate-dispatch-modal-state is-${tone}`;
+}
+
+function showNameplateDispatchLoading(deviceCount, nameCount) {
+    const body = document.getElementById('nameplateDispatchModalBody');
+    const modal = document.getElementById('nameplateDispatchModal');
+    setNameplateDispatchModalState('下发中', 'loading');
+    if (modal) modal.setAttribute('aria-busy', 'true');
+    if (body) {
+        body.innerHTML = `
+            <div class="nameplate-dispatch-loading">
+                <span class="nameplate-dispatch-spinner" aria-hidden="true"></span>
+                <strong>正在生成并下发铭牌</strong>
+                <p>${escapeHtml(nameCount)} 个姓名 · ${escapeHtml(deviceCount)} 台目标设备</p>
+            </div>
+        `;
+    }
+    openNameplateDispatchModal();
+}
+
+function renderNameplateDispatchList(title, items, type) {
+    if (!Array.isArray(items) || items.length === 0) return '';
+    const visibleItems = items.slice(0, 20);
+    const rows = visibleItems.map(item => {
+        if (type === 'success') {
+            const device = item.deviceName || item.deviceId || '设备';
+            const version = item.imageVersion !== undefined ? ` · v${item.imageVersion}` : '';
+            return `<li><strong>${escapeHtml(item.name || item.activeContentLabel || '铭牌')}</strong><span>${escapeHtml(device)}${escapeHtml(version)}</span></li>`;
+        }
+        if (type === 'failed') {
+            const device = item.deviceName || item.deviceId || '设备';
+            return `<li><strong>${escapeHtml(item.name || device)}</strong><span>${escapeHtml(device)} · ${escapeHtml(item.error || '处理失败')}</span></li>`;
+        }
+        if (type === 'skipped') {
+            return `<li><strong>${escapeHtml(item)}</strong><span>没有可分配的设备</span></li>`;
+        }
+        const device = item.deviceName || item.deviceId || '设备';
+        return `<li><strong>${escapeHtml(device)}</strong><span>没有可分配的姓名</span></li>`;
+    }).join('');
+    const more = items.length > visibleItems.length
+        ? `<p class="nameplate-dispatch-more">另有 ${items.length - visibleItems.length} 条未展开</p>`
+        : '';
+    return `
+        <section class="nameplate-dispatch-section is-${type}">
+            <h3>${escapeHtml(title)} <span>${items.length}</span></h3>
+            <ul>${rows}</ul>
+            ${more}
+        </section>
+    `;
+}
+
+function renderNameplateDispatchModal(result) {
+    const modal = document.getElementById('nameplateDispatchModal');
+    const body = document.getElementById('nameplateDispatchModalBody');
+    if (!body) return;
+
+    const assignments = Array.isArray(result?.assignments) ? result.assignments : [];
+    const failed = Array.isArray(result?.failed) ? result.failed : [];
+    const skippedNames = Array.isArray(result?.skippedNames) ? result.skippedNames : [];
+    const unassignedDevices = Array.isArray(result?.unassignedDevices) ? result.unassignedDevices : [];
+    const assignedCount = Number.isFinite(Number(result?.assignedCount))
+        ? Number(result.assignedCount)
+        : assignments.length;
+    const hasExceptions = failed.length > 0 || skippedNames.length > 0 || unassignedDevices.length > 0;
+
+    setNameplateDispatchModalState(hasExceptions ? '部分完成' : '全部完成', hasExceptions ? 'warning' : 'success');
+    if (modal) modal.setAttribute('aria-busy', 'false');
+    body.innerHTML = `
+        <div class="nameplate-dispatch-summary">
+            <div class="is-success"><span>成功</span><strong>${assignedCount}</strong></div>
+            <div class="is-failed"><span>失败</span><strong>${failed.length}</strong></div>
+            <div><span>姓名未分配</span><strong>${skippedNames.length}</strong></div>
+            <div><span>设备未分配</span><strong>${unassignedDevices.length}</strong></div>
+        </div>
+        <div class="nameplate-dispatch-notice ${result?.deadlineReached ? 'is-warning' : ''}">
+            ${result?.deadlineReached ? '批量处理达到时间上限，未处理项目可再次下发。' : '下发内容已保存，设备将在下次唤醒时刷新。'}
+        </div>
+        ${renderNameplateDispatchList('下发成功', assignments, 'success')}
+        ${renderNameplateDispatchList('下发失败', failed, 'failed')}
+        ${renderNameplateDispatchList('未分配姓名', skippedNames, 'skipped')}
+        ${renderNameplateDispatchList('未分配设备', unassignedDevices, 'unassigned')}
+    `;
+    openNameplateDispatchModal();
+}
+
+function renderNameplateDispatchFailure(message, result = {}) {
+    const modal = document.getElementById('nameplateDispatchModal');
+    const body = document.getElementById('nameplateDispatchModalBody');
+    const failed = Array.isArray(result?.failed) ? result.failed : [];
+    setNameplateDispatchModalState('下发失败', 'error');
+    if (modal) modal.setAttribute('aria-busy', 'false');
+    if (body) {
+        body.innerHTML = `
+            <div class="nameplate-dispatch-notice is-error">${escapeHtml(message || '名单下发失败，请稍后重试')}</div>
+            ${renderNameplateDispatchList('失败项目', failed, 'failed')}
+        `;
+    }
+    openNameplateDispatchModal();
 }
 
 function log(message, type = 'info') {
@@ -440,6 +586,7 @@ async function dispatchNameplates() {
         submitButton.disabled = true;
         submitButton.textContent = '下发中...';
     }
+    showNameplateDispatchLoading(selectedDeviceIds.length, parseNameInput().length);
 
     try {
         const templateConfig = getCurrentTemplateConfig();
@@ -459,10 +606,13 @@ async function dispatchNameplates() {
 
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result.success) {
-            throw new Error(result.error || '名单下发失败');
+            const dispatchError = new Error(result.error || '名单下发失败');
+            dispatchError.result = result;
+            throw dispatchError;
         }
 
         renderNameplateResult(result);
+        renderNameplateDispatchModal(result);
         const skippedText = result.skippedNames && result.skippedNames.length
             ? `，${result.skippedNames.length} 个姓名未分配`
             : '';
@@ -478,6 +628,7 @@ async function dispatchNameplates() {
     } catch (error) {
         console.error('名单下发失败:', error);
         log('名单下发失败: ' + error.message, 'error');
+        renderNameplateDispatchFailure(error.message, error.result);
     } finally {
         if (submitButton) {
             submitButton.disabled = false;

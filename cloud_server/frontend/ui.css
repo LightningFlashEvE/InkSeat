@@ -542,6 +542,257 @@ body.dashboard-page {
     background: rgba(255, 191, 77, 0.08);
 }
 
+body.nameplates-page.nameplate-modal-open {
+    overflow: hidden;
+}
+
+.nameplate-dispatch-modal .meeting-modal-panel {
+    width: min(680px, 100%);
+    max-height: calc(100vh - 48px);
+    display: flex;
+    flex-direction: column;
+}
+
+.nameplate-dispatch-modal .meeting-modal-head {
+    align-items: flex-start;
+}
+
+.nameplate-dispatch-modal .meeting-modal-head > div {
+    display: grid;
+    gap: 5px;
+}
+
+.nameplate-dispatch-modal-state {
+    width: max-content;
+    border-radius: 999px;
+    padding: 4px 9px;
+    background: rgba(123, 215, 255, 0.12);
+    color: var(--ui-cyan);
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.nameplate-dispatch-modal-state.is-success {
+    background: rgba(125, 240, 193, 0.14);
+    color: var(--ui-ok);
+}
+
+.nameplate-dispatch-modal-state.is-warning {
+    background: rgba(255, 191, 77, 0.14);
+    color: var(--ui-warn);
+}
+
+.nameplate-dispatch-modal-state.is-error {
+    background: rgba(255, 97, 90, 0.14);
+    color: var(--ui-danger);
+}
+
+.nameplate-dispatch-modal-body {
+    min-height: 150px;
+    overflow: auto;
+    display: grid;
+    gap: 14px;
+    padding-right: 4px;
+}
+
+.nameplate-dispatch-loading {
+    min-height: 190px;
+    display: grid;
+    place-items: center;
+    align-content: center;
+    gap: 10px;
+    text-align: center;
+}
+
+.nameplate-dispatch-loading strong {
+    color: var(--ui-text);
+}
+
+.nameplate-dispatch-loading p {
+    margin: 0;
+    color: var(--ui-text-muted);
+    font-size: 13px;
+}
+
+.nameplate-dispatch-spinner {
+    width: 34px;
+    height: 34px;
+    border: 3px solid rgba(123, 215, 255, 0.18);
+    border-top-color: var(--ui-cyan);
+    border-radius: 50%;
+    animation: nameplate-dispatch-spin 0.8s linear infinite;
+}
+
+@keyframes nameplate-dispatch-spin {
+    to { transform: rotate(360deg); }
+}
+
+.nameplate-dispatch-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.nameplate-dispatch-summary > div {
+    min-width: 0;
+    display: grid;
+    gap: 4px;
+    padding: 11px;
+    border: 1px solid var(--ui-line-soft);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.045);
+}
+
+.nameplate-dispatch-summary span {
+    color: var(--ui-text-muted);
+    font-size: 11px;
+}
+
+.nameplate-dispatch-summary strong {
+    color: var(--ui-text);
+    font-size: 22px;
+}
+
+.nameplate-dispatch-summary .is-success strong {
+    color: var(--ui-ok);
+}
+
+.nameplate-dispatch-summary .is-failed strong {
+    color: var(--ui-danger);
+}
+
+.nameplate-dispatch-notice {
+    border: 1px solid rgba(125, 240, 193, 0.26);
+    border-radius: 12px;
+    padding: 11px 12px;
+    background: rgba(125, 240, 193, 0.08);
+    color: var(--ui-text-muted);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.nameplate-dispatch-notice.is-warning {
+    border-color: rgba(255, 191, 77, 0.32);
+    background: rgba(255, 191, 77, 0.09);
+}
+
+.nameplate-dispatch-notice.is-error {
+    border-color: rgba(255, 97, 90, 0.34);
+    background: rgba(255, 97, 90, 0.09);
+    color: var(--ui-text);
+}
+
+.nameplate-dispatch-section {
+    display: grid;
+    gap: 8px;
+}
+
+.nameplate-dispatch-section h3 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--ui-text);
+    font-size: 13px;
+}
+
+.nameplate-dispatch-section h3 span {
+    color: var(--ui-text-dim);
+}
+
+.nameplate-dispatch-section ul {
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 6px;
+    list-style: none;
+}
+
+.nameplate-dispatch-section li {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 9px 10px;
+    border: 1px solid var(--ui-line-soft);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.035);
+}
+
+.nameplate-dispatch-section li strong,
+.nameplate-dispatch-section li span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nameplate-dispatch-section li strong {
+    color: var(--ui-text);
+    font-size: 13px;
+}
+
+.nameplate-dispatch-section li span,
+.nameplate-dispatch-more {
+    color: var(--ui-text-muted);
+    font-size: 12px;
+}
+
+.nameplate-dispatch-section.is-success li {
+    border-color: rgba(125, 240, 193, 0.18);
+}
+
+.nameplate-dispatch-section.is-failed li {
+    border-color: rgba(255, 97, 90, 0.24);
+}
+
+.nameplate-dispatch-more {
+    margin: 0;
+}
+
+.nameplate-dispatch-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 16px;
+}
+
+.nameplate-dispatch-modal-actions .btn {
+    min-width: 110px;
+}
+
+@media (max-width: 600px) {
+    .nameplate-dispatch-modal {
+        padding: 12px;
+    }
+
+    .nameplate-dispatch-modal .meeting-modal-panel {
+        max-height: calc(100vh - 24px);
+        padding: 18px;
+    }
+
+    .nameplate-dispatch-summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .nameplate-dispatch-section li {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .nameplate-dispatch-section li strong,
+    .nameplate-dispatch-section li span {
+        width: 100%;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .nameplate-dispatch-spinner {
+        animation: none;
+    }
+}
+
 .nameplate-device-toolbar {
     display: flex;
     align-items: center;

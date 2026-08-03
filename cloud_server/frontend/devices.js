@@ -517,7 +517,7 @@ function setSignalIndicator(id, rssi) {
 }
 
 function openDevice(deviceId) {
-    window.location.href = `control.html?v=20260803saved1&deviceId=${encodeURIComponent(deviceId)}`;
+    window.location.href = `control.html?v=20260803dispatch1&deviceId=${encodeURIComponent(deviceId)}`;
 }
 
 let pollingInterval = null;
