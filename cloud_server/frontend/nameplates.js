@@ -1,6 +1,7 @@
 let devices = [];
 let savedNameplateTemplates = [];
 let activeNameplateDesignConfig = {};
+let activeNameplateBackgroundStyle = 'formal_red';
 
 const API_BASE = '';
 const BUILTIN_NAMEPLATE_TEMPLATES = [
@@ -70,6 +71,7 @@ function bindNameplateInputs() {
                 applySavedNameplateTemplateById(savedTemplateSelect.value);
             } else {
                 activeNameplateDesignConfig = {};
+                activeNameplateBackgroundStyle = 'formal_red';
             }
         });
     }
@@ -127,7 +129,7 @@ function parseNameInput() {
 
 function getCurrentTemplateConfig() {
     return {
-        backgroundStyle: document.getElementById('nameplateBatchStyle')?.value || 'formal_red',
+        backgroundStyle: activeNameplateBackgroundStyle,
         title: document.getElementById('nameplateBatchTitle')?.value?.trim() || '',
         subtitle: document.getElementById('nameplateBatchSubtitle')?.value?.trim() || '',
         sleepIntervalSeconds: parseInt(document.getElementById('nameplateBatchWakeInterval')?.value || '43200', 10),
@@ -195,14 +197,13 @@ function applySavedNameplateTemplateById(templateId) {
 
     const config = template.templateConfig || {};
     activeNameplateDesignConfig = pickNameplateDesignConfig(config);
+    activeNameplateBackgroundStyle = config.backgroundStyle || 'formal_red';
 
-    const styleSelect = document.getElementById('nameplateBatchStyle');
     const titleInput = document.getElementById('nameplateBatchTitle');
     const subtitleInput = document.getElementById('nameplateBatchSubtitle');
     const wakeSelect = document.getElementById('nameplateBatchWakeInterval');
     const savedTemplateSelect = document.getElementById('nameplateSavedTemplateSelect');
 
-    if (styleSelect && config.backgroundStyle) styleSelect.value = config.backgroundStyle;
     if (titleInput && config.title !== undefined) titleInput.value = config.title || '';
     if (subtitleInput && config.subtitle !== undefined) subtitleInput.value = config.subtitle || '';
     if (wakeSelect && config.sleepIntervalSeconds) wakeSelect.value = String(config.sleepIntervalSeconds);
@@ -218,13 +219,10 @@ function applyParsedDraft(parsed) {
     }
 
     const config = parsed.templateConfig || {};
-    activeNameplateDesignConfig = pickNameplateDesignConfig(config);
-    const styleSelect = document.getElementById('nameplateBatchStyle');
     const titleInput = document.getElementById('nameplateBatchTitle');
     const subtitleInput = document.getElementById('nameplateBatchSubtitle');
     const wakeSelect = document.getElementById('nameplateBatchWakeInterval');
 
-    if (styleSelect && config.backgroundStyle) styleSelect.value = config.backgroundStyle;
     if (titleInput && config.title !== undefined) titleInput.value = config.title || '';
     if (subtitleInput && config.subtitle !== undefined) subtitleInput.value = config.subtitle || '';
     if (wakeSelect && config.sleepIntervalSeconds) wakeSelect.value = String(config.sleepIntervalSeconds);
