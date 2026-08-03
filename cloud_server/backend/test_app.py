@@ -994,6 +994,22 @@ class BackendSecurityTests(unittest.TestCase):
             parsed['names'], ['张三', '李四', 'Alexander Montgomery']
         )
 
+    def test_nameplate_ai_output_accepts_minimax_fenced_object_variant(self):
+        output = """```json
+{
+  "template": {"backgroundStyle": "formal_red", "title": "嘉宾"},
+  "names": [{"name": "张三"}, {"name": "李四"}],
+  "warnings": ["请核对\\'张三\\'"]
+}
+```"""
+
+        parsed = backend._parse_nameplate_ai_output(output)
+
+        self.assertEqual(parsed['names'], ['张三', '李四'])
+        self.assertEqual(parsed['templateConfig']['title'], '嘉宾')
+        self.assertEqual(parsed['warnings'], ["请核对'张三'"])
+        self.assertEqual(parsed['sourceSummary'], 'AI解析')
+
     def test_nameplate_ai_retry_shares_one_sub_120_second_budget(self):
         logo_data_url = make_test_logo_data_url()
         first_response = SimpleNamespace(

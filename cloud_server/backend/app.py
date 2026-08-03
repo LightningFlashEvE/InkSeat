@@ -843,6 +843,63 @@ def _extract_openai_response_text(resp_json: dict) -> str:
     return '\n'.join(texts)
 
 
+def _parse_nameplate_ai_output(output_text: str) -> dict:
+    """Parse strict JSON plus common OpenAI-compatible provider variants."""
+    if not isinstance(output_text, str) or not output_text.strip():
+        raise ValueError('AI解析未返回文本')
+
+    cleaned = output_text.strip()
+    cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s*```$', '', cleaned)
+
+    first_brace = cleaned.find('{')
+    last_brace = cleaned.rfind('}')
+    if first_brace < 0 or last_brace < first_brace:
+        raise ValueError('AI解析结果不包含 JSON 对象')
+    cleaned = cleaned[first_brace:last_brace + 1]
+
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        # Some compatible providers escape apostrophes inside JSON strings even
+        # though JSON does not define \' as a valid escape sequence.
+        parsed = json.loads(cleaned.replace("\\'", "'"))
+
+    if not isinstance(parsed, dict):
+        raise ValueError('AI解析结果必须是 JSON 对象')
+
+    raw_names = parsed.get('names') or []
+    names = []
+    if isinstance(raw_names, list):
+        for item in raw_names:
+            if isinstance(item, str):
+                names.append(item)
+            elif isinstance(item, dict):
+                candidate = item.get('name') or item.get('fullName')
+                if isinstance(candidate, str):
+                    names.append(candidate)
+
+    template_config = parsed.get('templateConfig')
+    if not isinstance(template_config, dict):
+        template_config = parsed.get('template')
+    if not isinstance(template_config, dict):
+        template_config = {}
+
+    warnings = parsed.get('warnings') or []
+    if isinstance(warnings, str):
+        warnings = [warnings]
+    elif not isinstance(warnings, list):
+        warnings = []
+    warnings = [str(item).strip() for item in warnings if str(item).strip()]
+
+    return {
+        'names': names,
+        'templateConfig': template_config,
+        'warnings': warnings,
+        'sourceSummary': str(parsed.get('sourceSummary') or 'AI解析').strip(),
+    }
+
+
 def _nameplate_ai_request_timeout(deadline: float) -> tuple[float, float]:
     """Return connect/read timeouts whose combined budget fits the deadline."""
     remaining = deadline - time.monotonic()
@@ -891,7 +948,9 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
     }
     prompt_text = (
         '你是政务会议电子铭牌名单解析助手。请从用户上传的文字、图片或表格中提取需要下发到铭牌的姓名。'
-        '输出必须符合 JSON Schema。只提取人名，不要把单位、职务、标题、设备编号、电话、序号当作姓名。'
+        '只返回一个 JSON 对象，不要使用 Markdown 代码块。输出必须符合 JSON Schema。'
+        'names 必须是姓名字符串数组，模板字段必须命名为 templateConfig。'
+        '只提取人名，不要把单位、职务、标题、设备编号、电话、序号当作姓名。'
         '保持名单原始顺序。若文本中出现职务或英文副标题，可作为 title；公司名称可作为 subtitle。'
         'backgroundStyle 可使用 formal_red=Pheno红色底栏、formal_green=Pheno绿色底栏、plain=Pheno绿色横幅、formal_blue=Pheno职务名片。'
         '如果不确定，请把疑问写入 warnings。'
@@ -964,7 +1023,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
         if not output_text:
             raise RuntimeError('AI解析未返回文本')
 
-        parsed = json.loads(output_text)
+        parsed = _parse_nameplate_ai_output(output_text)
         parsed_config = merge_nameplate_design_config(
             parsed.get('templateConfig', base_config), base_config
         )
@@ -1018,7 +1077,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
     if not output_text:
         raise RuntimeError('OpenAI 解析未返回文本')
     try:
-        parsed = json.loads(output_text)
+        parsed = _parse_nameplate_ai_output(output_text)
     except Exception as e:
         raise RuntimeError(f'OpenAI 解析结果不是 JSON: {e}')
 
