@@ -11,3 +11,4 @@ opencv-python-headless==4.8.1.78
 qrcode[pil]==7.4.2
 requests==2.33.0
 openpyxl==3.1.5
+python-docx==1.2.0

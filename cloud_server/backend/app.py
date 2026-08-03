@@ -367,6 +367,13 @@ NAMEPLATE_MAX_PARSE_TOTAL_BYTES = int(os.environ.get('NAMEPLATE_MAX_PARSE_TOTAL_
 NAMEPLATE_MAX_PARSE_TEXT_CHARS = int(os.environ.get('NAMEPLATE_MAX_PARSE_TEXT_CHARS', 20_000))
 NAMEPLATE_MAX_XLSX_ENTRIES = 200
 NAMEPLATE_MAX_XLSX_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
+NAMEPLATE_MAX_DOCX_ENTRIES = 200
+NAMEPLATE_MAX_DOCX_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
+NAMEPLATE_MAX_AI_IMAGES = 8
+NAMEPLATE_MAX_AI_IMAGE_BYTES = 16 * 1024 * 1024
+NAMEPLATE_DOCX_IMAGE_MIME_TYPES = {
+    'image/png', 'image/jpeg', 'image/webp', 'image/gif',
+}
 # Keep upstream AI parsing and serial batch rendering below Gunicorn's 120s
 # worker timeout. The request helpers consume these as end-to-end deadlines,
 # rather than granting every retry a fresh timeout.
@@ -388,12 +395,18 @@ NAMEPLATE_AI_MODEL = (
     or 'gpt-4.1-mini'
 )
 NAMEPLATE_AI_API_MODE = os.environ.get('NAMEPLATE_AI_API_MODE', 'responses').strip().lower()
+
+
+class NameplateParseInputError(ValueError):
+    """Safe validation error that may be returned to an authenticated user."""
+
+
 NAMEPLATE_LABEL_PREFIXES = {
     '名单', '姓名', '人员', '参会人', '参会人员', '嘉宾', '领导', '铭牌', '下发名单', '姓名名单'
 }
 NAMEPLATE_REJECT_VALUES = {
     '姓名', '名字', '名单', '人员', '参会人', '参会人员', '嘉宾', '领导', '单位',
-    '部门', '职务', '职位', '序号', '编号', '备注', '电话', '手机', '设备', '设备号',
+    '部门', '职务', '职位', '序号', '编号', '备注', '电话', '手机', '设备', '设备号', '文件',
     'device', 'name', 'title', 'department', 'position', 'no'
 }
 NAMEPLATE_LEADING_WORDS = (
@@ -703,6 +716,136 @@ def validate_xlsx_archive(raw: bytes) -> None:
         raise ValueError('表格不是有效的 XLSX 压缩包') from exc
 
 
+def validate_docx_archive(raw: bytes) -> None:
+    """Validate DOCX package structure and bound ZIP expansion before parsing."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            entries = archive.infolist()
+            if len(entries) > NAMEPLATE_MAX_DOCX_ENTRIES:
+                raise NameplateParseInputError('Word 文档文件项过多')
+
+            entry_names = set()
+            total_uncompressed = 0
+            for entry in entries:
+                name = str(entry.filename or '')
+                normalized = name.replace('\\', '/')
+                path_parts = [part for part in normalized.split('/') if part not in ('', '.')]
+                if (
+                    not normalized
+                    or '\x00' in normalized
+                    or normalized.startswith('/')
+                    or re.match(r'^[A-Za-z]:', normalized)
+                    or '..' in path_parts
+                ):
+                    raise NameplateParseInputError('Word 文档包含异常文件路径')
+                if entry.flag_bits & 0x1:
+                    raise NameplateParseInputError('暂不支持加密的 Word 文档')
+                if entry.file_size < 0 or entry.compress_size < 0:
+                    raise NameplateParseInputError('Word 文档压缩包元数据无效')
+
+                entry_names.add(normalized)
+                if not entry.is_dir():
+                    total_uncompressed += entry.file_size
+                    if total_uncompressed > NAMEPLATE_MAX_DOCX_UNCOMPRESSED_BYTES:
+                        raise NameplateParseInputError('Word 文档解压后体积超过限制')
+
+            required_entries = {'[Content_Types].xml', 'word/document.xml'}
+            if not required_entries.issubset(entry_names):
+                raise NameplateParseInputError('Word 文档结构不完整')
+    except zipfile.BadZipFile as exc:
+        raise NameplateParseInputError('文件不是有效的 DOCX 文档') from exc
+
+
+def _normalize_docx_text(value) -> str:
+    parts = [part.strip() for part in re.split(r'[\r\n]+', str(value or '')) if part.strip()]
+    return ' '.join(parts)
+
+
+def extract_docx_content(raw: bytes, filename: str, max_images: int,
+                         max_image_bytes: int) -> tuple[str, list[dict], list[str], int]:
+    """Extract ordered body text/tables and referenced raster images from DOCX."""
+    validate_docx_archive(raw)
+    try:
+        from docx import Document
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+    except ImportError as exc:
+        raise NameplateParseInputError('服务器缺少 python-docx，暂不能解析 Word 文档') from exc
+
+    try:
+        document = Document(io.BytesIO(raw))
+    except Exception as exc:
+        raise NameplateParseInputError('Word 文档内容无法读取') from exc
+
+    text_lines = []
+    images = []
+    warnings = []
+    image_bytes = 0
+    seen_relationship_ids = set()
+    skipped_limit = False
+    skipped_format = False
+    relationship_attribute = (
+        '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed'
+    )
+
+    def collect_images(element):
+        nonlocal image_bytes, skipped_limit, skipped_format
+        for node in element.iter():
+            if not str(node.tag).endswith('}blip'):
+                continue
+            relationship_id = node.get(relationship_attribute)
+            if not relationship_id or relationship_id in seen_relationship_ids:
+                continue
+            seen_relationship_ids.add(relationship_id)
+            part = document.part.related_parts.get(relationship_id)
+            if part is None:
+                continue
+            mime_type = str(getattr(part, 'content_type', '') or '').lower()
+            if mime_type not in NAMEPLATE_DOCX_IMAGE_MIME_TYPES:
+                skipped_format = True
+                continue
+            blob = bytes(getattr(part, 'blob', b'') or b'')
+            if not blob:
+                continue
+            if len(images) >= max_images or image_bytes + len(blob) > max_image_bytes:
+                skipped_limit = True
+                continue
+            part_name = str(getattr(part, 'partname', '') or '')
+            images.append({
+                'filename': part_name.rsplit('/', 1)[-1] or f'{filename}-image',
+                'mimeType': mime_type,
+                'dataUrl': f"data:{mime_type};base64,{base64.b64encode(blob).decode('ascii')}",
+            })
+            image_bytes += len(blob)
+
+    for child in document.element.body.iterchildren():
+        if str(child.tag).endswith('}p'):
+            paragraph_text = _normalize_docx_text(Paragraph(child, document).text)
+            if paragraph_text:
+                text_lines.append(paragraph_text)
+        elif str(child.tag).endswith('}tbl'):
+            table = Table(child, document)
+            for row in table.rows:
+                cells = []
+                for cell in row.cells:
+                    cell_text = _normalize_docx_text(cell.text)
+                    if cell_text and (not cells or cells[-1] != cell_text):
+                        cells.append(cell_text)
+                if cells:
+                    text_lines.append('\t'.join(cells))
+        collect_images(child)
+
+    if skipped_limit:
+        warnings.append(
+            f'{filename} 的部分内嵌图片因数量或总大小限制未参与识别'
+        )
+    if skipped_format:
+        warnings.append(
+            f'{filename} 包含暂不支持识别的图片格式，已跳过'
+        )
+    return '\n'.join(text_lines), images, warnings, image_bytes
+
+
 def extract_spreadsheet_text(raw: bytes, filename: str) -> tuple[str, list[str]]:
     warnings = []
     suffix = Path(filename or '').suffix.lower()
@@ -750,6 +893,8 @@ def collect_nameplate_parse_sources(req) -> tuple[str, list[dict], list[str], li
     filenames = []
     text_parts = []
     image_parts = []
+    ai_image_bytes = 0
+    standalone_image_limit_warned = False
 
     if req.content_type and req.content_type.startswith('application/json'):
         data = req.get_json() or {}
@@ -788,11 +933,39 @@ def collect_nameplate_parse_sources(req) -> tuple[str, list[dict], list[str], li
         if mime_type.startswith('image/') or suffix in ('.png', '.jpg', '.jpeg', '.webp', '.gif'):
             if suffix == '.gif':
                 warnings.append(f'{filename} 如为动图，仅建议上传静态图片')
-            image_parts.append({
-                'filename': filename,
-                'mimeType': mime_type or 'image/png',
-                'dataUrl': f"data:{mime_type or 'image/png'};base64,{base64.b64encode(raw).decode('ascii')}",
-            })
+            if (
+                len(image_parts) >= NAMEPLATE_MAX_AI_IMAGES
+                or ai_image_bytes + len(raw) > NAMEPLATE_MAX_AI_IMAGE_BYTES
+            ):
+                if not standalone_image_limit_warned:
+                    warnings.append('部分图片因数量或总大小限制未参与识别')
+                    standalone_image_limit_warned = True
+            else:
+                image_parts.append({
+                    'filename': filename,
+                    'mimeType': mime_type or 'image/png',
+                    'dataUrl': f"data:{mime_type or 'image/png'};base64,{base64.b64encode(raw).decode('ascii')}",
+                })
+                ai_image_bytes += len(raw)
+            continue
+
+        if suffix == '.doc':
+            raise NameplateParseInputError(
+                '暂不支持旧版 .doc 文件，请在 Word 中另存为 .docx 后上传'
+            )
+
+        if suffix == '.docx':
+            docx_text, docx_images, docx_warnings, docx_image_bytes = extract_docx_content(
+                raw,
+                filename,
+                max(0, NAMEPLATE_MAX_AI_IMAGES - len(image_parts)),
+                max(0, NAMEPLATE_MAX_AI_IMAGE_BYTES - ai_image_bytes),
+            )
+            warnings.extend(docx_warnings)
+            if docx_text:
+                text_parts.append(f'文件: {filename}\n{docx_text}')
+            image_parts.extend(docx_images)
+            ai_image_bytes += docx_image_bytes
             continue
 
         extracted_text, file_warnings = extract_spreadsheet_text(raw, filename)
@@ -3753,7 +3926,7 @@ def dispatch_nameplates():
 @app.route('/api/nameplates/parse', methods=['POST'])
 @login_required
 def parse_nameplates():
-    """把用户上传的文字/图片/表格解析成待确认的铭牌草稿。"""
+    """把用户上传的文字/图片/Word/表格解析成待确认的铭牌草稿。"""
     try:
         request_json = request.get_json(silent=True) or {} if request.is_json else {}
         raw_template_config = request_json.get('templateConfig', {})
@@ -3770,7 +3943,7 @@ def parse_nameplates():
         source_text, image_parts, warnings, filenames = collect_nameplate_parse_sources(request)
 
         if not source_text.strip() and not image_parts:
-            return jsonify({'success': False, 'error': '请先输入文字或上传图片/表格'}), 400
+            return jsonify({'success': False, 'error': '请先输入文字或上传图片、Word、表格'}), 400
 
         local_names = parse_nameplate_names_from_text(source_text)
         if not filenames:
@@ -3803,6 +3976,8 @@ def parse_nameplates():
             result['sourceFiles'] = filenames
 
         return jsonify({'success': True, 'parsed': result})
+    except NameplateParseInputError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
     except ValueError:
         return jsonify({'success': False, 'error': '上传内容超过限制或格式无效'}), 400
     except Exception as e:

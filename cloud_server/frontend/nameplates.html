@@ -32,32 +32,32 @@
             background: #eef5f7 !important;
         }
     </style>
-    <script src="theme.js?v=20260803nameparse1"></script>
-    <link rel="stylesheet" href="ui.css?v=20260803nameparse1">
+    <script src="theme.js?v=20260803docx1"></script>
+    <link rel="stylesheet" href="ui.css?v=20260803docx1">
 </head>
 <body class="dashboard-page nameplates-page meeting-device-page">
     <div class="meeting-page">
         <div class="app-shell">
             <aside class="meeting-sidebar" aria-label="主导航">
-                <a class="meeting-brand" href="index.html?v=20260803nameparse1" aria-label="会议牌管理">
+                <a class="meeting-brand" href="index.html?v=20260803docx1" aria-label="会议牌管理">
                     <span class="meeting-brand-mark" aria-hidden="true"></span>
                     <span>会议牌管理</span>
                 </a>
 
                 <nav class="meeting-nav">
-                    <a class="meeting-nav-item" href="index.html?v=20260803nameparse1">
+                    <a class="meeting-nav-item" href="index.html?v=20260803docx1">
                         <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
                         <span>设备</span>
                     </a>
-                    <a class="meeting-nav-item active" href="nameplates.html?v=20260803nameparse1" aria-current="page">
+                    <a class="meeting-nav-item active" href="nameplates.html?v=20260803docx1" aria-current="page">
                         <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
                         <span>名单下发</span>
                     </a>
-                    <a class="meeting-nav-item" href="control.html?v=20260803nameparse1">
+                    <a class="meeting-nav-item" href="control.html?v=20260803docx1">
                         <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
                         <span>模板设计</span>
                     </a>
-                    <a class="meeting-nav-item" href="settings.html?v=20260803nameparse1">
+                    <a class="meeting-nav-item" href="settings.html?v=20260803docx1">
                         <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
                         <span>设置</span>
                     </a>
@@ -75,7 +75,7 @@
                     <div class="hero-title">
                         <div>
                             <h1>名单下发</h1>
-                            <p>上传图片、文字或表格生成下发草稿，确认名单和模板后再把姓名下发到对应墨水屏铭牌。</p>
+                            <p>上传图片、文字、Word 或表格生成下发草稿，确认名单和模板后再把姓名下发到对应墨水屏铭牌。</p>
                         </div>
                     </div>
                 </div>
@@ -95,9 +95,9 @@
                         <textarea id="nameplateAiTextInput" rows="7" placeholder="支持标准名单：&#10;张三&#10;李四&#10;&#10;也支持非标准内容：&#10;请把明天会议的张三、李四生成红色底栏铭牌，职务为 Technical Expert。"></textarea>
                     </div>
                     <div class="ai-upload-box">
-                        <label for="nameplateAiFiles">上传图片 / 表格</label>
-                        <input id="nameplateAiFiles" type="file" multiple accept=".png,.jpg,.jpeg,.webp,.gif,.txt,.csv,.tsv,.xlsx,.xlsm,image/png,image/jpeg,image/webp,image/gif,text/plain,text/csv">
-                        <div class="ai-upload-note">支持图片、TXT、CSV、TSV、XLSX。图片识别需要服务器配置 NAMEPLATE_AI_API_KEY。</div>
+                        <label for="nameplateAiFiles">上传图片 / Word / 表格</label>
+                        <input id="nameplateAiFiles" type="file" multiple accept=".png,.jpg,.jpeg,.webp,.gif,.txt,.csv,.tsv,.xlsx,.xlsm,.docx,image/png,image/jpeg,image/webp,image/gif,text/plain,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+                        <div class="ai-upload-note">支持图片、DOCX、TXT、CSV、TSV、XLSX。Word 内嵌图片和普通图片识别需要服务器配置 NAMEPLATE_AI_API_KEY。</div>
                         <button class="btn btn-primary" type="button" id="nameplateAiParseBtn" onclick="parseNameplateDraft()">解析名单</button>
                     </div>
                 </div>
@@ -253,7 +253,7 @@
         </section>
     </div>
 
-    <script src="auth.js?v=20260803nameparse1"></script>
-    <script src="nameplates.js?v=20260803nameparse1"></script>
+    <script src="auth.js?v=20260803docx1"></script>
+    <script src="nameplates.js?v=20260803docx1"></script>
 </body>
 </html>

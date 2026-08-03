@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from docx import Document
 from PIL import Image
 
 
@@ -56,6 +57,12 @@ def make_test_logo_data_url(color=(0, 0, 255, 255), size=(40, 20)):
     image.save(buffer, format='PNG')
     encoded = base64.b64encode(buffer.getvalue()).decode('ascii')
     return f'data:image/png;base64,{encoded}'
+
+
+def serialize_test_docx(document) -> bytes:
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
 
 
 class FakeCursor:
@@ -1115,6 +1122,183 @@ class BackendSecurityTests(unittest.TestCase):
 
         self.assertEqual(text, '')
         self.assertTrue(any('解压后体积' in warning for warning in warnings))
+
+    def test_docx_extracts_body_paragraphs_and_tables_in_order(self):
+        document = Document()
+        document.add_paragraph('中山市交流会名单')
+        first_table = document.add_table(rows=1, cols=3)
+        first_table.rows[0].cells[0].text = '姓名'
+        first_table.rows[0].cells[1].text = '来访嘉宾'
+        first_table.rows[0].cells[2].text = '职位'
+        for name, company, title in (
+            ('张伟', '甲公司', '总经理'),
+            ('张伟', '乙公司', '副总经理'),
+        ):
+            cells = first_table.add_row().cells
+            cells[0].text = name
+            cells[1].text = company
+            cells[2].text = title
+        document.add_paragraph('第二组')
+        second_table = document.add_table(rows=1, cols=2)
+        second_table.rows[0].cells[0].text = 'Alexander Montgomery'
+        second_table.rows[0].cells[1].text = 'Technical Expert'
+
+        text, images, warnings, image_bytes = backend.extract_docx_content(
+            serialize_test_docx(document), '名单.docx', 8, 16 * 1024 * 1024,
+        )
+
+        self.assertLess(text.index('中山市交流会名单'), text.index('姓名\t来访嘉宾\t职位'))
+        self.assertLess(text.index('张伟\t甲公司'), text.index('张伟\t乙公司'))
+        self.assertLess(text.index('第二组'), text.index('Alexander Montgomery'))
+        self.assertEqual(text.count('张伟\t'), 2)
+        self.assertEqual(images, [])
+        self.assertEqual(warnings, [])
+        self.assertEqual(image_bytes, 0)
+
+    def test_docx_extracts_embedded_images_and_enforces_image_limit(self):
+        document = Document()
+        document.add_paragraph('图片名单')
+        image = Image.new('RGB', (40, 20), (255, 255, 255))
+        image_buffer = io.BytesIO()
+        image.save(image_buffer, format='PNG')
+        image_buffer.seek(0)
+        document.add_picture(image_buffer)
+        raw_docx = serialize_test_docx(document)
+
+        text, images, warnings, image_bytes = backend.extract_docx_content(
+            raw_docx, '图片名单.docx', 8, 16 * 1024 * 1024,
+        )
+        self.assertIn('图片名单', text)
+        self.assertEqual(len(images), 1)
+        self.assertEqual(images[0]['mimeType'], 'image/png')
+        self.assertTrue(images[0]['dataUrl'].startswith('data:image/png;base64,'))
+        self.assertGreater(image_bytes, 0)
+        self.assertEqual(warnings, [])
+
+        _, limited_images, limited_warnings, limited_bytes = backend.extract_docx_content(
+            raw_docx, '图片名单.docx', 0, 0,
+        )
+        self.assertEqual(limited_images, [])
+        self.assertEqual(limited_bytes, 0)
+        self.assertTrue(any('数量或总大小限制' in item for item in limited_warnings))
+
+    def test_docx_parse_without_ai_preserves_text_names_and_does_not_publish(self):
+        document = Document()
+        for name in ('张伟', '张伟', 'Alexander Montgomery'):
+            document.add_paragraph(name)
+        image = Image.new('RGB', (20, 20), (255, 255, 255))
+        image_buffer = io.BytesIO()
+        image.save(image_buffer, format='PNG')
+        image_buffer.seek(0)
+        document.add_picture(image_buffer)
+        raw_docx = serialize_test_docx(document)
+        devices_before = copy.deepcopy(backend.devices_collection.documents)
+
+        with patch.object(backend, 'get_nameplate_ai_api_key', return_value=''):
+            response = self.client.post('/api/nameplates/parse', data={
+                'files': (
+                    io.BytesIO(raw_docx),
+                    'names.docx',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                ),
+                'templateConfig': '{}',
+            }, content_type='multipart/form-data')
+
+        self.assertEqual(response.status_code, 200)
+        parsed = response.get_json()['parsed']
+        self.assertFalse(parsed['aiUsed'])
+        self.assertEqual(parsed['names'], ['张伟', '张伟', 'Alexander Montgomery'])
+        self.assertEqual(parsed['sourceFiles'], ['names.docx'])
+        self.assertTrue(any('未配置 NAMEPLATE_AI_API_KEY' in item for item in parsed['warnings']))
+        self.assertEqual(backend.devices_collection.documents, devices_before)
+
+    def test_docx_ai_failure_falls_back_to_native_text(self):
+        document = Document()
+        document.add_paragraph('张三')
+        document.add_paragraph('李四')
+        raw_docx = serialize_test_docx(document)
+
+        with (
+            patch.object(backend, 'get_nameplate_ai_api_key', return_value='test-key'),
+            patch.object(
+                backend, 'call_openai_nameplate_parser',
+                side_effect=RuntimeError('upstream unavailable'),
+            ),
+        ):
+            response = self.client.post('/api/nameplates/parse', data={
+                'files': (io.BytesIO(raw_docx), 'fallback.docx'),
+            }, content_type='multipart/form-data')
+
+        self.assertEqual(response.status_code, 200)
+        parsed = response.get_json()['parsed']
+        self.assertFalse(parsed['aiUsed'])
+        self.assertEqual(parsed['names'], ['张三', '李四'])
+        self.assertTrue(any('AI解析失败' in item for item in parsed['warnings']))
+
+    def test_docx_parse_sends_native_text_and_embedded_image_to_ai(self):
+        document = Document()
+        document.add_paragraph('张三')
+        image = Image.new('RGB', (20, 20), (255, 255, 255))
+        image_buffer = io.BytesIO()
+        image.save(image_buffer, format='PNG')
+        image_buffer.seek(0)
+        document.add_picture(image_buffer)
+        raw_docx = serialize_test_docx(document)
+
+        with (
+            patch.object(backend, 'get_nameplate_ai_api_key', return_value='test-key'),
+            patch.object(
+                backend,
+                'call_openai_nameplate_parser',
+                return_value=backend.build_nameplate_parse_result(
+                    ['张三'], {}, ai_used=True, source_summary='Word AI解析',
+                ),
+            ) as parser_mock,
+        ):
+            response = self.client.post('/api/nameplates/parse', data={
+                'files': (io.BytesIO(raw_docx), 'mixed.docx'),
+                'templateConfig': '{}',
+            }, content_type='multipart/form-data')
+
+        self.assertEqual(response.status_code, 200)
+        source_text, image_parts, _ = parser_mock.call_args.args
+        self.assertIn('张三', source_text)
+        self.assertEqual(len(image_parts), 1)
+        self.assertEqual(image_parts[0]['mimeType'], 'image/png')
+        self.assertTrue(response.get_json()['parsed']['aiUsed'])
+
+    def test_invalid_docx_and_legacy_doc_return_actionable_errors(self):
+        invalid_response = self.client.post('/api/nameplates/parse', data={
+            'files': (io.BytesIO(b'not-a-docx'), 'broken.docx'),
+        }, content_type='multipart/form-data')
+        self.assertEqual(invalid_response.status_code, 400)
+        self.assertIn('有效的 DOCX', invalid_response.get_json()['error'])
+
+        legacy_response = self.client.post('/api/nameplates/parse', data={
+            'files': (io.BytesIO(b'legacy-doc'), 'legacy.doc'),
+        }, content_type='multipart/form-data')
+        self.assertEqual(legacy_response.status_code, 400)
+        self.assertIn('另存为 .docx', legacy_response.get_json()['error'])
+
+    def test_docx_rejects_expansion_entry_count_and_unsafe_paths(self):
+        document = Document()
+        document.add_paragraph('张三')
+        raw_docx = serialize_test_docx(document)
+
+        with patch.object(backend, 'NAMEPLATE_MAX_DOCX_UNCOMPRESSED_BYTES', 128):
+            with self.assertRaisesRegex(backend.NameplateParseInputError, '解压后体积'):
+                backend.validate_docx_archive(raw_docx)
+        with patch.object(backend, 'NAMEPLATE_MAX_DOCX_ENTRIES', 1):
+            with self.assertRaisesRegex(backend.NameplateParseInputError, '文件项过多'):
+                backend.validate_docx_archive(raw_docx)
+
+        archive_buffer = io.BytesIO()
+        with zipfile.ZipFile(archive_buffer, 'w') as archive:
+            archive.writestr('[Content_Types].xml', '<Types/>')
+            archive.writestr('word/document.xml', '<document/>')
+            archive.writestr('../escape.txt', 'blocked')
+        with self.assertRaisesRegex(backend.NameplateParseInputError, '异常文件路径'):
+            backend.validate_docx_archive(archive_buffer.getvalue())
 
     def test_sleep_interval_is_clamped(self):
         self.assertEqual(

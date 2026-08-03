@@ -523,7 +523,7 @@ async function parseNameplateDraft() {
     const files = fileInput?.files ? Array.from(fileInput.files) : [];
 
     if (!sourceText && files.length === 0) {
-        log('请输入文字或上传图片/表格后再解析', 'error');
+        log('请输入文字或上传图片、Word、表格后再解析', 'error');
         return;
     }
 
