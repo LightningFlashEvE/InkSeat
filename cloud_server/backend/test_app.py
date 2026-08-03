@@ -567,6 +567,47 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(exposed['firmwareVersion'], '3.1.0')
         self.assertEqual(exposed['lastUpdateDurationMs'], 123456)
 
+    def test_presence_allows_one_missed_automatic_wake_before_offline(self):
+        now_ms = 1_800_000_000_000
+        sleep_interval_seconds = 60 * 60
+        backend.devices_collection = FakeCollection([{
+            'deviceId': 'A1B2C3',
+            'owner': 'bob',
+            'claimed': True,
+            'imageVersion': 8,
+            'activeContentMode': 'template',
+            'activeTemplateId': 'nameplate',
+            'templateConfig': {'sleepIntervalSeconds': sleep_interval_seconds},
+        }])
+
+        cases = [
+            ('active wake window', 60, True, False, 1),
+            ('normal sleep', 10 * 60, False, True, 1),
+            ('first wake missed', 66 * 60, False, True, 2),
+            ('second wake grace', 124 * 60, False, True, 2),
+            ('second wake missed', 126 * 60, False, False, 2),
+        ]
+
+        with patch.object(backend.time, 'time', return_value=now_ms / 1000):
+            for name, age_seconds, expected_online, expected_sleeping, expected_wake_number in cases:
+                with self.subTest(name=name):
+                    last_seen = now_ms - age_seconds * 1000
+                    backend.device_status_collection = FakeCollection([{
+                        'deviceId': 'A1B2C3',
+                        'lastSeen': last_seen,
+                        'currentSleepSeconds': sleep_interval_seconds,
+                    }])
+
+                    response = self.client.get('/api/devices')
+                    self.assertEqual(response.status_code, 200)
+                    exposed = response.get_json()['devices'][0]
+                    self.assertEqual(exposed['online'], expected_online)
+                    self.assertEqual(exposed['sleeping'], expected_sleeping)
+                    self.assertEqual(
+                        exposed['estimatedNextAutoWakeAt'],
+                        last_seen + expected_wake_number * sleep_interval_seconds * 1000,
+                    )
+
     def test_update_result_rejects_unknown_stage_without_overwriting_status(self):
         device_key = 'A' * 64
         backend.device_status_collection = FakeCollection([{

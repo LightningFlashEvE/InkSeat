@@ -64,6 +64,9 @@ DEVICE_ID_PATTERN = re.compile(r'^(?:[0-9A-F]{6}|[0-9A-F]{12})$')
 DEFAULT_SLEEP_INTERVAL_SECONDS = 12 * 60 * 60
 MIN_SLEEP_INTERVAL_SECONDS = 5 * 60
 MAX_SLEEP_INTERVAL_SECONDS = 30 * 24 * 60 * 60
+DEVICE_ONLINE_WINDOW_SECONDS = 5 * 60
+DEVICE_WAKE_REPORT_GRACE_SECONDS = 5 * 60
+DEVICE_OFFLINE_AFTER_WAKE_COUNT = 2
 ALLOW_REGISTRATION = os.environ.get('ALLOW_REGISTRATION', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
 AUTH_TOKEN_TTL_SECONDS = max(300, int(os.environ.get('AUTH_TOKEN_TTL_SECONDS', 7 * 24 * 60 * 60)))
 DEVICE_AUTH_REQUIRED = Config.DEVICE_AUTH_REQUIRED
@@ -2072,24 +2075,43 @@ def get_devices_status():
                 if status:
                     last_seen = status.get('lastSeen', 0)
                     current_time = int(time.time() * 1000)
-                    # Deep-sleep架构：最近5分钟内有活动则认为在线
-                    device_info['online'] = (current_time - last_seen < 300000)
-                    # Deep-sleep架构：在一个唤醒周期内无上报视为“睡眠中”，超过周期则视为“离线/失联”
-                    # 默认周期：12小时唤醒一次；如果设备上报了云端动态间隔，则按该间隔再给 1 小时宽限
+                    # Deep-sleep 架构没有常驻连接：“在线”表示最近一次唤醒仍处于活动窗口。
+                    device_info['online'] = (
+                        bool(last_seen)
+                        and current_time - last_seen < DEVICE_ONLINE_WINDOW_SECONDS * 1000
+                    )
+
+                    # 使用设备已经执行过的唤醒周期；若模板在设备上次上报后才修改，设备尚未
+                    # 收到新周期，继续按旧周期估算并标记待同步。
                     current_sleep_seconds = status.get('currentSleepSeconds')
-                    if isinstance(current_sleep_seconds, (int, float)) and current_sleep_seconds > 0:
-                        sleep_window_ms = int((current_sleep_seconds + 3600) * 1000)
-                    else:
-                        sleep_window_ms = 13 * 60 * 60 * 1000
-                    device_info['sleeping'] = (not device_info['online']) and (current_time - last_seen < sleep_window_ms)
                     interval_for_estimate = content_meta['sleepIntervalSeconds']
                     content_updated_ms = to_epoch_ms(device.get('activeContentUpdatedAt') or device.get('updatedAt'))
                     if content_updated_ms and last_seen and content_updated_ms > last_seen:
                         if isinstance(current_sleep_seconds, (int, float)) and current_sleep_seconds > 0:
                             interval_for_estimate = int(current_sleep_seconds)
                             device_info['wakePolicyPending'] = True
+
+                    interval_for_estimate = normalize_sleep_interval(
+                        interval_for_estimate, DEFAULT_SLEEP_INTERVAL_SECONDS,
+                    )
                     if last_seen:
-                        device_info['estimatedNextAutoWakeAt'] = int(last_seen + interval_for_estimate * 1000)
+                        wake_interval_ms = interval_for_estimate * 1000
+                        wake_grace_ms = DEVICE_WAKE_REPORT_GRACE_SECONDS * 1000
+                        first_wake_at = int(last_seen + wake_interval_ms)
+                        second_wake_at = int(
+                            last_seen + wake_interval_ms * DEVICE_OFFLINE_AFTER_WAKE_COUNT
+                        )
+                        offline_after_at = second_wake_at + wake_grace_ms
+
+                        # 第一次自动唤醒未上报时仍视为睡眠；第二次自动唤醒加短宽限后
+                        # 仍无上报，才视为离线。
+                        device_info['sleeping'] = (
+                            not device_info['online'] and current_time < offline_after_at
+                        )
+                        if current_time < first_wake_at + wake_grace_ms:
+                            device_info['estimatedNextAutoWakeAt'] = first_wake_at
+                        else:
+                            device_info['estimatedNextAutoWakeAt'] = second_wake_at
                     device_info['lastSeen'] = last_seen
                     device_info['lastWakeType'] = status.get('lastWakeType')
                     device_info['lastWakeCause'] = status.get('lastWakeCause')
