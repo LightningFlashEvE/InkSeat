@@ -66,7 +66,6 @@ MIN_SLEEP_INTERVAL_SECONDS = 5 * 60
 MAX_SLEEP_INTERVAL_SECONDS = 30 * 24 * 60 * 60
 DEVICE_ONLINE_WINDOW_SECONDS = 5 * 60
 DEVICE_WAKE_REPORT_GRACE_SECONDS = 5 * 60
-DEVICE_OFFLINE_AFTER_WAKE_COUNT = 2
 ALLOW_REGISTRATION = os.environ.get('ALLOW_REGISTRATION', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
 AUTH_TOKEN_TTL_SECONDS = max(300, int(os.environ.get('AUTH_TOKEN_TTL_SECONDS', 7 * 24 * 60 * 60)))
 DEVICE_AUTH_REQUIRED = Config.DEVICE_AUTH_REQUIRED
@@ -2098,20 +2097,13 @@ def get_devices_status():
                         wake_interval_ms = interval_for_estimate * 1000
                         wake_grace_ms = DEVICE_WAKE_REPORT_GRACE_SECONDS * 1000
                         first_wake_at = int(last_seen + wake_interval_ms)
-                        second_wake_at = int(
-                            last_seen + wake_interval_ms * DEVICE_OFFLINE_AFTER_WAKE_COUNT
-                        )
-                        offline_after_at = second_wake_at + wake_grace_ms
+                        offline_after_at = first_wake_at + wake_grace_ms
 
-                        # 第一次自动唤醒未上报时仍视为睡眠；第二次自动唤醒加短宽限后
-                        # 仍无上报，才视为离线。
+                        # 第一次预计自动唤醒加短宽限后仍无上报，即视为离线。
                         device_info['sleeping'] = (
                             not device_info['online'] and current_time < offline_after_at
                         )
-                        if current_time < first_wake_at + wake_grace_ms:
-                            device_info['estimatedNextAutoWakeAt'] = first_wake_at
-                        else:
-                            device_info['estimatedNextAutoWakeAt'] = second_wake_at
+                        device_info['estimatedNextAutoWakeAt'] = first_wake_at
                     device_info['lastSeen'] = last_seen
                     device_info['lastWakeType'] = status.get('lastWakeType')
                     device_info['lastWakeCause'] = status.get('lastWakeCause')

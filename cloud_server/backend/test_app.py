@@ -567,7 +567,7 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(exposed['firmwareVersion'], '3.1.0')
         self.assertEqual(exposed['lastUpdateDurationMs'], 123456)
 
-    def test_presence_allows_one_missed_automatic_wake_before_offline(self):
+    def test_presence_marks_device_offline_after_first_missed_automatic_wake(self):
         now_ms = 1_800_000_000_000
         sleep_interval_seconds = 60 * 60
         backend.devices_collection = FakeCollection([{
@@ -583,9 +583,8 @@ class BackendSecurityTests(unittest.TestCase):
         cases = [
             ('active wake window', 60, True, False, 1),
             ('normal sleep', 10 * 60, False, True, 1),
-            ('first wake missed', 66 * 60, False, True, 2),
-            ('second wake grace', 124 * 60, False, True, 2),
-            ('second wake missed', 126 * 60, False, False, 2),
+            ('first wake grace', 64 * 60, False, True, 1),
+            ('first wake missed', 66 * 60, False, False, 1),
         ]
 
         with patch.object(backend.time, 'time', return_value=now_ms / 1000):

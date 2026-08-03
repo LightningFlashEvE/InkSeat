@@ -199,7 +199,7 @@ AP 配网热点 `EPD-XXXXXX` 默认**开放网络**（`PROVISIONING_AP_PSK` 留�
 ### 设备状态遥测
 固件每次调用 `/api/device/status` 时除基础网络和唤醒字段外，还会上报 `firmwareVersion`、`firmwareBuild`、`resetReason`、`localImageVersion`、`gpio0StuckLow` 及待补报更新诊断。实际更新用 NVS `device/updDiag` 保存带校验的紧凑事务记录；完成后调用 `/api/device/update-result`，失败则在下次状态请求补报。后端保存到 `device_status_collection`，并由 `/api/devices` 返回前端展示本地/云端版本、复位原因和刷新阶段。`wakeType=manual` 更新 `lastManualWake`，`wakeType=auto` 更新 `lastAutoWake`。云端仍按当前内容返回 `nextSleepSeconds > 0`，设备保存到 NVS `device/slpInt`。动态模板只在设备手动或定时唤醒调用 `/api/device/status` 时按需重渲染；固件状态查询超时必须覆盖后端渲染耗时。修改字段名时必须同步 `http_update.h`、`cloud_server/backend/app.py` 和 `cloud_server/frontend/devices.js`。当前产品入口只开放会议名牌 `nameplate`；其他后端渲染代码仍保留，但不得误写成当前前端已开放功能。
 
-设备状态不是长连接状态，而是按最后上报和自动唤醒计划推断：最后上报后 5 分钟为“在线”；之后为“睡眠”；允许第一次预计自动唤醒漏报，第二次预计自动唤醒再加 5 分钟上报宽限后仍无状态才判定“离线”。预计唤醒时间在第一次漏报并超过宽限后推进到第二次唤醒时间。模板周期在设备上次上报后发生变更时，必须继续用设备已上报的 `currentSleepSeconds` 推算，并保持 `wakePolicyPending=true`，直到设备下一次上报同步新周期。
+设备状态不是长连接状态，而是按最后上报和自动唤醒计划推断：最后上报后 5 分钟为“在线”；之后为“睡眠”；第一次预计自动唤醒再加 5 分钟上报宽限后仍无状态即判定“离线”。模板周期在设备上次上报后发生变更时，必须继续用设备已上报的 `currentSleepSeconds` 推算，并保持 `wakePolicyPending=true`，直到设备下一次上报同步新周期。
 
 ### 未配网开机显示
 当设备没有本地 WiFi 配置时，`startAPMode()` 内会先渲染并显示 AP 配网页，再启动 `softAP`；Captive Portal Web/DNS 延后到手机拿到 IP 且刷屏结束后。`loop()` 不再补刷 AP 页面，避免重复刷新墨水屏或引入第二条渲染路径。
