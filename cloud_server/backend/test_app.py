@@ -1085,7 +1085,10 @@ class BackendSecurityTests(unittest.TestCase):
             ) as post_mock,
         ):
             result = backend.call_openai_nameplate_parser('', [], {
-                'backgroundStyle': 'formal_red',
+                'backgroundStyle': 'formal_green',
+                'title': '统一职位',
+                'subtitle': '统一公司',
+                'sleepIntervalSeconds': 21600,
                 'logoDataUrl': logo_data_url,
                 'logoFileName': 'event-logo.png',
                 'logoX': 21,
@@ -1102,6 +1105,10 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(result['templateConfig']['logoX'], 21)
         self.assertEqual(result['templateConfig']['logoY'], 34)
         self.assertEqual(result['templateConfig']['companyX'], 412)
+        self.assertEqual(result['templateConfig']['backgroundStyle'], 'formal_green')
+        self.assertEqual(result['templateConfig']['title'], '统一职位')
+        self.assertEqual(result['templateConfig']['subtitle'], '统一公司')
+        self.assertEqual(result['templateConfig']['sleepIntervalSeconds'], 21600)
 
     def test_nameplate_dispatch_deadline_reports_unprocessed_devices(self):
         backend.devices_collection = FakeCollection([

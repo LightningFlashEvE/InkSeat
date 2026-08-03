@@ -746,6 +746,20 @@ def merge_nameplate_design_config(config: dict, source_config: dict) -> dict:
     return merged
 
 
+def merge_nameplate_ai_template_config(config: dict, source_config: dict) -> dict:
+    """Preserve current template defaults when AI omits or blanks them."""
+    merged = merge_nameplate_design_config(config, source_config)
+    source = normalize_nameplate_template_config(source_config)
+    for key in ('title', 'subtitle'):
+        if not str(merged.get(key) or '').strip() and source.get(key):
+            merged[key] = source[key]
+    if not merged.get('backgroundStyle'):
+        merged['backgroundStyle'] = source['backgroundStyle']
+    if 'sleepIntervalSeconds' not in merged and 'sleepIntervalSeconds' in source:
+        merged['sleepIntervalSeconds'] = source['sleepIntervalSeconds']
+    return merged
+
+
 def normalize_nameplate_template_config(raw_config) -> dict:
     raw_config = raw_config if isinstance(raw_config, dict) else {}
     style = str(raw_config.get('backgroundStyle') or 'formal_red').strip().lower()
@@ -1280,6 +1294,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
         '只提取人名，不要把单位、职务、标题、设备编号、电话、序号当作姓名。'
         '保持名单原始顺序，并把每个人同一行或同一表格行中的职位匹配到 title、公司或单位匹配到 subtitle。'
         '逐人的 title 和 subtitle 优先；templateConfig.title 与 templateConfig.subtitle 只是名单字段缺失时使用的默认值，不要用某一个人的信息覆盖它们。'
+        '用户没有明确要求修改模板时，templateConfig 必须原样保留当前默认模板对应字段。'
         'backgroundStyle 可使用 formal_red=Pheno红色底栏、formal_green=Pheno绿色底栏、plain=Pheno绿色横幅、formal_blue=Pheno职务名片。'
         '如果不确定，请把疑问写入 warnings。'
         f'\n当前默认模板: {json.dumps(prompt_config, ensure_ascii=False)}'
@@ -1352,7 +1367,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
             raise RuntimeError('AI解析未返回文本')
 
         parsed = _parse_nameplate_ai_output(output_text)
-        parsed_config = merge_nameplate_design_config(
+        parsed_config = merge_nameplate_ai_template_config(
             parsed.get('templateConfig', base_config), base_config
         )
         return build_nameplate_parse_result(
@@ -1409,7 +1424,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
     except Exception as e:
         raise RuntimeError(f'OpenAI 解析结果不是 JSON: {e}')
 
-    parsed_config = merge_nameplate_design_config(
+    parsed_config = merge_nameplate_ai_template_config(
         parsed.get('templateConfig') or base_config, base_config
     )
     return build_nameplate_parse_result(
