@@ -3,6 +3,10 @@ let savedNameplateTemplates = [];
 let activeNameplateDesignConfig = {};
 let activeNameplateBackgroundStyle = 'formal_red';
 let nameplateDispatchModalReturnFocus = null;
+let parsedNameplateNames = [];
+let activeNameplatePreviewIndex = 0;
+let nameplatePreviewTimer = null;
+let nameplatePreviewRequestId = 0;
 
 const API_BASE = '';
 const BUILTIN_NAMEPLATE_TEMPLATES = [
@@ -58,10 +62,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function bindNameplateInputs() {
     bindNameplateDispatchModal();
-    const namesInput = document.getElementById('nameplateNamesInput');
-    if (namesInput) {
-        namesInput.addEventListener('input', updateNameplateDispatchHint);
-    }
+    bindNameplateReviewList();
+    renderNameplateReviewList();
+    updateNameplateCardPreviewState();
+
     const aiFiles = document.getElementById('nameplateAiFiles');
     if (aiFiles) {
         aiFiles.addEventListener('change', renderSelectedAiFiles);
@@ -74,9 +78,16 @@ function bindNameplateInputs() {
             } else {
                 activeNameplateDesignConfig = {};
                 activeNameplateBackgroundStyle = 'formal_red';
+                scheduleNameplatePreview();
             }
         });
     }
+
+    ['nameplateBatchTitle', 'nameplateBatchSubtitle'].forEach(id => {
+        document.getElementById(id)?.addEventListener('input', scheduleNameplatePreview);
+    });
+    document.getElementById('nameplateBatchWakeInterval')
+        ?.addEventListener('change', scheduleNameplatePreview);
 }
 
 function bindNameplateDispatchModal() {
@@ -266,11 +277,119 @@ function escapeHtml(value) {
 }
 
 function parseNameInput() {
-    const nameText = document.getElementById('nameplateNamesInput')?.value || '';
-    return nameText
-        .split(/[\n\r、,，;；\t]+/)
-        .map(item => item.trim())
+    return parsedNameplateNames
+        .map(item => String(item || '').trim())
         .filter(Boolean);
+}
+
+function syncNameplateNamesInput() {
+    const namesInput = document.getElementById('nameplateNamesInput');
+    if (namesInput) {
+        namesInput.value = parsedNameplateNames.join('\n');
+    }
+}
+
+function setParsedNameplateNames(names) {
+    parsedNameplateNames = Array.isArray(names)
+        ? names.map(name => String(name || '').trim()).filter(Boolean)
+        : [];
+    activeNameplatePreviewIndex = 0;
+    syncNameplateNamesInput();
+    renderNameplateReviewList();
+    updateNameplateDispatchHint();
+    scheduleNameplatePreview(true);
+}
+
+function bindNameplateReviewList() {
+    const container = document.getElementById('nameplateNameReviewList');
+    if (!container) return;
+
+    container.addEventListener('input', event => {
+        const input = event.target.closest('[data-nameplate-name-index]');
+        if (!input) return;
+        const index = Number(input.dataset.nameplateNameIndex);
+        if (!Number.isInteger(index) || index < 0 || index >= parsedNameplateNames.length) return;
+
+        parsedNameplateNames[index] = input.value;
+        activeNameplatePreviewIndex = Math.max(
+            0,
+            parsedNameplateNames.slice(0, index + 1)
+                .map(item => String(item || '').trim())
+                .filter(Boolean).length - 1,
+        );
+        syncNameplateNamesInput();
+        updateNameplateDispatchHint();
+        updateNameplateCardPreviewState();
+        scheduleNameplatePreview();
+    });
+
+    container.addEventListener('focusin', event => {
+        const input = event.target.closest('[data-nameplate-name-index]');
+        if (!input) return;
+        const index = Number(input.dataset.nameplateNameIndex);
+        if (!Number.isInteger(index) || index < 0 || index >= parsedNameplateNames.length) return;
+        const confirmedIndex = Math.max(
+            0,
+            parsedNameplateNames.slice(0, index + 1)
+                .map(item => String(item || '').trim())
+                .filter(Boolean).length - 1,
+        );
+        if (activeNameplatePreviewIndex !== confirmedIndex) {
+            activeNameplatePreviewIndex = confirmedIndex;
+            updateNameplateCardPreviewState();
+            scheduleNameplatePreview(true);
+        }
+    });
+
+    container.addEventListener('click', event => {
+        const removeButton = event.target.closest('[data-remove-nameplate-index]');
+        if (!removeButton) return;
+        const index = Number(removeButton.dataset.removeNameplateIndex);
+        if (!Number.isInteger(index) || index < 0 || index >= parsedNameplateNames.length) return;
+
+        parsedNameplateNames.splice(index, 1);
+        activeNameplatePreviewIndex = Math.min(
+            activeNameplatePreviewIndex,
+            Math.max(0, parsedNameplateNames.length - 1),
+        );
+        syncNameplateNamesInput();
+        renderNameplateReviewList();
+        updateNameplateDispatchHint();
+        scheduleNameplatePreview(true);
+    });
+}
+
+function renderNameplateReviewList() {
+    const container = document.getElementById('nameplateNameReviewList');
+    if (!container) return;
+
+    if (parsedNameplateNames.length === 0) {
+        container.innerHTML = '<div class="nameplate-review-empty">请先在上方输入内容并解析</div>';
+        return;
+    }
+
+    container.innerHTML = parsedNameplateNames.map((name, index) => `
+        <div class="nameplate-name-review-row" role="listitem">
+            <span class="nameplate-review-order">${index + 1}</span>
+            <label class="sr-only" for="nameplateReviewName${index}">第 ${index + 1} 个姓名</label>
+            <input id="nameplateReviewName${index}" type="text" value="${escapeHtml(name)}" maxlength="64"
+                data-nameplate-name-index="${index}" autocomplete="off">
+            <button type="button" class="nameplate-review-remove" data-remove-nameplate-index="${index}"
+                aria-label="删除 ${escapeHtml(name || `第 ${index + 1} 个姓名`)}">删除</button>
+        </div>
+    `).join('');
+}
+
+function addNameplateReviewRow() {
+    parsedNameplateNames.push('');
+    activeNameplatePreviewIndex = parsedNameplateNames.length - 1;
+    syncNameplateNamesInput();
+    renderNameplateReviewList();
+    updateNameplateDispatchHint();
+    updateNameplateCardPreviewState();
+
+    const input = document.querySelector(`[data-nameplate-name-index="${activeNameplatePreviewIndex}"]`);
+    input?.focus();
 }
 
 function getCurrentTemplateConfig() {
@@ -354,15 +473,13 @@ function applySavedNameplateTemplateById(templateId) {
     if (subtitleInput && config.subtitle !== undefined) subtitleInput.value = config.subtitle || '';
     if (wakeSelect && config.sleepIntervalSeconds) wakeSelect.value = String(config.sleepIntervalSeconds);
     if (savedTemplateSelect) savedTemplateSelect.value = templateId;
+    scheduleNameplatePreview(true);
 }
 
 function applyParsedDraft(parsed) {
     if (!parsed) return;
 
-    const namesInput = document.getElementById('nameplateNamesInput');
-    if (namesInput && Array.isArray(parsed.names)) {
-        namesInput.value = parsed.names.join('\n');
-    }
+    setParsedNameplateNames(parsed.names);
 
     const config = parsed.templateConfig || {};
     const titleInput = document.getElementById('nameplateBatchTitle');
@@ -372,9 +489,15 @@ function applyParsedDraft(parsed) {
     if (titleInput && config.title !== undefined) titleInput.value = config.title || '';
     if (subtitleInput && config.subtitle !== undefined) subtitleInput.value = config.subtitle || '';
     if (wakeSelect && config.sleepIntervalSeconds) wakeSelect.value = String(config.sleepIntervalSeconds);
+    if (config.backgroundStyle) activeNameplateBackgroundStyle = config.backgroundStyle;
+    activeNameplateDesignConfig = {
+        ...activeNameplateDesignConfig,
+        ...pickNameplateDesignConfig(config),
+    };
 
     updateNameplateDispatchHint();
     renderParsedPreview(parsed);
+    scheduleNameplatePreview(true);
 }
 
 function renderSelectedAiFiles() {
@@ -452,7 +575,7 @@ async function parseNameplateDraft() {
     } finally {
         if (parseButton) {
             parseButton.disabled = false;
-            parseButton.textContent = originalText || 'AI解析为草稿';
+            parseButton.textContent = originalText || '解析名单';
         }
     }
 }
@@ -464,13 +587,6 @@ function renderParsedPreview(parsed) {
     const names = parsed?.names || [];
     const warnings = parsed?.warnings || [];
     const sourceText = parsed?.sourceSummary || (parsed?.aiUsed ? 'AI解析结果' : '本地规则解析');
-    const namesHtml = names.slice(0, 12).map((name, index) => `
-        <div class="nameplate-preview-row">
-            <span>${index + 1}</span>
-            <strong>${escapeHtml(name)}</strong>
-        </div>
-    `).join('');
-    const moreText = names.length > 12 ? `<span>另有 ${names.length - 12} 个姓名已填入下方名单</span>` : '';
     const warningHtml = warnings.length ? `
         <div class="activity-row warning">
             <strong>注意</strong>
@@ -480,12 +596,126 @@ function renderParsedPreview(parsed) {
 
     preview.innerHTML = `
         <div class="activity-row">
-            <strong>${parsed?.aiUsed ? 'AI草稿已生成' : '草稿已生成'}</strong>
-            <span>${escapeHtml(sourceText)} · ${names.length} 个姓名</span>
+            <strong>已解析 ${names.length} 个姓名</strong>
+            <span>${escapeHtml(sourceText)} · 请在下方核对姓名和预览效果</span>
         </div>
-        <div class="nameplate-preview-list">${namesHtml || '<span>未识别到姓名</span>'}${moreText}</div>
         ${warningHtml}
     `;
+}
+
+function updateNameplateCardPreviewState() {
+    const names = parseNameInput();
+    const position = document.getElementById('nameplatePreviewPosition');
+    const nameLabel = document.getElementById('nameplatePreviewName');
+    const previousButton = document.getElementById('nameplatePreviewPrev');
+    const nextButton = document.getElementById('nameplatePreviewNext');
+
+    if (names.length === 0) {
+        activeNameplatePreviewIndex = 0;
+        if (position) position.textContent = '尚无名单';
+        if (nameLabel) nameLabel.textContent = '等待姓名';
+        if (previousButton) previousButton.disabled = true;
+        if (nextButton) nextButton.disabled = true;
+        return;
+    }
+
+    activeNameplatePreviewIndex = Math.min(activeNameplatePreviewIndex, names.length - 1);
+    if (position) position.textContent = `${activeNameplatePreviewIndex + 1} / ${names.length}`;
+    if (nameLabel) nameLabel.textContent = names[activeNameplatePreviewIndex];
+    if (previousButton) previousButton.disabled = activeNameplatePreviewIndex <= 0;
+    if (nextButton) nextButton.disabled = activeNameplatePreviewIndex >= names.length - 1;
+}
+
+function moveNameplatePreview(direction) {
+    const names = parseNameInput();
+    if (names.length === 0) return;
+
+    activeNameplatePreviewIndex = Math.max(
+        0,
+        Math.min(names.length - 1, activeNameplatePreviewIndex + Number(direction || 0)),
+    );
+    updateNameplateCardPreviewState();
+    scheduleNameplatePreview(true);
+}
+
+function scheduleNameplatePreview(immediate = false) {
+    if (nameplatePreviewTimer) {
+        clearTimeout(nameplatePreviewTimer);
+        nameplatePreviewTimer = null;
+    }
+
+    updateNameplateCardPreviewState();
+    const names = parseNameInput();
+    const image = document.getElementById('nameplateCardPreviewImage');
+    const empty = document.getElementById('nameplateCardPreviewEmpty');
+    if (names.length === 0) {
+        if (image) {
+            image.hidden = true;
+            image.removeAttribute('src');
+            image.alt = '';
+        }
+        if (empty) {
+            empty.hidden = false;
+            empty.textContent = '解析名单后显示实际墨水屏效果';
+        }
+        return;
+    }
+
+    nameplatePreviewTimer = setTimeout(
+        refreshNameplateCardPreview,
+        immediate ? 0 : 450,
+    );
+}
+
+async function refreshNameplateCardPreview() {
+    nameplatePreviewTimer = null;
+    const names = parseNameInput();
+    if (names.length === 0) return;
+
+    activeNameplatePreviewIndex = Math.min(activeNameplatePreviewIndex, names.length - 1);
+    const name = names[activeNameplatePreviewIndex];
+    const image = document.getElementById('nameplateCardPreviewImage');
+    const empty = document.getElementById('nameplateCardPreviewEmpty');
+    const requestId = ++nameplatePreviewRequestId;
+
+    if (image) image.hidden = true;
+    if (empty) {
+        empty.hidden = false;
+        empty.textContent = '正在生成墨水屏预览…';
+    }
+
+    try {
+        const response = await authFetch(`${API_BASE}/api/nameplates/preview`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...authHeaders(),
+            },
+            body: JSON.stringify({
+                name,
+                templateConfig: getCurrentTemplateConfig(),
+            }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success || !result.previewImage) {
+            throw new Error(result.error || '预览生成失败');
+        }
+        if (requestId !== nameplatePreviewRequestId) return;
+
+        if (image) {
+            image.src = `data:image/png;base64,${result.previewImage}`;
+            image.alt = `${name} 的墨水屏铭牌预览`;
+            image.hidden = false;
+        }
+        if (empty) empty.hidden = true;
+    } catch (error) {
+        if (requestId !== nameplatePreviewRequestId) return;
+        if (image) image.hidden = true;
+        if (empty) {
+            empty.hidden = false;
+            empty.textContent = error.message || '预览生成失败';
+        }
+    }
 }
 
 function renderNameplateDeviceList() {

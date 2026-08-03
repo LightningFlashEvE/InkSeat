@@ -946,6 +946,54 @@ class BackendSecurityTests(unittest.TestCase):
             backend.build_nameplate_parse_result(expected, {})['names'], expected
         )
 
+    def test_nameplate_parser_preserves_english_full_names(self):
+        expected = ['Alexander Montgomery', 'Mary-Jane Watson']
+        self.assertEqual(backend.parse_nameplate_names({'names': expected}), expected)
+        self.assertEqual(
+            backend.parse_nameplate_names_from_text('\n'.join(expected)), expected
+        )
+        self.assertEqual(backend._clean_nameplate_candidate('张三 技术专家'), '张三')
+
+    def test_nameplate_preview_renders_without_publishing(self):
+        backend.devices_collection = FakeCollection([{
+            'deviceId': 'A1B2C3', 'owner': 'bob', 'claimed': True, 'imageVersion': 8,
+        }])
+        preview_before = copy.deepcopy(backend.devices_collection.documents)
+
+        with patch.object(
+            backend, 'render_template_with_preview',
+            return_value={'previewImage': 'preview-base64'},
+        ) as render_mock:
+            response = self.client.post('/api/nameplates/preview', json={
+                'name': 'Alexander Montgomery',
+                'templateConfig': {
+                    'backgroundStyle': 'formal_red',
+                    'title': 'Technical Expert',
+                    'subtitle': 'Pheno',
+                },
+            })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()['previewImage'], 'preview-base64')
+        rendered_config = render_mock.call_args.args[1]
+        self.assertEqual(rendered_config['name'], 'Alexander Montgomery')
+        self.assertEqual(rendered_config['title'], 'Technical Expert')
+        self.assertEqual(backend.devices_collection.documents, preview_before)
+
+    def test_nameplate_parse_accepts_standard_comma_separated_text_without_ai(self):
+        with patch.object(backend, 'get_nameplate_ai_api_key', return_value=''):
+            response = self.client.post('/api/nameplates/parse', data={
+                'text': '张三，李四，Alexander Montgomery',
+                'templateConfig': '{}',
+            })
+
+        self.assertEqual(response.status_code, 200)
+        parsed = response.get_json()['parsed']
+        self.assertFalse(parsed['aiUsed'])
+        self.assertEqual(
+            parsed['names'], ['张三', '李四', 'Alexander Montgomery']
+        )
+
     def test_nameplate_ai_retry_shares_one_sub_120_second_budget(self):
         logo_data_url = make_test_logo_data_url()
         first_response = SimpleNamespace(

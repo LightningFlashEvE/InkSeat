@@ -506,6 +506,174 @@ body.dashboard-page {
     gap: 8px;
 }
 
+.sr-only {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+.nameplate-review-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(260px, 0.75fr);
+    gap: 16px;
+    align-items: start;
+}
+
+.nameplate-review-column {
+    display: grid;
+    gap: 14px;
+    min-width: 0;
+}
+
+.nameplate-card-preview-panel,
+.nameplate-review-list-panel,
+.nameplate-template-options {
+    min-width: 0;
+    border: 1px solid var(--ui-line-soft);
+    border-radius: var(--ui-radius-lg);
+    background: rgba(237, 244, 230, 0.035);
+    padding: 14px;
+}
+
+.nameplate-review-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.nameplate-review-head h3 {
+    margin: 3px 0 0;
+    color: var(--ui-text);
+    font-size: 15px;
+}
+
+.nameplate-review-head > span {
+    color: var(--ui-text-muted);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.nameplate-card-preview {
+    position: relative;
+    aspect-ratio: 5 / 3;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--ui-line-soft);
+    border-radius: calc(var(--ui-radius) + 2px);
+    background: #f7f7f5;
+}
+
+.nameplate-card-preview img {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: contain;
+}
+
+.nameplate-card-preview-empty {
+    padding: 20px;
+    color: #657079;
+    font-size: 13px;
+    font-weight: 700;
+    text-align: center;
+}
+
+.nameplate-preview-controls {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.nameplate-preview-controls strong {
+    min-width: 0;
+    color: var(--ui-text);
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nameplate-name-review-list {
+    display: grid;
+    gap: 8px;
+    max-height: 292px;
+    overflow: auto;
+    padding-right: 3px;
+}
+
+.nameplate-name-review-row {
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+}
+
+.nameplate-review-order {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    border-radius: 9px;
+    background: rgba(56, 126, 245, 0.11);
+    color: var(--ui-accent);
+    font-size: 12px;
+    font-weight: 900;
+}
+
+.nameplate-name-review-row input {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--ui-line-soft);
+    border-radius: var(--ui-radius);
+    background: rgba(237, 244, 230, 0.055);
+    color: var(--ui-text);
+    padding: 10px 11px;
+    outline: none;
+}
+
+.nameplate-name-review-row input:focus {
+    border-color: rgba(57, 127, 246, 0.62);
+    box-shadow: 0 0 0 3px rgba(57, 127, 246, 0.12);
+}
+
+.nameplate-review-remove {
+    min-height: 38px;
+    border: 0;
+    background: transparent;
+    color: var(--ui-text-muted);
+    padding: 0 6px;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.nameplate-review-remove:hover,
+.nameplate-review-remove:focus-visible {
+    color: #d04444;
+}
+
+.nameplate-review-empty {
+    border: 1px dashed var(--ui-line-soft);
+    border-radius: var(--ui-radius);
+    color: var(--ui-text-muted);
+    padding: 22px 14px;
+    text-align: center;
+}
+
+.nameplate-template-options {
+    align-content: start;
+}
+
 .nameplate-preview-list {
     border: 1px solid var(--ui-line-soft);
     border-radius: var(--ui-radius);
@@ -886,6 +1054,10 @@ body.nameplates-page.nameplate-modal-open {
 .nameplates-page .nameplate-layout {
     grid-template-columns: minmax(280px, 1fr) minmax(240px, 320px);
     align-items: start;
+}
+
+.nameplates-page .nameplate-review-layout {
+    grid-template-columns: minmax(360px, 1fr) minmax(240px, 320px);
 }
 
 .nameplates-page .ai-parse-layout {
@@ -1942,12 +2114,14 @@ body.login-page {
     .hero-metrics,
     .input-group,
     .ai-parse-layout,
+    .nameplate-review-layout,
     .nameplate-layout,
     .insight-panel {
         grid-template-columns: 1fr;
     }
 
     .nameplates-page .ai-parse-layout,
+    .nameplates-page .nameplate-review-layout,
     .nameplates-page .nameplate-layout,
     .nameplates-page .insight-panel {
         grid-template-columns: 1fr;
@@ -5804,6 +5978,7 @@ body.control-page .panel-tab {
     }
 
     .nameplates-page .ai-parse-layout,
+    .nameplates-page .nameplate-review-layout,
     .nameplates-page .nameplate-layout {
         display: grid;
         grid-template-columns: 1fr !important;
@@ -5822,6 +5997,12 @@ body.control-page .panel-tab {
 
     .nameplates-page .nameplate-compose textarea {
         min-height: 150px;
+    }
+
+    .nameplates-page .nameplate-card-preview-panel,
+    .nameplates-page .nameplate-review-list-panel,
+    .nameplates-page .nameplate-template-options {
+        padding: 12px;
     }
 
     .nameplates-page .ai-upload-box {

@@ -358,7 +358,7 @@ def render_template_epd_data(template_id: str, config: dict) -> str:
     return epd_data
 
 
-NAMEPLATE_MAX_NAME_LEN = 16
+NAMEPLATE_MAX_NAME_LEN = 64
 NAMEPLATE_MAX_NAMES = 500
 NAMEPLATE_MAX_TARGET_DEVICES = 500
 NAMEPLATE_MAX_PARSE_FILE_BYTES = int(os.environ.get('NAMEPLATE_MAX_PARSE_FILE_BYTES', 8 * 1024 * 1024))
@@ -438,9 +438,14 @@ def _clean_nameplate_candidate(raw_value) -> str:
                 changed = True
 
     value = re.split(r'[（(【\[]', value, maxsplit=1)[0].strip()
-    value = re.split(r'[-—/|]', value, maxsplit=1)[0].strip()
+    english_full_name_pattern = r"[A-Za-z][A-Za-z.'’\-]*(?:\s+[A-Za-z][A-Za-z.'’\-]*){0,5}"
+    if not re.fullmatch(english_full_name_pattern, value):
+        value = re.split(r'[-—/|]', value, maxsplit=1)[0].strip()
     if re.search(r'\s', value):
-        value = re.split(r'\s+', value, maxsplit=1)[0].strip()
+        if re.fullmatch(english_full_name_pattern, value):
+            value = re.sub(r'\s+', ' ', value).strip()
+        else:
+            value = re.split(r'\s+', value, maxsplit=1)[0].strip()
 
     value = re.sub(r'(同志|先生|女士|老师)$', '', value).strip()
     value = value.strip(' "\'“”‘’.,，。;；:：!?！？[]【】()（）<>《》')
@@ -3449,6 +3454,36 @@ def device_set_template():
     return jsonify({'success': True, 'message': 'Template rendered and saved'})
 
 
+@app.route('/api/nameplates/preview', methods=['POST'])
+@login_required
+def preview_nameplate():
+    """生成一张不落库、不下发的实际墨水屏铭牌预览。"""
+    try:
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400
+
+        name = _clean_nameplate_candidate(data.get('name'))
+        if not name:
+            return jsonify({'success': False, 'error': '请输入有效姓名'}), 400
+
+        template_config = normalize_nameplate_template_config(data.get('templateConfig'))
+        template_config['name'] = name
+        render_result = render_template_with_preview('nameplate', template_config)
+        preview_image = render_result.get('previewImage') if isinstance(render_result, dict) else None
+        if not preview_image:
+            return jsonify({'success': False, 'error': '预览生成失败'}), 500
+
+        return jsonify({
+            'success': True,
+            'name': name,
+            'previewImage': preview_image,
+        })
+    except Exception as e:
+        print(f'❌ 铭牌预览异常: {e}')
+        return jsonify({'success': False, 'error': '预览生成失败'}), 500
+
+
 @app.route('/api/nameplates/dispatch', methods=['POST'])
 @login_required
 def dispatch_nameplates():
@@ -3679,6 +3714,10 @@ def parse_nameplates():
             return jsonify({'success': False, 'error': '请先输入文字或上传图片/表格'}), 400
 
         local_names = parse_nameplate_names_from_text(source_text)
+        if not filenames:
+            direct_text_names = parse_nameplate_names({'text': source_text})
+            if len(direct_text_names) > len(local_names):
+                local_names = direct_text_names
         should_use_ai = bool(image_parts) or len(source_text) > 0
         result = None
 

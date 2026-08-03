@@ -533,7 +533,7 @@ function setSignalIndicator(id, rssi) {
 }
 
 function openDevice(deviceId) {
-    window.location.href = `control.html?v=20260803diag1&deviceId=${encodeURIComponent(deviceId)}`;
+    window.location.href = `control.html?v=20260803nameparse1&deviceId=${encodeURIComponent(deviceId)}`;
 }
 
 let pollingInterval = null;
