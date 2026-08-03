@@ -17,6 +17,7 @@
 #include "esp_system.h"
 #include "esp_mac.h"
 #include "esp_heap_caps.h"
+#include "device_identity.h"
 
 bool displayProvisioningScreen(const String& apSSID, const String& deviceCode, const String& wifiQrPayload);
 String getProvisioningApPassword();
@@ -29,10 +30,7 @@ bool isApWebServicesReady();
 uint32_t apModeElapsedMs();
 
 // 配网相关配置
-// 与 http_update.h 保持一致；如果之前未定义，则默认使用后6位设备码
-#ifndef DEVICE_ID_MODE
-#define DEVICE_ID_MODE 2  // 设备码模式：1=前6位，2=后6位，其他=完整12位
-#endif
+
 #ifndef PROVISIONING_RENDER_AP_SCREEN
 #define PROVISIONING_RENDER_AP_SCREEN 1
 #endif
@@ -40,6 +38,20 @@ uint32_t apModeElapsedMs();
 #ifndef PROVISIONING_AP_PSK
 #define PROVISIONING_AP_PSK ""
 #endif
+constexpr bool provisioningApPskIsPrintableAscii(const char* value, size_t length) {
+    return length == 0 ||
+           ((unsigned char)value[0] >= 0x20 && (unsigned char)value[0] <= 0x7E &&
+            provisioningApPskIsPrintableAscii(value + 1, length - 1));
+}
+static_assert(
+    sizeof(PROVISIONING_AP_PSK) == 1 ||
+    (sizeof(PROVISIONING_AP_PSK) >= 9 && sizeof(PROVISIONING_AP_PSK) <= 64),
+    "PROVISIONING_AP_PSK must be empty or contain 8-63 characters"
+);
+static_assert(
+    provisioningApPskIsPrintableAscii(PROVISIONING_AP_PSK, sizeof(PROVISIONING_AP_PSK) - 1),
+    "PROVISIONING_AP_PSK must contain printable ASCII characters so it can be shown on screen"
+);
 #ifndef PROVISIONING_AP_CHANNEL
 #define PROVISIONING_AP_CHANNEL 1
 #endif
@@ -53,6 +65,8 @@ uint32_t apModeElapsedMs();
 #define CONFIG_SSID_KEY "ssid"        // WiFi SSID存储键
 #define CONFIG_PASSWORD_KEY "pwd"     // WiFi密码存储键
 #define CONFIG_CONFIGURED_KEY "cfg"   // 配网标志位存储键
+#define CONFIG_MAX_SSID_BYTES 32       // IEEE 802.11 SSID 最大长度（字节）
+#define CONFIG_MAX_PASSWORD_BYTES 64   // ESP32 WiFi 密码/PSK 最大长度（字节）
 
 // 全局变量（WebServer 延后到 initConfigServer 再分配，避免启动时打碎堆）
 static WebServer* configServerInstance = nullptr;
@@ -69,11 +83,16 @@ extern bool wifiConfigured;
 bool apModeStarted = false;
 bool provisioningScreenAttempted = false;
 static bool g_apWebServicesStarted = false;
-static bool g_staIpAssigned = false;
+static volatile bool g_staIpAssigned = false;
 static uint32_t g_apModeStartMs = 0;
-static uint32_t g_staConnectMs = 0;
+static volatile uint32_t g_staConnectMs = 0;
 static uint32_t g_webStartMs = 0;
-static bool g_pendingWebAfterEpd = false;
+static volatile bool g_pendingWebAfterEpd = false;
+static volatile bool g_staConnectedEventPending = false;
+static volatile bool g_staDisconnectedEventPending = false;
+static volatile bool g_staIpEventPending = false;
+static volatile uint32_t g_staEventMacSuffix = 0;
+static volatile uint32_t g_staEventIpRaw = 0;
 String savedSSID = "";
 String savedPassword = "";
 const byte DNS_PORT = 53;
@@ -83,13 +102,17 @@ String provisioningDeviceCode = "";
 #define PROVISIONING_ENABLE_CAPTIVE_DNS 1
 #endif
 
-// #region agent log
+#ifndef EPD_STRUCTURED_DEBUG
+#define EPD_STRUCTURED_DEBUG 0
+#endif
+
 static volatile bool g_dbgEpdActive = false;
 
 static void dbgApLog(const char* hypothesisId, const char* location, const char* message,
                      uint32_t d1 = 0, uint32_t d2 = 0) {
+#if EPD_STRUCTURED_DEBUG
     Serial.printf(
-        "{\"sessionId\":\"958611\",\"hypothesisId\":\"%s\",\"location\":\"%s\","
+        "{\"component\":\"ap\",\"event\":\"%s\",\"location\":\"%s\","
         "\"message\":\"%s\",\"data\":{\"ms\":%lu,\"d1\":%lu,\"d2\":%lu,\"epd\":%u,"
         "\"heap\":%u,\"sta\":%u,\"mode\":%d,\"apIp\":\"%s\"},\"timestamp\":%lu}\n",
         hypothesisId, location, message,
@@ -97,6 +120,13 @@ static void dbgApLog(const char* hypothesisId, const char* location, const char*
         g_dbgEpdActive ? 1u : 0u, (unsigned)ESP.getFreeHeap(),
         (unsigned)WiFi.softAPgetStationNum(), (int)WiFi.getMode(),
         WiFi.softAPIP().toString().c_str(), (unsigned long)millis());
+#else
+    (void)hypothesisId;
+    (void)location;
+    (void)message;
+    (void)d1;
+    (void)d2;
+#endif
 }
 
 static void tryStartApWebServicesAfterEpd();
@@ -108,7 +138,6 @@ void dbgSetEpdActive(bool active) {
         tryStartApWebServicesAfterEpd();
     }
 }
-// #endregion
 
 /**
  * 检查配网状态
@@ -131,90 +160,80 @@ bool checkWiFiConfigured() {
 /**
  * 保存WiFi配置
  */
-void saveWiFiConfig(String ssid, String password) {
+bool saveWiFiConfig(const String& ssid, const String& password) {
     if (!preferences.begin(CONFIG_NAMESPACE, false)) {  // 读写模式
+        preferences.end();
         Serial.println("⚠️  NVS命名空间打开失败，无法保存WiFi配置");
-        return;
+        return false;
     }
-    preferences.putString(CONFIG_SSID_KEY, ssid);
-    preferences.putString(CONFIG_PASSWORD_KEY, password);
-    preferences.putBool(CONFIG_CONFIGURED_KEY, true);
+
+    // 先撤销配置有效标志，避免任一字符串写入失败后仍使用半套配置。
+    bool ok = preferences.putBool(CONFIG_CONFIGURED_KEY, false) == sizeof(uint8_t);
+    if (ok) {
+        const size_t ssidWritten = preferences.putString(CONFIG_SSID_KEY, ssid);
+        ok = ssidWritten == ssid.length();
+    }
+    if (ok) {
+        const size_t passwordWritten = preferences.putString(CONFIG_PASSWORD_KEY, password);
+        // Preferences::putString() 成功写入空字符串时返回 0，需要通过键和值回读确认。
+        ok = password.length() > 0
+                 ? passwordWritten == password.length()
+                 : (preferences.isKey(CONFIG_PASSWORD_KEY) &&
+                    preferences.getString(CONFIG_PASSWORD_KEY, "__missing__").length() == 0);
+    }
+    if (ok) {
+        ok = preferences.putBool(CONFIG_CONFIGURED_KEY, true) == sizeof(uint8_t);
+    }
     preferences.end();
-    Serial.println("✅ WiFi配置已保存");
+
+    if (!ok) {
+        Serial.println("❌ WiFi配置写入NVS失败，保留AP模式供用户重试");
+        return false;
+    }
+
+    savedSSID = ssid;
+    savedPassword = password;
+    Serial.println("✅ WiFi配置已保存并校验");
+    return true;
 }
 
 /**
  * 清除WiFi配置
  */
-void clearWiFiConfig() {
+bool clearWiFiConfig() {
     if (!preferences.begin(CONFIG_NAMESPACE, false)) {
-        // NVS命名空间不存在，无需清除
         preferences.end();
-        return;
+        Serial.println("⚠️  NVS命名空间打开失败，无法确认WiFi配置已清除");
+        return false;
     }
-    preferences.remove(CONFIG_SSID_KEY);
-    preferences.remove(CONFIG_PASSWORD_KEY);
-    preferences.putBool(CONFIG_CONFIGURED_KEY, false);
+
+    bool ok = preferences.putBool(CONFIG_CONFIGURED_KEY, false) == sizeof(uint8_t);
+    if (preferences.isKey(CONFIG_SSID_KEY)) {
+        ok = preferences.remove(CONFIG_SSID_KEY) && ok;
+    }
+    if (preferences.isKey(CONFIG_PASSWORD_KEY)) {
+        ok = preferences.remove(CONFIG_PASSWORD_KEY) && ok;
+    }
     preferences.end();
+    savedSSID = "";
+    savedPassword = "";
+
+    if (!ok) {
+        Serial.println("⚠️  WiFi配置未能完整清除，请检查NVS状态");
+        return false;
+    }
     Serial.println("🗑️  WiFi配置已清除");
+    return true;
 }
 
-// AP 配网阶段需要在 WiFi 配置前生成设备码，因此这里保留独立的 MAC 读取逻辑
+// AP 配网和云端请求共用同一套 MAC 读取与设备码派生规则。
 String getDeviceIdForAP() {
-    uint8_t mac[6] = {0};
-
-    // 尝试使用esp_read_mac读取MAC地址（使用ESP_MAC_EFUSE_FACTORY类型）
-    esp_err_t ret = esp_read_mac(mac, ESP_MAC_EFUSE_FACTORY);
-    if (ret != ESP_OK) {
-        Serial.println("⚠️  esp_read_mac(ESP_MAC_EFUSE_FACTORY) 失败，尝试其他方法");
-        // 尝试使用WiFi库的方法
-        WiFi.macAddress(mac);
-        Serial.println("   使用WiFi.macAddress()读取MAC");
-    } else {
-        Serial.println("✅ 使用esp_read_mac(ESP_MAC_EFUSE_FACTORY)读取MAC");
+    String derivedId;
+    if (!deriveDeviceIdentity(derivedId)) {
+        return "";
     }
-
-    // 如果MAC地址后三个字节仍为0，尝试使用esp_wifi_get_mac（使用STA接口）
-    if (mac[3] == 0 && mac[4] == 0 && mac[5] == 0) {
-        Serial.println("⚠️  MAC地址后三个字节为0，尝试esp_wifi_get_mac(WIFI_IF_STA)");
-        ret = esp_wifi_get_mac(WIFI_IF_STA, mac);
-        if (ret == ESP_OK) {
-            Serial.println("✅ 使用esp_wifi_get_mac(WIFI_IF_STA)读取MAC");
-        } else {
-            // 如果STA接口失败，尝试AP接口
-            Serial.println("   尝试esp_wifi_get_mac(WIFI_IF_AP)");
-            ret = esp_wifi_get_mac(WIFI_IF_AP, mac);
-            if (ret == ESP_OK) {
-                Serial.println("✅ 使用esp_wifi_get_mac(WIFI_IF_AP)读取MAC");
-            }
-        }
-    }
-
-    // 调试输出：打印完整MAC地址
-    Serial.printf("🔍 读取MAC地址: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    Serial.printf("   DEVICE_ID_MODE = %d\n", DEVICE_ID_MODE);
-
-    char buf[32];
-
-    #if DEVICE_ID_MODE == 1
-        // 仅使用MAC地址前6位（前3个字节）
-        snprintf(buf, sizeof(buf), "%02X%02X%02X",
-                 mac[0], mac[1], mac[2]);
-    #elif DEVICE_ID_MODE == 2
-        // 仅使用MAC地址后6位（后3个字节）
-        snprintf(buf, sizeof(buf), "%02X%02X%02X",
-                 mac[3], mac[4], mac[5]);
-    #else
-        // 使用完整MAC地址（12位，6个字节）
-        snprintf(buf, sizeof(buf), "%02X%02X%02X%02X%02X%02X",
-                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    #endif
-
-    Serial.printf("   提取的设备码: %s\n", buf);
-    return String(buf);
+    return derivedId;
 }
-
 String escapeWifiQrField(const String& input) {
     String escaped = "";
     escaped.reserve(input.length() + 8);
@@ -253,47 +272,55 @@ static void onProvisioningWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
             const uint8_t* mac = info.wifi_ap_staconnected.mac;
             g_staConnectMs = millis();
             g_staIpAssigned = false;
-            Serial.printf("📱 设备已关联热点, STA #%u（DHCP 宽限 %u ms，暂不启 Web）\n",
-                          (unsigned)WiFi.softAPgetStationNum(),
-                          (unsigned)PROVISIONING_DHCP_GRACE_MS);
-            // #region agent log
-            dbgApLog("H1", "wifi_event", "sta_connected",
-                     ((uint32_t)mac[4] << 8) | mac[5], WiFi.softAPgetStationNum());
-            // #endregion
+            g_pendingWebAfterEpd = true;
+            g_staEventMacSuffix = ((uint32_t)mac[4] << 8) | mac[5];
+            g_staConnectedEventPending = true;
             break;
         }
         case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
-            Serial.printf("📴 设备已断开热点, STA #%u\n",
-                          (unsigned)WiFi.softAPgetStationNum());
-            if (WiFi.softAPgetStationNum() == 0) {
-                g_staConnectMs = 0;
-                g_staIpAssigned = false;
-            }
-            // #region agent log
-            dbgApLog("H1", "wifi_event", "sta_disconnected", 0, WiFi.softAPgetStationNum());
-            // #endregion
+            g_staDisconnectedEventPending = true;
             break;
         case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED: {
-            const IPAddress clientIp(info.wifi_ap_staipassigned.ip.addr);
             g_staIpAssigned = true;
-            Serial.printf("📱 热点客户端 IP: %s\n", clientIp.toString().c_str());
-            // #region agent log
-            dbgApLog("H2", "wifi_event", "sta_ip_assigned", clientIp[3], 0);
-            // #endregion
-            if (g_dbgEpdActive) {
-                g_pendingWebAfterEpd = true;
-            } else {
-                ensureApWebServices();
-            }
+            g_pendingWebAfterEpd = true;
+            g_staEventIpRaw = info.wifi_ap_staipassigned.ip.addr;
+            g_staIpEventPending = true;
             break;
         }
         default:
-            // #region agent log
-            if (event == ARDUINO_EVENT_WIFI_AP_START || event == ARDUINO_EVENT_WIFI_AP_STOP) {
-                dbgApLog("H2", "wifi_event", "ap_lifecycle", (uint32_t)event, 0);
-            }
-            // #endregion
             break;
+    }
+}
+
+static void processPendingProvisioningWiFiEvents() {
+    if (g_staConnectedEventPending) {
+        g_staConnectedEventPending = false;
+        const uint32_t macSuffix = g_staEventMacSuffix;
+        Serial.printf("📱 设备已关联热点, STA #%u（DHCP 宽限 %u ms，暂不启 Web）\n",
+                      (unsigned)WiFi.softAPgetStationNum(),
+                      (unsigned)PROVISIONING_DHCP_GRACE_MS);
+        dbgApLog("H1", "wifi_event_main", "sta_connected",
+                 macSuffix, WiFi.softAPgetStationNum());
+    }
+
+    if (g_staIpEventPending) {
+        g_staIpEventPending = false;
+        const uint32_t ipRaw = g_staEventIpRaw;
+        const IPAddress clientIp(ipRaw);
+        Serial.printf("📱 热点客户端 IP: %s\n", clientIp.toString().c_str());
+        dbgApLog("H2", "wifi_event_main", "sta_ip_assigned", clientIp[3], 0);
+    }
+
+    if (g_staDisconnectedEventPending) {
+        g_staDisconnectedEventPending = false;
+        const uint8_t stationCount = WiFi.softAPgetStationNum();
+        Serial.printf("📴 设备已断开热点, STA #%u\n", (unsigned)stationCount);
+        if (stationCount == 0) {
+            g_staConnectMs = 0;
+            g_staIpAssigned = false;
+            g_pendingWebAfterEpd = false;
+        }
+        dbgApLog("H1", "wifi_event_main", "sta_disconnected", 0, stationCount);
     }
 }
 
@@ -325,6 +352,9 @@ bool startAPMode() {
     g_staConnectMs = 0;
     g_webStartMs = 0;
     g_pendingWebAfterEpd = false;
+    g_staConnectedEventPending = false;
+    g_staDisconnectedEventPending = false;
+    g_staIpEventPending = false;
     g_apModeStartMs = millis();
     registerProvisioningWiFiEvents();
 
@@ -335,9 +365,12 @@ bool startAPMode() {
     delay(150);
 
     String deviceCode = getDeviceIdForAP();
-    if (deviceCode.length() == 0 || deviceCode == "000000" || deviceCode == "000000000000") {
-        Serial.println("⚠️  设备码读取异常，回退为固定AP名称后缀 CONFIG");
-        deviceCode = "CONFIG";
+    if (deviceCode.length() == 0) {
+        apModeStarted = false;
+        provisioningDeviceCode = "";
+        provisioningApSSID = "";
+        Serial.println("❌ 无法读取设备身份，拒绝启动不可寻址的配网热点");
+        return false;
     }
 
     String apSSID = "EPD-" + deviceCode;
@@ -373,7 +406,7 @@ bool startAPMode() {
     Serial.printf("   AP名称: %s\n", apSSID.c_str());
     const String apPassword = getProvisioningApPassword();
     if (apPassword.length() >= 8) {
-        Serial.printf("   AP密码: %s\n", apPassword.c_str());
+        Serial.println("   AP密码: 已设置（不在串口输出明文）");
     } else {
         Serial.println("   AP密码: 无密码");
     }
@@ -484,38 +517,26 @@ String getConfigPageHTML() {
     html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
     html += "<title>设备配网</title>";
     html += "<style>";
-    html += ":root { color-scheme: light; --bg:#eef3f7; --panel:#ffffff; --text:#18212f; --muted:#667085; --line:#d8e1ea; --accent:#2f6fed; --accent-dark:#2557ba; --success-bg:#e8f7ec; --success-text:#1f7a3f; --error-bg:#fdecec; --error-text:#b42318; }";
-    html += "* { box-sizing: border-box; }";
-    html += "body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; background:linear-gradient(180deg,#f6f9fc 0%, var(--bg) 100%); font-family:'Microsoft YaHei', Arial, sans-serif; color:var(--text); }";
-    html += ".card { width:100%; max-width:420px; background:var(--panel); border:1px solid var(--line); border-radius:18px; box-shadow:0 12px 34px rgba(15,23,42,0.08); padding:24px 20px 20px; }";
-    html += ".header { text-align:center; margin-bottom:18px; }";
-    html += "h1 { margin:0; font-size:26px; line-height:1.2; color:var(--text); }";
-    html += ".subtitle { margin:10px 0 0; font-size:15px; line-height:1.6; color:var(--muted); }";
-    html += ".form-group { margin-bottom:16px; }";
-    html += "label { display:block; margin-bottom:6px; color:#344054; font-weight:700; font-size:14px; }";
-    html += "input { width:100%; padding:12px 14px; border:1px solid var(--line); border-radius:12px; box-sizing:border-box; font-size:16px; background:#fff; color:var(--text); outline:none; }";
-    html += "input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(47,111,237,0.12); }";
-    html += "button { width:100%; padding:13px 16px; background:var(--accent); color:#fff; border:none; border-radius:12px; font-size:16px; font-weight:700; cursor:pointer; }";
-    html += "button:hover { background:var(--accent-dark); }";
-    html += ".status { margin-top:16px; padding:12px 14px; border-radius:12px; text-align:center; font-size:14px; line-height:1.6; border:1px solid transparent; }";
-    html += ".success { background:var(--success-bg); color:var(--success-text); border-color:#b7e0c2; }";
-    html += ".error { background:var(--error-bg); color:var(--error-text); border-color:#f5c2c0; }";
-    html += ".progress { background:#f5f8ff; color:#335aa8; border-color:#d7e3ff; }";
-    html += ".footer { margin-top:14px; text-align:center; font-size:12px; color:var(--muted); }";
+    html += ":root{color-scheme:light;--bg:#f7f9fb;--text:#17202a;--muted:#65758b;--line:#d5dde6;--accent:#2563eb;--ok:#17633a;--bad:#a22a22;}";
+    html += "*{box-sizing:border-box}body{margin:0;padding:24px;background:var(--bg);color:var(--text);font-family:'Microsoft YaHei',Arial,sans-serif;line-height:1.5}";
+    html += "main{width:min(100%,420px);margin:8vh auto 0}h1{margin:0 0 8px;font-size:28px;line-height:1.2}p{margin:0 0 22px;color:var(--muted)}";
+    html += "form{display:grid;gap:16px}label{display:block;margin-bottom:6px;font-size:14px;font-weight:700}";
+    html += "input,button{width:100%;min-height:44px;border-radius:8px;font:inherit}input{border:1px solid var(--line);padding:10px 12px;background:#fff;color:var(--text)}";
+    html += "input:focus{outline:2px solid rgba(37,99,235,.18);border-color:var(--accent)}button{border:0;background:var(--accent);color:#fff;font-weight:700}";
+    html += ".status{margin-top:16px;padding:12px;border:1px solid var(--line);border-radius:8px;text-align:center;font-size:14px}.success{color:var(--ok);background:#edf8f1}.error{color:var(--bad);background:#fff0f0}.progress{color:#1d4ed8;background:#eff6ff}";
+    html += ".footer{margin-top:14px;text-align:center;font-size:12px;color:var(--muted)}";
     html += "</style></head><body>";
-    html += "<main class='card'>";
-    html += "<div class='header'>";
+    html += "<main>";
     html += "<h1>设备配网</h1>";
-    html += "<p class='subtitle'>请在下面配置可以联网的WiFi</p>";
-    html += "</div>";
+    html += "<p>请配置可以联网的 WiFi</p>";
     html += "<form id='wifiForm' onsubmit='return submitConfig(event)'>";
     html += "<div class='form-group'>";
     html += "<label for='ssid'>WiFi名称 (SSID):</label>";
-    html += "<input type='text' id='ssid' name='ssid' required placeholder='请输入WiFi名称'>";
+    html += "<input type='text' id='ssid' name='ssid' maxlength='32' required placeholder='请输入WiFi名称'>";
     html += "</div>";
     html += "<div class='form-group'>";
     html += "<label for='password'>WiFi密码:</label>";
-    html += "<input type='password' id='password' name='password' placeholder='请输入WiFi密码（可选）'>";
+    html += "<input type='password' id='password' name='password' maxlength='64' placeholder='请输入WiFi密码（可选）'>";
     html += "</div>";
     html += "<button type='submit'>连接WiFi</button>";
     html += "</form>";
@@ -594,13 +615,24 @@ void handleConfig() {
         getConfigServer().send(400, "text/plain", "SSID不能为空");
         return;
     }
+    if (ssid.length() > CONFIG_MAX_SSID_BYTES) {
+        getConfigServer().send(400, "text/plain", "SSID不能超过32字节");
+        return;
+    }
+    if (password.length() > CONFIG_MAX_PASSWORD_BYTES) {
+        getConfigServer().send(400, "text/plain", "WiFi密码不能超过64字节");
+        return;
+    }
 
     Serial.println("📝 收到WiFi配置:");
     Serial.printf("   SSID: %s\n", ssid.c_str());
     Serial.printf("   密码: %s\n", password.length() > 0 ? "***" : "(无密码)");
 
     // 保存配置
-    saveWiFiConfig(ssid, password);
+    if (!saveWiFiConfig(ssid, password)) {
+        getConfigServer().send(500, "text/plain", "保存失败，请重试");
+        return;
+    }
 
     getConfigServer().send(200, "text/plain", "success");
 
@@ -663,6 +695,9 @@ bool connectWiFi() {
         g_staConnectMs = 0;
         g_webStartMs = 0;
         g_pendingWebAfterEpd = false;
+        g_staConnectedEventPending = false;
+        g_staDisconnectedEventPending = false;
+        g_staIpEventPending = false;
         provisioningApSSID = "";
         provisioningDeviceCode = "";
         Serial.println("");
@@ -730,6 +765,9 @@ void processApProvisioningLoop() {
     if (!apModeStarted || wifiConfigured) {
         return;
     }
+
+    // WiFi事件任务只写标志；日志、Web与DNS初始化全部在主循环执行。
+    processPendingProvisioningWiFiEvents();
 
     const uint32_t sinceAp = apModeElapsedMs();
     if (!g_apWebServicesStarted && !g_dbgEpdActive) {

@@ -32,32 +32,32 @@
             background: #eef5f7 !important;
         }
     </style>
-    <script src="theme.js?v=20260803dispatch1"></script>
-    <link rel="stylesheet" href="ui.css?v=20260803dispatch1">
+    <script src="theme.js?v=20260803diag1"></script>
+    <link rel="stylesheet" href="ui.css?v=20260803diag1">
 </head>
 <body class="meeting-device-page">
     <div class="meeting-page">
         <section class="meeting-shell">
             <aside class="meeting-sidebar" aria-label="主导航">
-                <a class="meeting-brand" href="index.html?v=20260803dispatch1" aria-label="会议牌管理">
+                <a class="meeting-brand" href="index.html?v=20260803diag1" aria-label="会议牌管理">
                     <span class="meeting-brand-mark" aria-hidden="true"></span>
                     <span>会议牌管理</span>
                 </a>
 
                 <nav class="meeting-nav">
-                    <a class="meeting-nav-item active" href="index.html?v=20260803dispatch1" aria-current="page">
+                    <a class="meeting-nav-item active" href="index.html?v=20260803diag1" aria-current="page">
                         <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
                         <span>设备</span>
                     </a>
-                    <a class="meeting-nav-item" href="nameplates.html?v=20260803dispatch1">
+                    <a class="meeting-nav-item" href="nameplates.html?v=20260803diag1">
                         <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
                         <span>名单下发</span>
                     </a>
-                    <a class="meeting-nav-item" href="control.html?v=20260803dispatch1">
+                    <a class="meeting-nav-item" href="control.html?v=20260803diag1">
                         <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
                         <span>模板设计</span>
                     </a>
-                    <a class="meeting-nav-item" href="settings.html?v=20260803dispatch1">
+                    <a class="meeting-nav-item" href="settings.html?v=20260803diag1">
                         <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
                         <span>设置</span>
                     </a>
@@ -187,6 +187,14 @@
                                     <div class="meeting-info-row"><span>当前内容</span><span id="selectedDeviceContent">-</span></div>
                                     <div class="meeting-info-row meeting-signal-row"><span>WiFi强度</span><span id="selectedDeviceSignal">未上报</span></div>
                                     <div class="meeting-info-row"><span>唤醒间隔</span><span id="selectedDeviceSleep">默认 12小时</span></div>
+                                    <div class="meeting-info-row"><span>固件版本</span><span id="selectedDeviceFirmware">未上报</span></div>
+                                    <div class="meeting-info-row"><span>本地图片版本</span><span id="selectedDeviceLocalVersion">未上报</span></div>
+                                    <div class="meeting-info-row"><span>云端图片版本</span><span id="selectedDeviceCloudVersion">-</span></div>
+                                    <div class="meeting-info-row"><span>复位原因</span><span id="selectedDeviceResetReason">未上报</span></div>
+                                    <div class="meeting-info-row"><span>最近刷新</span><span class="meeting-diagnostic-state none" id="selectedDeviceUpdateResult">未上报</span></div>
+                                    <div class="meeting-info-row"><span>刷新阶段</span><span id="selectedDeviceUpdateStage">未上报</span></div>
+                                    <div class="meeting-info-row"><span>错误原因</span><span id="selectedDeviceUpdateError">无</span></div>
+                                    <div class="meeting-info-row"><span>诊断时间</span><span id="selectedDeviceUpdateAt">未上报</span></div>
                                 </div>
                                 <div class="meeting-device-preview" aria-hidden="true">
                                     <div class="meeting-screen">
@@ -254,7 +262,7 @@
         </section>
     </div>
 
-    <script src="auth.js?v=20260803dispatch1"></script>
-    <script src="devices.js?v=20260803dispatch1"></script>
+    <script src="auth.js?v=20260803diag1"></script>
+    <script src="devices.js?v=20260803diag1"></script>
 </body>
 </html>

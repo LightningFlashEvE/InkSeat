@@ -26,8 +26,8 @@ bool wifiConfigured = false;  // WiFi配网状态标志
 
 /* ------------------------ 用户自定义：长按进入配网 ------------------------ */
 #define WIFI_RECONFIG_HOLD_MS 3000  // 长按GPIO0进入"清除WiFi并AP配网"的阈值（ms）
-#define WIFI_RECONFIG_POST_WAKE_CONFIRM_MS 1200  // GPIO唤醒后继续按住多长时间触发清配置+配网
 #define WAKE_DEBUG_SERIAL_DELAY_MS 500  // 调试期给串口监视器留一点启动输出时间
+#define AP_START_FAILURE_RETRY_SECONDS 300  // AP启动失败后5分钟再唤醒重试，避免永久空转耗电
 RTC_DATA_ATTR uint32_t g_deepSleepBootCount = 0;
 
 static const char* wakeCauseName(esp_sleep_wakeup_cause_t cause) {
@@ -87,15 +87,6 @@ static bool isWakeKeyHeldLow(uint32_t holdMs) {
   return true;  // 全程按住
 }
 
-static uint32_t getWiFiReconfigHoldMs(esp_sleep_wakeup_cause_t cause) {
-  if (cause == ESP_SLEEP_WAKEUP_GPIO ||
-      cause == ESP_SLEEP_WAKEUP_EXT0 ||
-      cause == ESP_SLEEP_WAKEUP_EXT1) {
-    return WIFI_RECONFIG_POST_WAKE_CONFIRM_MS;
-  }
-  return WIFI_RECONFIG_HOLD_MS;
-}
-
 static void printWakeDebug(esp_sleep_wakeup_cause_t cause) {
   pinMode((int)WAKEUP_GPIO, INPUT_PULLUP);
   gpio_pullup_en(WAKEUP_GPIO);
@@ -118,6 +109,17 @@ static void printWakeDebug(esp_sleep_wakeup_cause_t cause) {
   Serial.flush();
 }
 
+static void handleApStartupFailure(const char* context) {
+  Serial.printf("❌ %s：AP启动失败，%u秒后唤醒重试\n",
+                context, (unsigned)AP_START_FAILURE_RETRY_SECONDS);
+  enterDeepSleepForRetry(AP_START_FAILURE_RETRY_SECONDS);
+
+  // esp_deep_sleep_start() 正常不会返回；若底层异常返回，受控重启，禁止空转。
+  Serial.println("❌ 未能进入Deep-sleep，执行受控重启");
+  Serial.flush();
+  ESP.restart();
+}
+
 /* Entry point ----------------------------------------------------------------*/
 void setup()
 {
@@ -129,7 +131,7 @@ void setup()
     Serial.println();
     Serial.println("========================================");
     Serial.println("  ESP32 E-Paper Deep-sleep 模式");
-    Serial.println("  Version 3.0.0");
+    Serial.printf("  Version %s (%s)\n", FIRMWARE_VERSION, FIRMWARE_BUILD);
     Serial.println("========================================");
     Serial.printf("  剩余内存: %d 字节\n", ESP.getFreeHeap());
     Serial.println("  显示硬件初始化: 按需延后");
@@ -150,19 +152,19 @@ void setup()
     // 1) 长按 GPIO0 进入"清除WiFi + AP配网"
     //    - 适用于：从 deep-sleep 按键唤醒后继续按住不放
     //    - 也适用于：上电/复位后按住 GPIO0（若硬件允许）
-    uint32_t reconfigHoldMs = getWiFiReconfigHoldMs(cause);
-    if (reconfigHoldMs != WIFI_RECONFIG_HOLD_MS) {
-        Serial.printf("ℹ️ 检测到按键唤醒：继续按住GPIO0 %lu ms 可清除WiFi并进入二维码配网\n",
-                      (unsigned long)reconfigHoldMs);
-    }
-
-    if (isWakeKeyHeldLow(reconfigHoldMs)) {
+    Serial.printf("ℹ️ 持续按住GPIO0 %lu ms 才会清除WiFi并进入二维码配网\n",
+                  (unsigned long)WIFI_RECONFIG_HOLD_MS);
+    if (isWakeKeyHeldLow(WIFI_RECONFIG_HOLD_MS)) {
         Serial.println("🧹 检测到长按GPIO0：清除WiFi配置并进入AP配网模式");
-        clearWiFiConfig();       // 清除NVS WiFi信息
-        startAPMode();
+        if (!clearWiFiConfig()) {
+            Serial.println("⚠️  WiFi配置清除未完整成功，仍尝试打开AP修复入口");
+        }
+        bool apStarted = startAPMode();
         wifiConfigured = false;
-        if (apModeStarted) {
+        if (apStarted && apModeStarted) {
             Serial.println("⏳ 等待配网中...（AP模式）");
+        } else {
+            handleApStartupFailure("长按重新配网");
         }
         return;  // AP模式下不进入Deep-sleep
     }
@@ -185,6 +187,7 @@ void setup()
                 Serial.println("⏳ 等待配网中...（AP模式）");
             } else {
                 Serial.println("❌ WiFi连接失败，且AP修复入口未能启动");
+                handleApStartupFailure("复位后的WiFi/AP修复");
             }
         }
         return;
@@ -214,6 +217,7 @@ void setup()
                 enterDeepSleep();
             } else {
                 Serial.println("❌ 当前未能进入AP配网模式，请查看前面的AP启动日志");
+                handleApStartupFailure("首次配网");
             }
         }
         // 注意：AP配网模式下不进入Deep-sleep，保持Web服务器运行

@@ -5,5 +5,5 @@
 # Total Flash: 4MB (0x400000)
 nvs,      data, nvs,     0x9000,  0x5000,
 phy_init, data, phy,     0xe000,  0x2000,
-factory,  app,  factory, 0x10000, 0x150000,
+factory,  app,  factory, 0x10000, 0x240000,
 spiffs,   data, spiffs,  0x250000, 0x1B0000,

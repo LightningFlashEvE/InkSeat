@@ -17,11 +17,11 @@
 ### 工作流程（核心）
 
 1. 用户在 Web 页面处理图片并点击 **“发布”**（上传到云端）
-2. 云端将最新 EPD 数据持久化保存：`cloud_server/backend/data/epd/<deviceId>/latest.txt`，递增 `devices.imageVersion`，并记录当前内容类型、模板 ID、内容标签与云端期望唤醒间隔
+2. 云端将最新 EPD 数据原子保存到 `cloud_server/backend/data/epd/<deviceId>/latest.txt`，同时在 `versions/<imageVersion>.txt` 保留最近 5 个不可变版本，并记录当前内容类型、模板 ID、内容标签与云端期望唤醒间隔
 3. 设备在按键/定时唤醒后执行一次性流程：
-   - `POST /api/device/status` 上报 `deviceId/ip/rssi/uptime_ms/freeHeap/wakeType/wakeCause/currentSleepSeconds`，并获取 `claimed/imageVersion/imageUrl/nextSleepSeconds`
+   - `POST /api/device/status` 上报网络、唤醒、固件版本、复位原因、本地图片版本和待补报更新诊断，并获取 `claimed/imageVersion/imageUrl/nextSleepSeconds`
    - 若云端返回 `nextSleepSeconds > 0`，设备保存到 NVS `device/slpInt`，本次回睡时按该秒数配置定时唤醒；未返回或返回 0 时保留本地已有间隔，若本地未设置则使用默认 12 小时
-   - 若云端图片同步标记 `imageVersion > 0` 且 `imageVersion != NVS(imgVer)`：`GET imageUrl` 流式下载到 SPIFFS 临时文件 → 刷新墨水屏 → 刷新成功后写入 NVS 新版本 → Deep-sleep
+   - 若云端图片同步标记 `imageVersion > 0` 且 `imageVersion != NVS(imgVer)`：按 `imageUrl?v=<version>` 下载精确版本 → 校验并刷新墨水屏 → 刷新成功后写入 NVS 新版本 → `POST /api/device/update-result` 回传结果 → Deep-sleep
    - 若版本一致：直接 Deep-sleep
    - 若未绑定：显示满屏添加设备页（云端配置二维码 + 设备码）→ Deep-sleep
 
@@ -114,9 +114,9 @@
 
 #### 要求
 - Linux服务器 (Ubuntu 20.04+ 推荐)
-- 公网IP或域名
+- 公网域名与有效 TLS 证书
 - Docker 和 Docker Compose Plugin
-- 对外放行 `8080/tcp`
+- 对外放行 `443/tcp`；容器入口 `8080` 推荐仅监听回环地址
 
 #### MongoDB 数据目录
 
@@ -143,6 +143,8 @@ cd /opt/esp32-cloud/cloud_server
 # 首次部署或更新代码后：
 cd /opt/esp32-cloud/cloud_server  # 或 <your-project>/cloud_server
 git pull  # 拉取最新代码
+# 首次部署复制并编辑环境变量；PUBLIC_BASE_URL、管理员引导令牌和随机密钥为必填项
+cp .env.example .env
 # 后端镜像会安装中文/符号字体；模板或字体相关更新后必须无缓存重建
 docker compose build --no-cache  # 重新构建镜像
 docker compose up -d --force-recreate  # 强制重新创建容器
@@ -163,9 +165,14 @@ pip3 install -r requirements.txt
 export MONGO_INITDB_ROOT_USERNAME="esp32_epd_root"
 export MONGO_INITDB_ROOT_PASSWORD="change_this_mongo_password"
 export MONGODB_DB="esp32_epd"
-# 用于 status 返回 imageUrl（建议填公网域名或公网IP）
-export FLASK_HOST="<public-ip-or-domain>"
+# PUBLIC_BASE_URL 用于 status 返回 imageUrl，必须与固件 HTTPS origin 一致
+export FLASK_HOST="epd.example.com"
 export FLASK_PORT="8080"
+export PUBLIC_BASE_URL="https://epd.example.com"
+export SECRET_KEY="<random-secret>"
+export ADMIN_BOOTSTRAP_TOKEN="<at-least-32-random-characters>"
+export ALLOW_REGISTRATION="false"
+export DEVICE_AUTH_REQUIRED="true"
 
 # 4. 初始化数据库索引
 python3 create_indexes.py
@@ -178,7 +185,7 @@ python3 app.py
 
 ```bash
 # 开放端口
-sudo ufw allow 8080/tcp    # Web/API统一入口（Nginx）
+sudo ufw allow 443/tcp     # Web/API统一 HTTPS 入口
 sudo ufw enable
 ```
 
@@ -191,7 +198,7 @@ sudo ufw enable
      ```
      https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
      ```
-   - 工具 -> 开发板 -> 开发板管理器 -> 搜索 "esp32" -> 安装
+   - 工具 -> 开发板 -> 开发板管理器 -> 搜索 "esp32" -> 安装 **esp32 by Espressif Systems 3.3.10**（已验证版本）
 
 2. **选择开发板**：
    - 工具 -> 开发板 -> ESP32 Arduino -> **ESP32C3 Dev Module**
@@ -202,11 +209,12 @@ sudo ufw enable
    - 工具 -> Upload Speed -> **921600**
 
 3. **安装依赖库**：
-   - ArduinoJson (by Benoit Blanchon)
+   - **ArduinoJson 7.x** (by Benoit Blanchon，已验证主版本)
 
 4. **说明**：
    - 设备端已改为 `http_update.h` 的 **HTTP 拉取**模式，不再依赖旧的 MQTT 长连接链路。
-   - **必改项**：部署到新服务器时，必须把 `http_update.h` 中的 `CLOUD_API_HOST/CLOUD_API_PORT` 改为新服务器公网 IP/域名和端口；当前固件默认端口为 `8080`。否则 ESP32 会继续请求旧服务器。
+   - **必改项**：生产部署应把 `CLOUD_API_USE_HTTPS` 设为 `1`，同步配置 `CLOUD_API_HOST`、`CLOUD_API_PORT=443` 和正确的 `CLOUD_API_ROOT_CA_PEM`；它们必须与云端 `PUBLIC_BASE_URL=https://你的域名` 及外部 TLS 反向代理一致。
+   - 未启用 HTTPS 时，登录令牌和设备 `X-Device-Key` 仍可能被链路窃取，只适合受信内网或迁移期。
 
 5. **分区表配置**：
 
@@ -214,11 +222,13 @@ sudo ufw enable
 ```
 nvs,      data, nvs,     0x9000,  0x5000,
 phy_init, data, phy,     0xe000,  0x2000,
-factory,  app,  factory, 0x10000, 0x150000,
+factory,  app,  factory, 0x10000, 0x240000,
 spiffs,   data, spiffs,  0x250000, 0x1B0000,
 ```
 
 **注意**：确保 Arduino IDE 中选择了 **Custom Partition Table**，这样会自动使用项目根目录的 `partitions.csv`。
+
+当前分区是单 `factory` 应用的 **No OTA** 布局。`factory` 已扩展到 `0x240000`，正好使用到 `spiffs` 起始地址前，原有 SPIFFS 起始位置和容量不变。若要增加 OTA，仍必须重新设计整张分区表并重新评估两个应用槽与 SPIFFS 容量，不能只新增接口。
 
 6. **编译上传**：
    - 工具 -> Erase Flash -> **All Flash Contents**（首次烧录建议完全擦除）
@@ -237,6 +247,12 @@ text section exceeds available space in board
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1
+```
+
+如果本机已有旧版脚本创建的、尚无安全标记的 `C:\Loader_esp32wf`，新版脚本会拒绝自动清空它。确认目录确实是旧固件镜像后，仅首次显式接管：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -AdoptLegacyMirror
 ```
 
 脚本会自动：
@@ -305,15 +321,15 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 ```
 
 2. **访问Web界面**：
-   - 打开浏览器访问：`http://你的服务器IP:8080` 或 `http://your-domain.com:8080`
-   - 如果你额外配置了 80/443 反向代理，才可以省略 `:8080`
+   - 生产环境打开：`https://你的域名/`
+   - `http://服务器IP:8080` 仅作为受信内网或迁移期诊断入口；完整 TLS、首次管理员和设备凭据恢复步骤见 `cloud_server/README.md`
    - 首次访问需要注册/登录
 
 3. **添加设备**：
    - 登录后进入设备管理页面
    - 点击"添加设备"
-   - 输入ESP32显示的设备码（例如：`B6DA20`）
-   - 设备会自动绑定
+   - 同时输入ESP32显示的设备码（例如：`B6DA20`）和 6 位配对码
+   - 配对码校验通过后设备才会绑定；设备码本身不再作为凭据
 
 4. **上传图片**：
    - 在设备控制页面选择已添加的设备
@@ -339,7 +355,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 |------|------|------|------|------|
 | nvs | DATA | 0x9000 | 20KB | NVS存储（WiFi配置、设备绑定状态） |
 | phy_init | DATA | 0xE000 | 8KB | PHY初始化数据 |
-| factory | APP | 0x10000 | 1344KB | 应用程序 |
+| factory | APP | 0x10000 | 2304KiB | 应用程序 |
 | spiffs | DATA | 0x250000 | 1728KB | SPIFFS文件系统（图片缓存） |
 
 ### SPIFFS使用
@@ -360,13 +376,13 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 | **未绑定添加设备码页** | 设备实时绘制 | `800x144` 条带（约 58KB）按需分配，整屏流式发送 | `displayDeviceCode()` |
 
 - `http_update.h` 通过 `acquireEpdUiFrame()` / `releaseEpdUiFrame()` 管理共享 UI 画布，WiFi 配网页与设备码页 **共用、互斥**（同一唤醒周期只画其一）。
-- AP 模式顺序：**WiFi OFF → 分配约 58KB 条带缓冲流式刷整屏配网页 → 释放画布 → 启动开放热点 → 终端关联 / DHCP 后再启动 DNS 和 Web 配网**；AP 页面只走这一条预渲染路径，不再在 `loop()` 中补刷。可选 WPA2：在 `wifi_config.h` 将 `PROVISIONING_AP_PSK` 设为 ≥8 字符密码。
+- AP 模式顺序：**WiFi OFF → 分配约 58KB 条带缓冲流式刷整屏配网页 → 释放画布 → 启动开放热点 → 终端关联 / DHCP 后再启动 DNS 和 Web 配网**；AP 页面只走这一条预渲染路径，不再在 `loop()` 中补刷。可选 WPA2：在 `wifi_config.h` 将 `PROVISIONING_AP_PSK` 设为 8–63 个可打印 ASCII 字符；密码会完整显示在墨水屏上，并写入带四模块静区的 V9/M WiFi 二维码。
 - 未绑定添加设备码页同样使用约 58KB 条带缓冲流式刷整屏，二维码 payload 为云端 `index.html` 地址，设备码按当前 MAC 动态绘制。
 - 新增本地页面时：优先复用约 58KB 的 UI 缓冲；需要满屏时使用条带流式发送，**不要** `malloc(192000)`，也不要再引入 192KB 静态缓冲。
 
 ## 设备码说明
 
-设备码基于MAC地址生成，支持三种模式（在 `http_update.h` 中配置）：
+设备码基于MAC地址生成，支持三种模式（在 `device_identity.h` 中配置）：
 
 - **模式0**：完整12位（例如：`3C8A1FB6DA20`）
 - **模式1**：前6位（例如：`3C8A1F`）
@@ -474,7 +490,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 - 默认定时唤醒间隔为 12 小时；云端可在 `/api/device/status` 响应中返回 `nextSleepSeconds`，设备持久化到 NVS 并在下一次入睡时使用，适配时钟、天气、日历等模板的不同刷新频率。动态模板在设备唤醒查询状态时按需重渲染；天气每次唤醒刷新，每日一言在按键手动唤醒时强制换一句，定时唤醒按 `Asia/Shanghai` 日期刷新，日历也按 `Asia/Shanghai` 日期刷新；固件状态查询超时默认为 30 秒。当前内置模板为时钟、天气、日历、待办、每日一言、二维码；计数器和空白页不再作为内置模板入口。
 - 墨水屏断电仍保持画面，因此无需常供电刷新
 - 墨水屏 `BUSY` 等待带超时保护：初始化/上电/断电阶段默认 10 秒，显示刷新阶段默认 180 秒。超时会打印错误并退出当前显示流程，避免新板调试时因屏幕异常永久卡死。
-- 每次设备查询 `/api/device/status` 时会同步上报 `ip`、`rssi`、`uptime_ms`、`freeHeap`、`wakeType`、`wakeCause`、`currentSleepSeconds`，后端在设备列表中返回这些字段；设备卡片显示当前内容、唤醒间隔、预计自动唤醒时间和最后唤醒时间。
+- 每次设备查询 `/api/device/status` 时会同步上报网络、唤醒、固件版本、`esp_reset_reason()`、本地 `imgVer` 和待补报诊断。实际图片更新使用 NVS `device/updDiag` 记录 `download → verify → epd_power_on → epd_refresh → epd_power_off → nvs_commit → done` 阶段；云端设备信息区显示固件、本地/云端版本、最近刷新结果、错误阶段和诊断时间。
 - 只有图片实际刷新完成后才保存本地 `imgVer`；如果下载成功但显示失败，下次唤醒会继续重试同一版本。
 
 ## 扩展功能

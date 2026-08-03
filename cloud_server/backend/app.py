@@ -79,6 +79,23 @@ TELEMETRY_NUMERIC_LIMITS = {
     'freeHeap': (0, 16 * 1024 * 1024),
     'currentSleepSeconds': (0, 366 * 24 * 60 * 60),
 }
+UPDATE_RESULT_VALUES = {'pending', 'success', 'failed', 'interrupted'}
+UPDATE_STAGE_VALUES = {
+    'idle', 'download', 'verify', 'epd_power_on', 'epd_refresh',
+    'epd_power_off', 'nvs_commit', 'done',
+}
+UPDATE_ERROR_VALUES = {
+    'none', 'download_http', 'download_timeout', 'size_mismatch',
+    'charset_invalid', 'sha_mismatch', 'spiffs_write', 'epd_not_bound',
+    'busy_power_on', 'busy_refresh', 'busy_power_off', 'nvs_save',
+    'interrupted', 'version_expired',
+}
+RESET_REASON_VALUES = {
+    'POWERON', 'EXTERNAL', 'SOFTWARE', 'PANIC', 'INT_WDT', 'TASK_WDT',
+    'OTHER_WDT', 'DEEPSLEEP', 'BROWNOUT', 'SDIO', 'USB', 'JTAG', 'EFUSE',
+    'POWER_GLITCH', 'CPU_LOCKUP', 'UNKNOWN',
+}
+UPDATE_ATTEMPT_ID_PATTERN = re.compile(r'^[0-9a-fA-F]{16}$')
 
 
 def sanitize_telemetry_text(value, limit: int) -> str:
@@ -86,6 +103,67 @@ def sanitize_telemetry_text(value, limit: int) -> str:
         return ''
     normalized = re.sub(r'[\x00-\x1f\x7f]+', ' ', value).strip()
     return normalized[:limit]
+
+
+def extract_device_diagnostic_telemetry(data, now_ms: int):
+    """Validate firmware/update diagnostics without trusting arbitrary field names."""
+    telemetry = {}
+    firmware_version = sanitize_telemetry_text(data.get('firmwareVersion'), 32)
+    firmware_build = sanitize_telemetry_text(data.get('firmwareBuild'), 64)
+    reset_reason = sanitize_telemetry_text(data.get('resetReason'), 32).upper()
+    if firmware_version:
+        telemetry['firmwareVersion'] = firmware_version
+    if firmware_build:
+        telemetry['firmwareBuild'] = firmware_build
+    if reset_reason in RESET_REASON_VALUES:
+        telemetry['resetReason'] = reset_reason
+
+    local_version = data.get('localImageVersion')
+    if isinstance(local_version, int) and not isinstance(local_version, bool) and 0 <= local_version <= 2**63 - 1:
+        telemetry['localImageVersion'] = local_version
+
+    gpio0_stuck_low = data.get('gpio0StuckLow') is True
+    telemetry['gpio0StuckLow'] = gpio0_stuck_low
+    raw_result = data.get('updateResult')
+    diagnostic_present = data.get('diagnosticPresent') is True or raw_result is not None
+
+    if not diagnostic_present:
+        return telemetry, True, None
+    if raw_result is None and gpio0_stuck_low:
+        telemetry['lastDiagnosticAt'] = now_ms
+        return telemetry, True, None
+
+    result = sanitize_telemetry_text(raw_result, 16).lower()
+    stage = sanitize_telemetry_text(data.get('updateStage'), 32).lower()
+    error = sanitize_telemetry_text(data.get('updateError'), 32).lower()
+    attempt_id = sanitize_telemetry_text(data.get('updateAttemptId'), 16)
+    target_version = data.get('targetImageVersion')
+    duration_ms = data.get('updateDurationMs')
+
+    if result not in UPDATE_RESULT_VALUES:
+        return telemetry, False, 'Invalid updateResult'
+    if stage not in UPDATE_STAGE_VALUES:
+        return telemetry, False, 'Invalid updateStage'
+    if error not in UPDATE_ERROR_VALUES:
+        return telemetry, False, 'Invalid updateError'
+    if not UPDATE_ATTEMPT_ID_PATTERN.fullmatch(attempt_id):
+        return telemetry, False, 'Invalid updateAttemptId'
+    if not isinstance(target_version, int) or isinstance(target_version, bool) or not (0 < target_version <= 2**63 - 1):
+        return telemetry, False, 'Invalid targetImageVersion'
+    if not isinstance(duration_ms, int) or isinstance(duration_ms, bool) or not (0 <= duration_ms <= 30 * 60 * 1000):
+        return telemetry, False, 'Invalid updateDurationMs'
+
+    telemetry.update({
+        'targetImageVersion': target_version,
+        'updateAttemptId': attempt_id.lower(),
+        'lastUpdateResult': result,
+        'lastUpdateStage': stage,
+        'lastUpdateError': error,
+        'lastUpdateDurationMs': duration_ms,
+        'lastUpdateAt': now_ms,
+        'lastDiagnosticAt': now_ms,
+    })
+    return telemetry, True, None
 
 
 PAGE_MAX_NAME_CHARS = 100
@@ -986,9 +1064,10 @@ pairing_codes_collection = None
 saved_nameplate_templates_collection = None
 
 # ==================== 图片持久化存储目录 ====================
-# 图片数据保存在 data/epd/<deviceId>/latest.txt
+# 图片数据保存在 data/epd/<deviceId>/latest.txt，并保留最近版本快照。
 DATA_DIR = Path(__file__).parent / 'data' / 'epd'
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+IMAGE_VERSION_RETENTION = 5
 DEVICE_WRITE_LOCK_STRIPES = 128
 _device_write_locks = tuple(threading.Lock() for _ in range(DEVICE_WRITE_LOCK_STRIPES))
 
@@ -1020,8 +1099,41 @@ def get_device_image_path(device_id: str, create_parent: bool = False) -> Path:
     return get_device_data_dir(device_id, create=create_parent) / 'latest.txt'
 
 
-def get_ready_device_image_path(device_id: str, device=None):
-    image_path = get_device_image_path(device_id, create_parent=False)
+def get_device_versions_dir(device_id: str, create: bool = False) -> Path:
+    versions_dir = get_device_data_dir(device_id, create=create) / 'versions'
+    if create:
+        versions_dir.mkdir(parents=True, exist_ok=True)
+    return versions_dir
+
+
+def get_device_version_image_path(device_id: str, image_version: int, create_parent: bool = False) -> Path:
+    version = int(image_version)
+    if version <= 0:
+        raise ValueError('Invalid image version')
+    return get_device_versions_dir(device_id, create=create_parent) / f'{version}.txt'
+
+
+def get_ready_device_image_path(device_id: str, device=None, image_version=None):
+    image_path = None
+    if image_version is not None:
+        requested_version = int(image_version)
+        version_path = get_device_version_image_path(device_id, requested_version, create_parent=False)
+        if version_path.is_file():
+            image_path = version_path
+        elif device and int(device.get('imageVersion') or 0) == requested_version:
+            # First deployment compatibility: migrate lazily from the legacy latest file.
+            image_path = get_device_image_path(device_id, create_parent=False)
+        else:
+            return None
+    elif device and int(device.get('imageVersion') or 0) > 0:
+        current_version_path = get_device_version_image_path(
+            device_id, int(device.get('imageVersion')), create_parent=False,
+        )
+        image_path = current_version_path if current_version_path.is_file() else get_device_image_path(
+            device_id, create_parent=False,
+        )
+    else:
+        image_path = get_device_image_path(device_id, create_parent=False)
     try:
         if not image_path.is_file() or image_path.stat().st_size != EPD_EXPECTED_CHARS:
             return None
@@ -1081,6 +1193,12 @@ def cleanup_device_artifacts(device_id: str) -> None:
                 'rssi': '', 'uptime_ms': '', 'freeHeap': '',
                 'currentSleepSeconds': '', 'lastWakeType': '',
                 'lastWakeCause': '', 'lastManualWake': '', 'lastAutoWake': '',
+                'firmwareVersion': '', 'firmwareBuild': '', 'resetReason': '',
+                'localImageVersion': '', 'gpio0StuckLow': '',
+                'targetImageVersion': '', 'updateAttemptId': '',
+                'lastUpdateResult': '', 'lastUpdateStage': '',
+                'lastUpdateError': '', 'lastUpdateDurationMs': '',
+                'lastUpdateAt': '', 'lastDiagnosticAt': '',
                 'deviceKeyResetUntil': '', 'deviceKeyResetRequestedBy': '',
                 'deviceKeyResetRequestedAt': '',
                 'unclaimedExpiresAt': '',
@@ -1091,12 +1209,11 @@ def cleanup_device_artifacts(device_id: str) -> None:
     if device_dir.exists():
         shutil.rmtree(device_dir)
 
-def save_device_image(device_id: str, image_data: str) -> bool:
-    """保存设备图片数据到磁盘"""
+def _atomic_write_device_image(image_path: Path, image_data: str) -> None:
     tmp_path = None
     try:
-        image_path = get_device_image_path(device_id, create_parent=True)
-        fd, tmp_name = tempfile.mkstemp(prefix='.latest-', suffix='.tmp', dir=str(image_path.parent))
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(prefix=f'.{image_path.stem}-', suffix='.tmp', dir=str(image_path.parent))
         tmp_path = Path(tmp_name)
         with os.fdopen(fd, 'w', encoding='utf-8', newline='') as f:
             f.write(image_data)
@@ -1108,18 +1225,85 @@ def save_device_image(device_id: str, image_data: str) -> bool:
                 pass
         os.replace(tmp_path, image_path)
         tmp_path = None
-
-        print(f'💾 图片已保存: {image_path} ({len(image_data)} 字符)')
-        return True
-    except Exception as e:
-        print(f'❌ 保存图片失败: {e}')
-        return False
     finally:
         if tmp_path is not None:
             try:
                 tmp_path.unlink(missing_ok=True)
             except Exception:
                 pass
+
+
+def _prune_device_image_versions(device_id: str) -> None:
+    versions_dir = get_device_versions_dir(device_id, create=False)
+    if not versions_dir.exists():
+        return
+    version_files = []
+    for path in versions_dir.glob('*.txt'):
+        try:
+            version_files.append((int(path.stem), path))
+        except ValueError:
+            continue
+    for _, old_path in sorted(version_files, reverse=True)[IMAGE_VERSION_RETENTION:]:
+        old_path.unlink(missing_ok=True)
+
+
+def save_device_image(
+    device_id: str,
+    image_data: str,
+    image_version=None,
+    previous_version=None,
+    previous_sha256=None,
+) -> bool:
+    """Atomically save latest data and immutable version snapshots.
+
+    ``previous_version`` migrates a pre-versioning ``latest.txt`` before it is
+    replaced. This keeps an already-issued ``?v=N`` URL valid across the first
+    deployment of versioned image storage.
+    """
+    try:
+        image_path = get_device_image_path(device_id, create_parent=True)
+        if previous_version is not None:
+            previous_version = int(previous_version)
+            if previous_version > 0:
+                previous_path = get_device_version_image_path(
+                    device_id, previous_version, create_parent=True,
+                )
+                if not previous_path.exists() and image_path.exists():
+                    previous_data = image_path.read_text(encoding='utf-8')
+                    valid, validation_error = validate_epd_text_payload(previous_data)
+                    if not valid:
+                        raise RuntimeError(
+                            f'Cannot preserve legacy image version {previous_version}: '
+                            f'{validation_error}'
+                        )
+                    previous_hash = hashlib.sha256(previous_data.encode('utf-8')).hexdigest()
+                    if previous_sha256 and not secrets.compare_digest(
+                        previous_hash, str(previous_sha256).strip().lower(),
+                    ):
+                        raise RuntimeError(
+                            f'Cannot preserve legacy image version {previous_version}: SHA-256 mismatch'
+                        )
+                    _atomic_write_device_image(previous_path, previous_data)
+
+        if image_version is not None:
+            version_path = get_device_version_image_path(device_id, int(image_version), create_parent=True)
+            if version_path.exists():
+                existing = version_path.read_text(encoding='utf-8')
+                if not secrets.compare_digest(existing, image_data):
+                    raise RuntimeError(f'Image version {image_version} already contains different data')
+            else:
+                _atomic_write_device_image(version_path, image_data)
+        _atomic_write_device_image(image_path, image_data)
+        if image_version is not None:
+            _prune_device_image_versions(device_id)
+        print(
+            f'💾 图片已保存: {image_path} ({len(image_data)} 字符, '
+            f'version={image_version if image_version is not None else "legacy"})'
+        )
+        return True
+    except Exception as e:
+        print(f'❌ 保存图片失败: {e}')
+        return False
 
 def load_device_image(device_id: str) -> str:
     """从磁盘加载设备图片数据"""
@@ -1917,6 +2101,18 @@ def get_devices_status():
                     device_info['uptime_ms'] = status.get('uptime_ms')
                     device_info['freeHeap'] = status.get('freeHeap')
                     device_info['currentSleepSeconds'] = status.get('currentSleepSeconds')
+                    device_info['firmwareVersion'] = status.get('firmwareVersion')
+                    device_info['firmwareBuild'] = status.get('firmwareBuild')
+                    device_info['resetReason'] = status.get('resetReason')
+                    device_info['localImageVersion'] = status.get('localImageVersion')
+                    device_info['gpio0StuckLow'] = status.get('gpio0StuckLow')
+                    device_info['targetImageVersion'] = status.get('targetImageVersion')
+                    device_info['updateAttemptId'] = status.get('updateAttemptId')
+                    device_info['lastUpdateResult'] = status.get('lastUpdateResult')
+                    device_info['lastUpdateStage'] = status.get('lastUpdateStage')
+                    device_info['lastUpdateError'] = status.get('lastUpdateError')
+                    device_info['lastUpdateDurationMs'] = status.get('lastUpdateDurationMs')
+                    device_info['lastUpdateAt'] = status.get('lastUpdateAt')
 
             devices.append(device_info)
 
@@ -1996,6 +2192,13 @@ def device_status():
         if wake_cause:
             telemetry['lastWakeCause'] = wake_cause
 
+        diagnostic_telemetry, diagnostic_accepted, diagnostic_error = (
+            extract_device_diagnostic_telemetry(data, now_ms)
+        )
+        telemetry.update(diagnostic_telemetry)
+        if diagnostic_error:
+            print(f'⚠️ 设备 {clean_id} 诊断字段被拒绝: {diagnostic_error}')
+
         print(
             f"📡 设备 {clean_id} 上报: "
             f"ip={telemetry.get('ip', '-')}, "
@@ -2035,7 +2238,8 @@ def device_status():
         response = {
             'success': True,
             'deviceId': clean_id,
-            'claimed': claimed
+            'claimed': claimed,
+            'diagnosticAccepted': diagnostic_accepted,
         }
 
         if claimed and device:
@@ -2067,7 +2271,14 @@ def device_status():
                         else:
                             print(f'🔄 设备唤醒触发渲染: {clean_id}, 模板={template_id}')
                             epd_data = render_template_epd_data(template_id, latest_template_config)
-                            if not save_device_image(clean_id, epd_data):
+                            next_version = int(latest_device.get('imageVersion') or 0) + 1
+                            if not save_device_image(
+                                clean_id,
+                                epd_data,
+                                next_version,
+                                previous_version=latest_device.get('imageVersion'),
+                                previous_sha256=latest_device.get('imageSha256'),
+                            ):
                                 raise RuntimeError('Failed to save rendered image')
                             device = devices_collection.find_one_and_update(
                                 {
@@ -2077,8 +2288,8 @@ def device_status():
                                     'activeTemplateId': template_id,
                                 },
                                 {
-                                    '$inc': {'imageVersion': 1},
                                     '$set': {
+                                        'imageVersion': next_version,
                                         'imageSizeChars': len(epd_data),
                                         'imageSizeBytes': len(epd_data.encode('utf-8')),
                                         'imageSha256': hashlib.sha256(epd_data.encode('utf-8')).hexdigest(),
@@ -2141,6 +2352,74 @@ def device_status():
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': 'Failed to query device status'}), 500
+
+
+@app.route('/api/device/update-result', methods=['POST'])
+def device_update_result():
+    """Receive an authenticated, bounded result for one image update attempt."""
+    try:
+        if request.content_length is not None and request.content_length > DEVICE_STATUS_MAX_BODY_BYTES:
+            return jsonify({'success': False, 'error': 'Device update payload too large'}), 413
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data, dict):
+            return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400
+        clean_id = normalize_device_id(str(data.get('deviceId') or ''))
+        if not is_valid_device_id(clean_id):
+            return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
+        if device_status_collection is None:
+            return jsonify({'success': False, 'error': 'Database not connected'}), 500
+        if not authenticate_device_key(clean_id, allow_tofu=False):
+            return jsonify({'success': False, 'error': 'Invalid device credentials'}), 401
+        required_fields = {
+            'firmwareVersion', 'firmwareBuild', 'resetReason',
+            'localImageVersion', 'targetImageVersion', 'updateAttemptId',
+            'updateResult', 'updateStage', 'updateError', 'updateDurationMs',
+            'gpio0StuckLow',
+        }
+        missing_fields = sorted(required_fields - data.keys())
+        if missing_fields:
+            return jsonify({
+                'success': False,
+                'error': f"Missing update fields: {', '.join(missing_fields)}",
+            }), 400
+        if not isinstance(data.get('gpio0StuckLow'), bool):
+            return jsonify({'success': False, 'error': 'Invalid gpio0StuckLow'}), 400
+        now_ms = int(time.time() * 1000)
+        telemetry, accepted, error = extract_device_diagnostic_telemetry(data, now_ms)
+        if not accepted:
+            return jsonify({'success': False, 'diagnosticAccepted': False, 'error': error}), 400
+        required_telemetry = {
+            'firmwareVersion', 'firmwareBuild', 'resetReason', 'localImageVersion',
+            'targetImageVersion', 'updateAttemptId', 'lastUpdateResult',
+            'lastUpdateStage', 'lastUpdateError', 'lastUpdateDurationMs',
+            'gpio0StuckLow',
+        }
+        if not required_telemetry.issubset(telemetry):
+            return jsonify({
+                'success': False,
+                'diagnosticAccepted': False,
+                'error': 'Invalid firmware or version diagnostics',
+            }), 400
+        telemetry['updatedAt'] = utcnow()
+        device_status_collection.update_one(
+            {'deviceId': clean_id}, {'$set': telemetry}, upsert=True,
+        )
+        print(
+            f"📋 设备 {clean_id} 更新结果: "
+            f"result={telemetry.get('lastUpdateResult', '-')}, "
+            f"stage={telemetry.get('lastUpdateStage', '-')}, "
+            f"error={telemetry.get('lastUpdateError', '-')}, "
+            f"target={telemetry.get('targetImageVersion', '-')}"
+        )
+        return jsonify({
+            'success': True,
+            'deviceId': clean_id,
+            'diagnosticAccepted': True,
+        })
+    except Exception as e:
+        print(f'❌ Error storing device update result: {e}')
+        return jsonify({'success': False, 'error': 'Failed to store update result'}), 500
+
 
 @app.route('/api/device/claim', methods=['POST'])
 @login_required
@@ -2814,8 +3093,17 @@ def epd_load():
             })
             if current_device is None:
                 return jsonify({'success': False, 'error': 'Device changed during publish'}), 409
-            if not save_device_image(clean_id, image_data):
+            new_version = int(current_device.get('imageVersion') or 0) + 1
+            if not save_device_image(
+                clean_id,
+                image_data,
+                new_version,
+                previous_version=current_device.get('imageVersion'),
+                previous_sha256=current_device.get('imageSha256'),
+            ):
                 return jsonify({'success': False, 'error': 'Failed to save image'}), 500
+            update_doc['$set']['imageVersion'] = new_version
+            update_doc.pop('$inc', None)
             updated_device = devices_collection.find_one_and_update(
                 {'deviceId': clean_id, 'owner': owner, 'claimed': True},
                 update_doc,
@@ -2856,23 +3144,45 @@ def epd_raw_download(device_id):
     if not authenticate_device_key(clean_id, allow_tofu=False):
         return jsonify({'success': False, 'error': 'Invalid device credentials'}), 401
 
-    image_path = get_device_image_path(clean_id, create_parent=False)
-    if not image_path.is_file():
-        print(f'❌ 图片不存在: {clean_id}')
-        return jsonify({'error': 'Image not found'}), 404
-
     device = None
     if devices_collection is not None:
         device = devices_collection.find_one(
             {'deviceId': clean_id},
-            {'_id': 0, 'imageSha256': 1, 'imageSizeChars': 1},
+            {'_id': 0, 'imageVersion': 1, 'imageSha256': 1, 'imageSizeChars': 1},
         )
-    if get_ready_device_image_path(clean_id, device) is None:
+
+    requested_version = None
+    raw_version = request.args.get('v')
+    if raw_version is not None:
+        try:
+            requested_version = int(raw_version)
+        except (TypeError, ValueError):
+            return jsonify({'success': False, 'error': 'Invalid image version'}), 400
+        if requested_version <= 0:
+            return jsonify({'success': False, 'error': 'Invalid image version'}), 400
+
+    current_version = int(device.get('imageVersion') or 0) if device else 0
+    validation_device = device if requested_version is None or requested_version == current_version else None
+    image_path = get_ready_device_image_path(
+        clean_id, validation_device, image_version=requested_version,
+    )
+    if image_path is None and requested_version is not None:
+        print(
+            f'⚠️ 请求的图片版本已不可用: {clean_id}, '
+            f'requested={requested_version}, current={current_version}'
+        )
+        return jsonify({
+            'success': False,
+            'error': 'Requested image version is no longer available',
+            'errorCode': 'IMAGE_VERSION_EXPIRED',
+            'currentImageVersion': current_version,
+        }), 409
+    if image_path is None:
         print(f'❌ 存储图片或元数据校验失败: {clean_id}')
         return jsonify({'success': False, 'error': 'Stored image is invalid'}), 503
 
     data_size_bytes = image_path.stat().st_size
-    print(f'📥 ESP32下载图片: {clean_id}')
+    print(f'📥 ESP32下载图片: {clean_id}, version={requested_version or current_version or "legacy"}')
     print(f'   文件大小: {data_size_bytes} 字节 ({data_size_bytes/1024:.2f} KB)')
 
     if data_size_bytes != EPD_EXPECTED_CHARS:
@@ -2893,13 +3203,18 @@ def epd_raw_download(device_id):
     resp.headers['Expires'] = '0'
     resp.headers['Accept-Ranges'] = 'bytes'
     resp.headers['X-EPD-Expected-Chars'] = str(EPD_EXPECTED_CHARS)
+    if requested_version is not None:
+        resp.headers['X-EPD-Version'] = str(requested_version)
 
-    # 如果 DB 里有 hash，就带上；没有也不强制（兼容旧数据）
-    if device:
+    # 当前版本使用DB元数据；历史不可变版本计算自己的摘要，避免返回最新版本的hash。
+    if device and (requested_version is None or requested_version == current_version):
         if device.get('imageSha256'):
             resp.headers['X-EPD-SHA256'] = device['imageSha256']
         if device.get('imageSizeChars') is not None:
             resp.headers['X-EPD-Chars'] = str(device['imageSizeChars'])
+    elif requested_version is not None:
+        resp.headers['X-EPD-SHA256'] = hashlib.sha256(image_path.read_bytes()).hexdigest()
+        resp.headers['X-EPD-Chars'] = str(data_size_bytes)
 
     return resp
 
@@ -3083,11 +3398,18 @@ def device_set_template():
             })
             if current_device is None:
                 return jsonify({'success': False, 'error': 'Device changed during publish'}), 409
-            if not save_device_image(clean_id, epd_data):
+            new_version = int(current_device.get('imageVersion') or 0) + 1
+            if not save_device_image(
+                clean_id,
+                epd_data,
+                new_version,
+                previous_version=current_device.get('imageVersion'),
+                previous_sha256=current_device.get('imageSha256'),
+            ):
                 return jsonify({'success': False, 'error': 'Failed to save rendered image'}), 500
             updated_device = devices_collection.find_one_and_update(
                 {'deviceId': clean_id, 'owner': owner, 'claimed': True},
-                {'$inc': {'imageVersion': 1}, '$set': update_fields},
+                {'$set': {**update_fields, 'imageVersion': new_version}},
                 return_document=ReturnDocument.AFTER,
             )
         if updated_device is None:
@@ -3201,13 +3523,20 @@ def dispatch_nameplates():
                     })
                     if current_device is None:
                         raise RuntimeError('Device changed during publish')
-                    if not save_device_image(clean_id, epd_data):
+                    new_version = int(current_device.get('imageVersion') or 0) + 1
+                    if not save_device_image(
+                        clean_id,
+                        epd_data,
+                        new_version,
+                        previous_version=current_device.get('imageVersion'),
+                        previous_sha256=current_device.get('imageSha256'),
+                    ):
                         raise RuntimeError('Failed to save rendered image')
                     updated_device = devices_collection.find_one_and_update(
                         {'deviceId': clean_id, 'owner': owner, 'claimed': True},
                         {
-                            '$inc': {'imageVersion': 1},
                             '$set': {
+                                'imageVersion': new_version,
                                 'imageSizeChars': len(epd_data),
                                 'imageSizeBytes': len(epd_data.encode('utf-8')),
                                 'imageSha256': hashlib.sha256(epd_data.encode('utf-8')).hexdigest(),

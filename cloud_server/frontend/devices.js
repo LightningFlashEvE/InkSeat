@@ -474,6 +474,14 @@ function renderSelectedDevice() {
         setText('selectedDeviceIp', '未上报');
         setSignalIndicator('selectedDeviceSignal', null);
         setText('selectedDeviceSleep', '默认 12小时');
+        setText('selectedDeviceFirmware', '未上报');
+        setText('selectedDeviceLocalVersion', '未上报');
+        setText('selectedDeviceCloudVersion', '-');
+        setText('selectedDeviceResetReason', '未上报');
+        setDiagnosticState('selectedDeviceUpdateResult', null);
+        setText('selectedDeviceUpdateStage', '未上报');
+        setText('selectedDeviceUpdateError', '无');
+        setText('selectedDeviceUpdateAt', '未上报');
         setText('selectedPreviewName', '会议牌');
         setText('selectedPreviewContent', '会议名牌');
         setText('selectedPreviewWake', '等待上报');
@@ -487,6 +495,14 @@ function renderSelectedDevice() {
     setText('selectedDeviceIp', view.ipText);
     setSignalIndicator('selectedDeviceSignal', view.status.rssi);
     setText('selectedDeviceSleep', view.sleepText);
+    setText('selectedDeviceFirmware', formatFirmware(view.status));
+    setText('selectedDeviceLocalVersion', formatImageVersion(view.status.localImageVersion));
+    setText('selectedDeviceCloudVersion', formatImageVersion(view.status.imageVersion ?? device.imageVersion));
+    setText('selectedDeviceResetReason', formatResetReason(view.status.resetReason));
+    setDiagnosticState('selectedDeviceUpdateResult', view.status.lastUpdateResult, view.status.lastUpdateDurationMs);
+    setText('selectedDeviceUpdateStage', formatUpdateStage(view.status.lastUpdateStage));
+    setText('selectedDeviceUpdateError', formatUpdateError(view.status.lastUpdateError, view.status.gpio0StuckLow));
+    setText('selectedDeviceUpdateAt', view.status.lastUpdateAt ? formatDate(view.status.lastUpdateAt) : '未上报');
     setText('selectedPreviewName', device.name);
     setText('selectedPreviewContent', view.content);
     setText('selectedPreviewWake', view.estimatedWakeText);
@@ -517,7 +533,7 @@ function setSignalIndicator(id, rssi) {
 }
 
 function openDevice(deviceId) {
-    window.location.href = `control.html?v=20260803dispatch1&deviceId=${encodeURIComponent(deviceId)}`;
+    window.location.href = `control.html?v=20260803diag1&deviceId=${encodeURIComponent(deviceId)}`;
 }
 
 let pollingInterval = null;
@@ -604,6 +620,18 @@ async function pollDeviceStatus() {
                         estimatedNextAutoWakeAt: device.estimatedNextAutoWakeAt,
                         wakePolicyPending: device.wakePolicyPending,
                         imageVersion: device.imageVersion,
+                        firmwareVersion: device.firmwareVersion,
+                        firmwareBuild: device.firmwareBuild,
+                        resetReason: device.resetReason,
+                        localImageVersion: device.localImageVersion,
+                        gpio0StuckLow: device.gpio0StuckLow,
+                        targetImageVersion: device.targetImageVersion,
+                        updateAttemptId: device.updateAttemptId,
+                        lastUpdateResult: device.lastUpdateResult,
+                        lastUpdateStage: device.lastUpdateStage,
+                        lastUpdateError: device.lastUpdateError,
+                        lastUpdateDurationMs: device.lastUpdateDurationMs,
+                        lastUpdateAt: device.lastUpdateAt,
                         lastSeen: device.lastSeen
                     };
 
@@ -753,6 +781,93 @@ function formatSleepInterval(seconds) {
     if (seconds % 3600 === 0) return `${seconds / 3600}小时`;
     if (seconds % 60 === 0) return `${seconds / 60}分钟`;
     return `${seconds}秒`;
+}
+
+function formatFirmware(status) {
+    if (!status.firmwareVersion) return '未上报';
+    return status.firmwareBuild
+        ? `${status.firmwareVersion} · ${status.firmwareBuild}`
+        : status.firmwareVersion;
+}
+
+function formatImageVersion(version) {
+    if (version === undefined || version === null) return '未上报';
+    const normalized = Number(version);
+    return Number.isFinite(normalized) ? String(normalized) : '未上报';
+}
+
+function formatResetReason(reason) {
+    const labels = {
+        POWERON: '上电',
+        EXTERNAL: '外部复位',
+        SOFTWARE: '软件复位',
+        PANIC: '程序崩溃',
+        INT_WDT: '中断看门狗',
+        TASK_WDT: '任务看门狗',
+        OTHER_WDT: '看门狗复位',
+        DEEPSLEEP: '深睡唤醒',
+        BROWNOUT: '电压不足',
+        SDIO: 'SDIO复位',
+        USB: 'USB复位',
+        JTAG: 'JTAG复位',
+        EFUSE: 'eFuse错误',
+        POWER_GLITCH: '电源毛刺',
+        CPU_LOCKUP: 'CPU锁死',
+        UNKNOWN: '未知'
+    };
+    return labels[reason] || reason || '未上报';
+}
+
+function formatUpdateStage(stage) {
+    const labels = {
+        idle: '空闲',
+        download: '下载图片',
+        verify: '校验图片',
+        epd_power_on: '屏幕上电',
+        epd_refresh: '屏幕刷新',
+        epd_power_off: '屏幕断电',
+        nvs_commit: '保存版本',
+        done: '完成'
+    };
+    return labels[stage] || '未上报';
+}
+
+function formatUpdateError(error, gpio0StuckLow) {
+    if (gpio0StuckLow) return 'GPIO0 持续低电平';
+    const labels = {
+        none: '无',
+        download_http: '网络或 HTTP 错误',
+        download_timeout: '图片下载超时',
+        size_mismatch: '图片长度不匹配',
+        charset_invalid: '图片字符格式错误',
+        sha_mismatch: 'SHA-256 校验失败',
+        spiffs_write: 'SPIFFS 写入失败',
+        epd_not_bound: '屏幕显示接口未绑定',
+        busy_power_on: '屏幕上电 BUSY 超时',
+        busy_refresh: '屏幕刷新 BUSY 超时',
+        busy_power_off: '屏幕断电 BUSY 超时',
+        nvs_save: '版本写入 NVS 失败',
+        interrupted: '更新过程中发生复位',
+        version_expired: '请求的图片版本已过期'
+    };
+    return labels[error] || (error ? error : '无');
+}
+
+function setDiagnosticState(id, result, durationMs) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    const labels = {
+        success: '刷新成功',
+        failed: '刷新失败',
+        pending: '刷新中',
+        interrupted: '刷新被中断'
+    };
+    let text = labels[result] || '未上报';
+    if (Number.isFinite(Number(durationMs)) && Number(durationMs) > 0 && result) {
+        text += ` · ${(Number(durationMs) / 1000).toFixed(1)}秒`;
+    }
+    element.textContent = text;
+    element.className = `meeting-diagnostic-state ${labels[result] ? result : 'none'}`;
 }
 
 function formatEstimatedWake(status) {

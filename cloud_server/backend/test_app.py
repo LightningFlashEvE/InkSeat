@@ -526,6 +526,95 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertNotRegex(stored['ip'], r'[\r\n]')
         self.assertNotRegex(stored['lastWakeCause'], r'[\r\n]')
 
+    def test_authenticated_update_result_is_stored_and_exposed(self):
+        device_key = 'A' * 64
+        backend.devices_collection = FakeCollection([{
+            'deviceId': 'A1B2C3', 'owner': 'bob', 'claimed': True, 'imageVersion': 8,
+        }])
+        backend.device_status_collection = FakeCollection([{
+            'deviceId': 'A1B2C3',
+            'deviceKeyHash': hashlib.sha256(device_key.lower().encode('ascii')).hexdigest(),
+        }])
+        payload = {
+            'deviceId': 'A1B2C3',
+            'firmwareVersion': '3.1.0',
+            'firmwareBuild': 'Aug 03 2026 12:00:00',
+            'resetReason': 'DEEPSLEEP',
+            'localImageVersion': 8,
+            'targetImageVersion': 8,
+            'updateAttemptId': '0123456789abcdef',
+            'updateResult': 'success',
+            'updateStage': 'done',
+            'updateError': 'none',
+            'updateDurationMs': 123456,
+            'gpio0StuckLow': False,
+        }
+
+        result = self.client.post(
+            '/api/device/update-result', json=payload,
+            headers={'X-Device-Key': device_key},
+        )
+        devices = self.client.get('/api/devices')
+
+        self.assertEqual(result.status_code, 200)
+        self.assertTrue(result.get_json()['diagnosticAccepted'])
+        stored = backend.device_status_collection.find_one({'deviceId': 'A1B2C3'})
+        self.assertEqual(stored['lastUpdateResult'], 'success')
+        self.assertEqual(stored['lastUpdateStage'], 'done')
+        self.assertEqual(stored['localImageVersion'], 8)
+        self.assertEqual(devices.status_code, 200)
+        exposed = devices.get_json()['devices'][0]
+        self.assertEqual(exposed['firmwareVersion'], '3.1.0')
+        self.assertEqual(exposed['lastUpdateDurationMs'], 123456)
+
+    def test_update_result_rejects_unknown_stage_without_overwriting_status(self):
+        device_key = 'A' * 64
+        backend.device_status_collection = FakeCollection([{
+            'deviceId': 'A1B2C3',
+            'deviceKeyHash': hashlib.sha256(device_key.lower().encode('ascii')).hexdigest(),
+            'lastUpdateResult': 'success',
+        }])
+        payload = {
+            'deviceId': 'A1B2C3',
+            'firmwareVersion': '3.1.0', 'firmwareBuild': 'Aug 03 2026 12:00:00',
+            'resetReason': 'DEEPSLEEP', 'localImageVersion': 8,
+            'targetImageVersion': 9, 'updateAttemptId': '0123456789abcdef',
+            'updateResult': 'failed', 'updateStage': 'arbitrary_stage',
+            'updateError': 'download_http', 'updateDurationMs': 100,
+            'gpio0StuckLow': False,
+        }
+        response = self.client.post(
+            '/api/device/update-result', json=payload,
+            headers={'X-Device-Key': device_key},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        stored = backend.device_status_collection.find_one({'deviceId': 'A1B2C3'})
+        self.assertEqual(stored['lastUpdateResult'], 'success')
+
+    def test_status_accepts_interrupted_update_diagnostic_for_next_wake_replay(self):
+        device_key = 'A' * 64
+        response = self.client.post(
+            '/api/device/status',
+            json={
+                'deviceId': 'A1B2C3', 'diagnosticPresent': True,
+                'firmwareVersion': '3.1.0', 'resetReason': 'BROWNOUT',
+                'localImageVersion': 7, 'targetImageVersion': 8,
+                'updateAttemptId': 'fedcba9876543210',
+                'updateResult': 'interrupted', 'updateStage': 'epd_refresh',
+                'updateError': 'interrupted', 'updateDurationMs': 8000,
+                'gpio0StuckLow': False,
+            },
+            headers={'X-Device-Key': device_key},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()['diagnosticAccepted'])
+        stored = backend.device_status_collection.find_one({'deviceId': 'A1B2C3'})
+        self.assertEqual(stored['lastUpdateResult'], 'interrupted')
+        self.assertEqual(stored['lastUpdateStage'], 'epd_refresh')
+        self.assertEqual(stored['resetReason'], 'BROWNOUT')
+
     def test_owner_can_open_one_short_device_key_reset_window(self):
         old_key = 'A' * 64
         new_key = 'B' * 64
@@ -626,6 +715,70 @@ class BackendSecurityTests(unittest.TestCase):
                 backend.build_raw_image_url('A1B2C3', 7),
                 'https://epd.example.test/api/epd/raw/A1B2C3?v=7',
             )
+
+    def test_versioned_raw_download_serves_exact_retained_version(self):
+        device_key = 'A' * 64
+        payloads = {}
+        for version in range(1, 7):
+            payload = chr(ord('a') + version) * backend.EPD_EXPECTED_CHARS
+            payloads[version] = payload
+            self.assertTrue(backend.save_device_image('A1B2C3', payload, version))
+        backend.devices_collection = FakeCollection([{
+            'deviceId': 'A1B2C3', 'owner': 'bob', 'claimed': True,
+            'imageVersion': 6,
+            'imageSizeChars': backend.EPD_EXPECTED_CHARS,
+            'imageSha256': hashlib.sha256(payloads[6].encode('ascii')).hexdigest(),
+        }])
+        backend.device_status_collection = FakeCollection([{
+            'deviceId': 'A1B2C3',
+            'deviceKeyHash': hashlib.sha256(device_key.lower().encode('ascii')).hexdigest(),
+        }])
+
+        retained = self.client.get(
+            '/api/epd/raw/A1B2C3?v=2', headers={'X-Device-Key': device_key},
+        )
+        expired = self.client.get(
+            '/api/epd/raw/A1B2C3?v=1', headers={'X-Device-Key': device_key},
+        )
+        current = self.client.get(
+            '/api/epd/raw/A1B2C3?v=6', headers={'X-Device-Key': device_key},
+        )
+
+        self.assertEqual(retained.status_code, 200)
+        self.assertEqual(retained.data, payloads[2].encode('ascii'))
+        self.assertEqual(retained.headers['X-EPD-Version'], '2')
+        self.assertEqual(expired.status_code, 409)
+        self.assertEqual(expired.get_json()['errorCode'], 'IMAGE_VERSION_EXPIRED')
+        self.assertEqual(current.status_code, 200)
+        self.assertEqual(current.data, payloads[6].encode('ascii'))
+        retained.close()
+        current.close()
+
+    def test_first_versioned_publish_preserves_legacy_latest_snapshot(self):
+        legacy_payload = 'h' * backend.EPD_EXPECTED_CHARS
+        new_payload = 'i' * backend.EPD_EXPECTED_CHARS
+        legacy_hash = hashlib.sha256(legacy_payload.encode('ascii')).hexdigest()
+        latest_path = backend.get_device_image_path('A1B2C3', create_parent=True)
+        latest_path.write_text(legacy_payload, encoding='utf-8')
+
+        saved = backend.save_device_image(
+            'A1B2C3',
+            new_payload,
+            8,
+            previous_version=7,
+            previous_sha256=legacy_hash,
+        )
+
+        self.assertTrue(saved)
+        self.assertEqual(
+            backend.get_device_version_image_path('A1B2C3', 7).read_text(encoding='utf-8'),
+            legacy_payload,
+        )
+        self.assertEqual(
+            backend.get_device_version_image_path('A1B2C3', 8).read_text(encoding='utf-8'),
+            new_payload,
+        )
+        self.assertEqual(latest_path.read_text(encoding='utf-8'), new_payload)
 
     def test_weather_and_quote_require_login(self):
         with patch.object(backend, 'get_current_user', return_value=None):

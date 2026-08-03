@@ -553,7 +553,7 @@ static void performErrorCorrection(uint8_t version, uint8_t ecc, BitBucket *data
  uint8_t numShortBlocks = numBlocks - moduleCount / 8 % numBlocks;
  uint8_t shortBlockLen = moduleCount / 8 / numBlocks;
  uint8_t shortDataBlockLen = shortBlockLen - blockEccLen;
- uint8_t result[280];
+ uint8_t result[400];
  memset(result, 0, sizeof(result));
  uint8_t coeff[30];
  rs_init(blockEccLen, coeff);
@@ -599,10 +599,15 @@ static const uint8_t ECC_FORMAT_BITS = (0x02 << 6) | (0x03 << 4) | (0x00 << 2) |
 #pragma mark - Public QRCode functions
 
 uint16_t qrcode_getBufferSize(uint8_t version) {
+ if (version < 1 || version > 9) { return 0; }
  return bb_getGridSizeBytes(4 * version + 17);
 }
 
 int8_t qrcode_initBytes(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8_t ecc, uint8_t *data, uint16_t length) {
+ if (qrcode == NULL || modules == NULL || (data == NULL && length > 0) ||
+     version < 1 || version > 9 || ecc > ECC_HIGH) {
+  return -1;
+ }
  uint8_t size = version * 4 + 17;
  qrcode->version = version;
  qrcode->size = size;
@@ -617,8 +622,30 @@ int8_t qrcode_initBytes(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8
  uint16_t moduleCount = NUM_RAW_DATA_MODULES;
  uint16_t dataCapacity = moduleCount / 8 - NUM_ERROR_CORRECTION_CODEWORDS[eccFormatBits];
 #endif
+ uint8_t selectedMode;
+ uint8_t countBits;
+ uint32_t encodedBits;
+ if (isNumeric((char*)data, length)) {
+  selectedMode = MODE_NUMERIC;
+  countBits = getModeBits(version, MODE_NUMERIC);
+  encodedBits = 4U + countBits + (length / 3U) * 10U;
+  if (length % 3U == 1U) { encodedBits += 4U; }
+  else if (length % 3U == 2U) { encodedBits += 7U; }
+ } else if (isAlphanumeric((char*)data, length)) {
+  selectedMode = MODE_ALPHANUMERIC;
+  countBits = getModeBits(version, MODE_ALPHANUMERIC);
+  encodedBits = 4U + countBits + (length / 2U) * 11U + (length % 2U) * 6U;
+ } else {
+  selectedMode = MODE_BYTE;
+  countBits = getModeBits(version, MODE_BYTE);
+  encodedBits = 4U + countBits + (uint32_t)length * 8U;
+ }
+ if ((uint32_t)length >= (1UL << countBits) || encodedBits > (uint32_t)dataCapacity * 8U) {
+  return -1;
+ }
+ (void)selectedMode;
  struct BitBucket codewords;
- uint8_t codewordBytes[200];
+ uint8_t codewordBytes[400];
  bb_initBuffer(&codewords, codewordBytes, (int32_t)sizeof(codewordBytes));
  int8_t mode = encodeDataCodewords(&codewords, data, length, version);
  if (mode < 0) { return -1; }
@@ -633,7 +660,7 @@ int8_t qrcode_initBytes(QRCode *qrcode, uint8_t *modules, uint8_t version, uint8
  BitBucket modulesGrid;
  bb_initGrid(&modulesGrid, modules, size);
  BitBucket isFunctionGrid;
- uint8_t isFunctionGridBytes[300];
+ uint8_t isFunctionGridBytes[400];
  bb_initGrid(&isFunctionGrid, isFunctionGridBytes, size);
  drawFunctionPatterns(&modulesGrid, &isFunctionGrid, version, eccFormatBits);
  performErrorCorrection(version, eccFormatBits, &codewords);
