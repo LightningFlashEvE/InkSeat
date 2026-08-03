@@ -33,6 +33,33 @@
 
 html {
     background: var(--ui-bg);
+    color-scheme: dark;
+}
+
+/* Native select popups are rendered by the operating system on Chromium.
+   Declare both the scheme and option colors so dark fields never open as
+   white-on-white menus, while keeping the light theme equally explicit. */
+html:not(.theme-light):not([data-theme="light"]) select {
+    color-scheme: dark;
+}
+
+html:not(.theme-light):not([data-theme="light"]) select option,
+html:not(.theme-light):not([data-theme="light"]) select optgroup {
+    background-color: #202326;
+    color: #f4f7fa;
+}
+
+html.theme-light select,
+html[data-theme="light"] select {
+    color-scheme: light;
+}
+
+html.theme-light select option,
+html.theme-light select optgroup,
+html[data-theme="light"] select option,
+html[data-theme="light"] select optgroup {
+    background-color: #ffffff;
+    color: #0f2732;
 }
 
 body.dashboard-page,

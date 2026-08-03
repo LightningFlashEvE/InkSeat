@@ -85,7 +85,7 @@
         const isLight = nextTheme === 'light';
 
         document.documentElement.classList.toggle('theme-light', isLight);
-        document.documentElement.style.colorScheme = isLight ? 'light' : '';
+        document.documentElement.style.colorScheme = isLight ? 'light' : 'dark';
 
         if (isLight) {
             document.documentElement.dataset.theme = 'light';
@@ -95,7 +95,7 @@
 
         if (document.body) {
             document.body.classList.toggle('theme-light', isLight);
-            document.body.style.colorScheme = isLight ? 'light' : '';
+            document.body.style.colorScheme = isLight ? 'light' : 'dark';
 
             if (isLight) {
                 document.body.dataset.theme = 'light';
