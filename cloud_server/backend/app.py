@@ -413,6 +413,19 @@ NAMEPLATE_LEADING_WORDS = (
     '请给', '请为', '请把', '请将', '请', '给', '为', '把', '将',
     '下发', '发送', '显示', '设置', '安排', '名单', '姓名', '人员', '铭牌'
 )
+NAMEPLATE_NAME_HEADERS = {
+    '姓名', '名字', '人员姓名', '参会人', '参会人员', '嘉宾姓名',
+    'name', 'fullname', 'full name',
+}
+NAMEPLATE_TITLE_HEADERS = {
+    '职位', '职务', '职称', '岗位', '角色',
+    'title', 'position', 'job title', 'role',
+}
+NAMEPLATE_COMPANY_HEADERS = {
+    '公司', '公司名称', '单位', '工作单位', '所属单位', '机构', '组织',
+    '来访嘉宾', '主办方', '承办方',
+    'company', 'company name', 'organization', 'organisation', 'unit',
+}
 
 
 def get_nameplate_ai_api_key() -> str:
@@ -527,6 +540,134 @@ def parse_nameplate_names_from_text(text: str) -> list[str]:
         if len(names) > NAMEPLATE_MAX_NAMES:
             break
     return names
+
+
+def _clean_nameplate_detail(raw_value, max_length=40) -> str:
+    if raw_value is None:
+        return ''
+    value = re.sub(r'\s+', ' ', str(raw_value)).strip()
+    value = value.strip(' "\'“”‘’[]【】')
+    return value[:max_length]
+
+
+def normalize_nameplate_person(raw_value) -> dict:
+    if isinstance(raw_value, str):
+        raw_value = {'name': raw_value}
+    if not isinstance(raw_value, dict):
+        return {}
+
+    name = _clean_nameplate_candidate(
+        raw_value.get('name') or raw_value.get('fullName') or raw_value.get('full_name')
+    )
+    if not name:
+        return {}
+
+    title = _clean_nameplate_detail(
+        raw_value.get('title')
+        or raw_value.get('position')
+        or raw_value.get('jobTitle')
+        or raw_value.get('role')
+        or raw_value.get('职位')
+        or raw_value.get('职务')
+    )
+    subtitle = _clean_nameplate_detail(
+        raw_value.get('subtitle')
+        or raw_value.get('company')
+        or raw_value.get('companyName')
+        or raw_value.get('organization')
+        or raw_value.get('organisation')
+        or raw_value.get('unit')
+        or raw_value.get('公司')
+        or raw_value.get('单位')
+    )
+    return {'name': name, 'title': title, 'subtitle': subtitle}
+
+
+def _nameplate_header_role(raw_value) -> str:
+    value = re.sub(r'\s+', ' ', str(raw_value or '')).strip().lower()
+    value = value.strip(' :：*（）()[]【】')
+    if value in NAMEPLATE_NAME_HEADERS:
+        return 'name'
+    if value in NAMEPLATE_TITLE_HEADERS:
+        return 'title'
+    if value in NAMEPLATE_COMPANY_HEADERS:
+        return 'subtitle'
+    return ''
+
+
+def parse_nameplate_people_from_text(text: str) -> list[dict]:
+    """Extract people and per-person details from tabular text when possible."""
+    if not isinstance(text, str) or not text.strip():
+        return []
+
+    people = []
+    header_indexes = None
+    normalized = text.replace('\r\n', '\n').replace('\r', '\n')
+    for line in normalized.split('\n'):
+        if not line.strip():
+            continue
+
+        table_cells = [cell.strip() for cell in re.split(r'[\t|]+', line)]
+        roles = [_nameplate_header_role(cell) for cell in table_cells]
+        if 'name' in roles and any(role in ('title', 'subtitle') for role in roles):
+            header_indexes = {
+                role: index for index, role in enumerate(roles) if role
+            }
+            continue
+
+        if header_indexes and header_indexes.get('name', -1) < len(table_cells):
+            raw_person = {'name': table_cells[header_indexes['name']]}
+            for field in ('title', 'subtitle'):
+                field_index = header_indexes.get(field)
+                if field_index is not None and field_index < len(table_cells):
+                    raw_person[field] = table_cells[field_index]
+            person = normalize_nameplate_person(raw_person)
+            if person:
+                people.append(person)
+                if len(people) >= NAMEPLATE_MAX_NAMES:
+                    break
+                continue
+
+        cells = re.split(r'[\t,，、;；|]+', line)
+        for cell in cells:
+            person = normalize_nameplate_person(cell)
+            if person:
+                people.append(person)
+                break
+        if len(people) >= NAMEPLATE_MAX_NAMES:
+            break
+    return people
+
+
+def parse_nameplate_people(data: dict) -> list[dict]:
+    if not isinstance(data, dict):
+        return []
+
+    raw_people = data.get('people')
+    if isinstance(raw_people, list):
+        people = []
+        for item in raw_people[:NAMEPLATE_MAX_NAMES]:
+            person = normalize_nameplate_person(item)
+            if person:
+                people.append(person)
+        return people
+
+    raw_names = data.get('names')
+    if isinstance(raw_names, list):
+        people = []
+        for item in raw_names[:NAMEPLATE_MAX_NAMES]:
+            person = normalize_nameplate_person(item)
+            if person:
+                people.append(person)
+        return people
+
+    text = data.get('text') or data.get('message') or ''
+    people = parse_nameplate_people_from_text(text)
+    legacy_people = [
+        normalize_nameplate_person(name) for name in parse_nameplate_names({'text': text})
+    ]
+    legacy_people = [person for person in legacy_people if person]
+    return legacy_people if len(legacy_people) > len(people) else people
 
 
 def resolve_nameplate_target_devices(owner: str, requested_device_ids) -> tuple[list[dict], list[str]]:
@@ -979,22 +1120,26 @@ def collect_nameplate_parse_sources(req) -> tuple[str, list[dict], list[str], li
     return combined_text, image_parts, warnings, filenames
 
 
-def build_nameplate_parse_result(names: list[str], template_config: dict, warnings=None,
+def build_nameplate_parse_result(people_or_names: list, template_config: dict, warnings=None,
                                  ai_used=False, source_summary='') -> dict:
-    clean_names = []
-    for name in names:
-        clean = _clean_nameplate_candidate(name)
-        if clean:
-            clean_names.append(clean)
-        if len(clean_names) >= NAMEPLATE_MAX_NAMES:
+    clean_people = []
+    for raw_person in people_or_names:
+        person = normalize_nameplate_person(raw_person)
+        if person:
+            clean_people.append(person)
+        if len(clean_people) >= NAMEPLATE_MAX_NAMES:
             break
 
     result_warnings = list(warnings or [])
-    if len(names) > len(clean_names) and len(clean_names) >= NAMEPLATE_MAX_NAMES:
+    if (
+        len(people_or_names) > len(clean_people)
+        and len(clean_people) >= NAMEPLATE_MAX_NAMES
+    ):
         result_warnings.append(f'名单最多保留前 {NAMEPLATE_MAX_NAMES} 个姓名')
 
     return {
-        'names': clean_names,
+        'names': [person['name'] for person in clean_people],
+        'people': clean_people,
         'templateConfig': normalize_nameplate_template_config(template_config),
         'warnings': result_warnings,
         'aiUsed': bool(ai_used),
@@ -1041,16 +1186,15 @@ def _parse_nameplate_ai_output(output_text: str) -> dict:
     if not isinstance(parsed, dict):
         raise ValueError('AI解析结果必须是 JSON 对象')
 
-    raw_names = parsed.get('names') or []
-    names = []
-    if isinstance(raw_names, list):
-        for item in raw_names:
-            if isinstance(item, str):
-                names.append(item)
-            elif isinstance(item, dict):
-                candidate = item.get('name') or item.get('fullName')
-                if isinstance(candidate, str):
-                    names.append(candidate)
+    raw_people = parsed.get('people')
+    if not isinstance(raw_people, list):
+        raw_people = parsed.get('names') or []
+    people = []
+    if isinstance(raw_people, list):
+        for item in raw_people:
+            person = normalize_nameplate_person(item)
+            if person:
+                people.append(person)
 
     template_config = parsed.get('templateConfig')
     if not isinstance(template_config, dict):
@@ -1066,7 +1210,8 @@ def _parse_nameplate_ai_output(output_text: str) -> dict:
     warnings = [str(item).strip() for item in warnings if str(item).strip()]
 
     return {
-        'names': names,
+        'names': [person['name'] for person in people],
+        'people': people,
         'templateConfig': template_config,
         'warnings': warnings,
         'sourceSummary': str(parsed.get('sourceSummary') or 'AI解析').strip(),
@@ -1092,12 +1237,21 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
     schema = {
         'type': 'object',
         'additionalProperties': False,
-        'required': ['names', 'templateConfig', 'warnings', 'sourceSummary'],
+        'required': ['people', 'templateConfig', 'warnings', 'sourceSummary'],
         'properties': {
-            'names': {
+            'people': {
                 'type': 'array',
-                'items': {'type': 'string'},
-                'description': '按原始顺序提取的人名，只保留姓名，不要包含单位、职务、序号。'
+                'items': {
+                    'type': 'object',
+                    'additionalProperties': False,
+                    'required': ['name', 'title', 'subtitle'],
+                    'properties': {
+                        'name': {'type': 'string'},
+                        'title': {'type': 'string'},
+                        'subtitle': {'type': 'string'},
+                    },
+                },
+                'description': '按原始顺序提取的逐人名单；title 是该人的职位，subtitle 是该人的公司或单位。'
             },
             'templateConfig': {
                 'type': 'object',
@@ -1122,9 +1276,10 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
     prompt_text = (
         '你是政务会议电子铭牌名单解析助手。请从用户上传的文字、图片或表格中提取需要下发到铭牌的姓名。'
         '只返回一个 JSON 对象，不要使用 Markdown 代码块。输出必须符合 JSON Schema。'
-        'names 必须是姓名字符串数组，模板字段必须命名为 templateConfig。'
+        'people 必须是逐人对象数组，每项都包含 name、title、subtitle；没有职位或公司时对应字段返回空字符串。'
         '只提取人名，不要把单位、职务、标题、设备编号、电话、序号当作姓名。'
-        '保持名单原始顺序。若文本中出现职务或英文副标题，可作为 title；公司名称可作为 subtitle。'
+        '保持名单原始顺序，并把每个人同一行或同一表格行中的职位匹配到 title、公司或单位匹配到 subtitle。'
+        '逐人的 title 和 subtitle 优先；templateConfig.title 与 templateConfig.subtitle 只是名单字段缺失时使用的默认值，不要用某一个人的信息覆盖它们。'
         'backgroundStyle 可使用 formal_red=Pheno红色底栏、formal_green=Pheno绿色底栏、plain=Pheno绿色横幅、formal_blue=Pheno职务名片。'
         '如果不确定，请把疑问写入 warnings。'
         f'\n当前默认模板: {json.dumps(prompt_config, ensure_ascii=False)}'
@@ -1158,7 +1313,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
             'model': model,
             'messages': [{'role': 'user', 'content': content}],
             'response_format': {'type': 'json_object'},
-            'max_tokens': 1800,
+            'max_tokens': 8000,
         }
         if 'minimax' in base_url.lower() or model.lower().startswith('minimax-'):
             payload['thinking'] = {'type': 'disabled'}
@@ -1201,7 +1356,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
             parsed.get('templateConfig', base_config), base_config
         )
         return build_nameplate_parse_result(
-            parsed.get('names', []),
+            parsed.get('people') or parsed.get('names', []),
             parsed_config,
             warnings=parsed.get('warnings', []),
             ai_used=True,
@@ -1231,7 +1386,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
                 'schema': schema,
             }
         },
-        'max_output_tokens': 1800,
+        'max_output_tokens': 8000,
     }
 
     resp = requests.post(
@@ -1258,7 +1413,7 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
         parsed.get('templateConfig') or base_config, base_config
     )
     return build_nameplate_parse_result(
-        parsed.get('names', []),
+        parsed.get('people') or parsed.get('names', []),
         parsed_config,
         parsed.get('warnings') or [],
         ai_used=True,
@@ -3695,12 +3850,16 @@ def preview_nameplate():
         if not isinstance(data, dict):
             return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400
 
-        name = _clean_nameplate_candidate(data.get('name'))
-        if not name:
+        person = normalize_nameplate_person(data.get('person') or data)
+        if not person:
             return jsonify({'success': False, 'error': '请输入有效姓名'}), 400
 
         template_config = normalize_nameplate_template_config(data.get('templateConfig'))
-        template_config['name'] = name
+        template_config['name'] = person['name']
+        if person['title']:
+            template_config['title'] = person['title']
+        if person['subtitle']:
+            template_config['subtitle'] = person['subtitle']
         render_result = render_template_with_preview('nameplate', template_config)
         preview_image = render_result.get('previewImage') if isinstance(render_result, dict) else None
         if not preview_image:
@@ -3708,7 +3867,8 @@ def preview_nameplate():
 
         return jsonify({
             'success': True,
-            'name': name,
+            'name': person['name'],
+            'person': person,
             'previewImage': preview_image,
         })
     except Exception as e:
@@ -3721,7 +3881,7 @@ def preview_nameplate():
 def dispatch_nameplates():
     """批量把人名渲染为铭牌并下发到一组设备。
 
-    第一版只处理姓名下发；微信/AI 入口后续可以把解析后的 names 数组提交到这里。
+    支持逐人姓名、职位和公司；逐人字段缺失时回退到统一模板配置。
     """
     try:
         data = request.get_json(silent=True) or {}
@@ -3734,9 +3894,12 @@ def dispatch_nameplates():
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
 
         raw_names = data.get('names')
+        raw_people = data.get('people')
         raw_text = data.get('text') or data.get('message') or ''
         requested_device_ids = data.get('deviceIds')
         if isinstance(raw_names, list) and len(raw_names) > NAMEPLATE_MAX_NAMES:
+            return jsonify({'success': False, 'error': f'姓名数量不能超过 {NAMEPLATE_MAX_NAMES} 个'}), 400
+        if isinstance(raw_people, list) and len(raw_people) > NAMEPLATE_MAX_NAMES:
             return jsonify({'success': False, 'error': f'姓名数量不能超过 {NAMEPLATE_MAX_NAMES} 个'}), 400
         if isinstance(raw_text, str) and len(raw_text) > NAMEPLATE_MAX_PARSE_TEXT_CHARS:
             return jsonify({'success': False, 'error': '名单文本过长'}), 400
@@ -3749,8 +3912,9 @@ def dispatch_nameplates():
                 'error': f'目标设备数量不能超过 {NAMEPLATE_MAX_TARGET_DEVICES} 台',
             }), 400
 
-        names = parse_nameplate_names(data)
-        if len(names) > NAMEPLATE_MAX_NAMES:
+        people = parse_nameplate_people(data)
+        names = [person['name'] for person in people]
+        if len(people) > NAMEPLATE_MAX_NAMES:
             return jsonify({'success': False, 'error': f'姓名数量不能超过 {NAMEPLATE_MAX_NAMES} 个'}), 400
         if not names:
             return jsonify({'success': False, 'error': '未识别到可下发的人名，请使用一行一个姓名或用逗号/顿号分隔'}), 400
@@ -3785,9 +3949,14 @@ def dispatch_nameplates():
             processed_count = index + 1
             device = target_devices[index]
             clean_id = device.get('deviceId')
-            name = names[index]
+            person = people[index]
+            name = person['name']
             template_config = dict(base_template_config)
             template_config['name'] = name
+            if person['title']:
+                template_config['title'] = person['title']
+            if person['subtitle']:
+                template_config['subtitle'] = person['subtitle']
 
             try:
                 render_result = render_template_with_preview('nameplate', template_config)
@@ -3828,6 +3997,8 @@ def dispatch_nameplates():
                                 'templateConfig': template_config,
                                 'renderSource': 'nameplate_batch',
                                 'nameplateName': name,
+                                'nameplateTitle': template_config.get('title', ''),
+                                'nameplateCompany': template_config.get('subtitle', ''),
                                 'nameplateBatchId': batch_id,
                                 'activeContentUpdatedAt': now,
                                 'updatedAt': now,
@@ -3843,6 +4014,8 @@ def dispatch_nameplates():
                     'deviceId': clean_id,
                     'deviceName': device.get('deviceName', clean_id),
                     'name': name,
+                    'title': template_config.get('title', ''),
+                    'subtitle': template_config.get('subtitle', ''),
                     'imageVersion': new_version,
                     'activeContentLabel': active_label,
                 })
@@ -3945,11 +4118,11 @@ def parse_nameplates():
         if not source_text.strip() and not image_parts:
             return jsonify({'success': False, 'error': '请先输入文字或上传图片、Word、表格'}), 400
 
-        local_names = parse_nameplate_names_from_text(source_text)
+        local_people = parse_nameplate_people_from_text(source_text)
         if not filenames:
-            direct_text_names = parse_nameplate_names({'text': source_text})
-            if len(direct_text_names) > len(local_names):
-                local_names = direct_text_names
+            direct_text_people = parse_nameplate_people({'text': source_text})
+            if len(direct_text_people) > len(local_people):
+                local_people = direct_text_people
         should_use_ai = bool(image_parts) or len(source_text) > 0
         result = None
 
@@ -3965,7 +4138,7 @@ def parse_nameplates():
 
         if result is None:
             result = build_nameplate_parse_result(
-                local_names or parse_nameplate_names({'text': source_text}),
+                local_people or parse_nameplate_people({'text': source_text}),
                 base_template_config,
                 warnings=warnings,
                 ai_used=False,

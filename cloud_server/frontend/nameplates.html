@@ -32,32 +32,32 @@
             background: #eef5f7 !important;
         }
     </style>
-    <script src="theme.js?v=20260803docx1"></script>
-    <link rel="stylesheet" href="ui.css?v=20260803docx1">
+    <script src="theme.js?v=20260803people1"></script>
+    <link rel="stylesheet" href="ui.css?v=20260803people1">
 </head>
 <body class="dashboard-page nameplates-page meeting-device-page">
     <div class="meeting-page">
         <div class="app-shell">
             <aside class="meeting-sidebar" aria-label="主导航">
-                <a class="meeting-brand" href="index.html?v=20260803docx1" aria-label="会议牌管理">
+                <a class="meeting-brand" href="index.html?v=20260803people1" aria-label="会议牌管理">
                     <span class="meeting-brand-mark" aria-hidden="true"></span>
                     <span>会议牌管理</span>
                 </a>
 
                 <nav class="meeting-nav">
-                    <a class="meeting-nav-item" href="index.html?v=20260803docx1">
+                    <a class="meeting-nav-item" href="index.html?v=20260803people1">
                         <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
                         <span>设备</span>
                     </a>
-                    <a class="meeting-nav-item active" href="nameplates.html?v=20260803docx1" aria-current="page">
+                    <a class="meeting-nav-item active" href="nameplates.html?v=20260803people1" aria-current="page">
                         <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
                         <span>名单下发</span>
                     </a>
-                    <a class="meeting-nav-item" href="control.html?v=20260803docx1">
+                    <a class="meeting-nav-item" href="control.html?v=20260803people1">
                         <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
                         <span>模板设计</span>
                     </a>
-                    <a class="meeting-nav-item" href="settings.html?v=20260803docx1">
+                    <a class="meeting-nav-item" href="settings.html?v=20260803people1">
                         <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
                         <span>设置</span>
                     </a>
@@ -92,7 +92,7 @@
                 <div class="ai-parse-layout">
                     <div class="nameplate-compose">
                         <label for="nameplateAiTextInput">名单、消息或补充说明</label>
-                        <textarea id="nameplateAiTextInput" rows="7" placeholder="支持标准名单：&#10;张三&#10;李四&#10;&#10;也支持非标准内容：&#10;请把明天会议的张三、李四生成红色底栏铭牌，职务为 Technical Expert。"></textarea>
+                        <textarea id="nameplateAiTextInput" rows="7" placeholder="支持标准名单：&#10;张三　甲公司　总经理&#10;李四　乙公司　技术专家&#10;&#10;也支持非标准内容：&#10;请把明天会议的张三、李四生成红色底栏铭牌。"></textarea>
                     </div>
                     <div class="ai-upload-box">
                         <label for="nameplateAiFiles">上传图片 / Word / 表格</label>
@@ -115,7 +115,7 @@
                         <div class="section-kicker">Review</div>
                         <h2 id="nameplateReviewTitle">名单确认与模板</h2>
                     </div>
-                    <p id="nameplateDispatchHint">按设备顺序将人名下发到对应铭牌</p>
+                    <p id="nameplateDispatchHint">按设备顺序下发；名单中的职位和公司优先</p>
                 </div>
 
                 <div class="nameplate-review-layout">
@@ -144,10 +144,10 @@
                         <section class="nameplate-review-list-panel" aria-labelledby="nameplateReviewListTitle">
                             <div class="nameplate-review-head">
                                 <div>
-                                    <span class="panel-eyebrow">Parsed Names</span>
+                                    <span class="panel-eyebrow">Parsed People</span>
                                     <h3 id="nameplateReviewListTitle">已解析名单</h3>
                                 </div>
-                                <button class="btn btn-small btn-secondary" type="button" onclick="addNameplateReviewRow()">添加姓名</button>
+                                <button class="btn btn-small btn-secondary" type="button" onclick="addNameplateReviewRow()">添加人员</button>
                             </div>
                             <div class="nameplate-name-review-list" id="nameplateNameReviewList" role="list">
                                 <div class="nameplate-review-empty">请先在上方输入内容并解析</div>
@@ -168,11 +168,11 @@
                             <option value="">手动配置</option>
                         </select>
 
-                        <label for="nameplateBatchTitle">职务 / 副标题（可选）</label>
+                        <label for="nameplateBatchTitle">统一职位（名单未提供时）</label>
                         <input id="nameplateBatchTitle" type="text" placeholder="CEO / Technical Expert">
 
-                        <label for="nameplateBatchSubtitle">公司名称（可选）</label>
-                        <input id="nameplateBatchSubtitle" type="text" placeholder="留空使用默认公司名">
+                        <label for="nameplateBatchSubtitle">统一公司名称（名单未提供时）</label>
+                        <input id="nameplateBatchSubtitle" type="text" placeholder="留空则不显示公司名称">
 
                         <label for="nameplateBatchWakeInterval">唤醒频率</label>
                         <select id="nameplateBatchWakeInterval">
@@ -253,7 +253,7 @@
         </section>
     </div>
 
-    <script src="auth.js?v=20260803docx1"></script>
-    <script src="nameplates.js?v=20260803docx1"></script>
+    <script src="auth.js?v=20260803people1"></script>
+    <script src="nameplates.js?v=20260803people1"></script>
 </body>
 </html>

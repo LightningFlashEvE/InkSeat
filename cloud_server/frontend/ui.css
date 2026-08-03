@@ -615,8 +615,11 @@ body.dashboard-page {
 .nameplate-name-review-row {
     display: grid;
     grid-template-columns: 30px minmax(0, 1fr) auto;
-    align-items: center;
+    align-items: start;
     gap: 8px;
+    padding: 9px;
+    border: 1px solid var(--ui-line-soft);
+    border-radius: var(--ui-radius);
 }
 
 .nameplate-review-order {
@@ -631,7 +634,29 @@ body.dashboard-page {
     font-weight: 900;
 }
 
-.nameplate-name-review-row input {
+.nameplate-review-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.nameplate-review-fields label:first-child {
+    grid-column: 1 / -1;
+}
+
+.nameplate-review-fields label {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+.nameplate-review-fields label > span {
+    color: var(--ui-text-muted);
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.nameplate-review-fields input {
     width: 100%;
     min-width: 0;
     border: 1px solid var(--ui-line-soft);
@@ -642,7 +667,7 @@ body.dashboard-page {
     outline: none;
 }
 
-.nameplate-name-review-row input:focus {
+.nameplate-review-fields input:focus {
     border-color: rgba(57, 127, 246, 0.62);
     box-shadow: 0 0 0 3px rgba(57, 127, 246, 0.12);
 }
@@ -655,6 +680,17 @@ body.dashboard-page {
     padding: 0 6px;
     font-weight: 800;
     cursor: pointer;
+    margin-top: 20px;
+}
+
+@media (max-width: 760px) {
+    .nameplate-review-fields {
+        grid-template-columns: 1fr;
+    }
+
+    .nameplate-review-fields label:first-child {
+        grid-column: auto;
+    }
 }
 
 .nameplate-review-remove:hover,

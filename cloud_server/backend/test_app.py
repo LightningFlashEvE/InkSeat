@@ -961,6 +961,27 @@ class BackendSecurityTests(unittest.TestCase):
         )
         self.assertEqual(backend._clean_nameplate_candidate('张三 技术专家'), '张三')
 
+    def test_nameplate_parser_matches_title_and_company_per_person(self):
+        people = backend.parse_nameplate_people_from_text(
+            '姓名\t公司名称\t职位\n'
+            '张伟\t甲公司\t总经理\n'
+            '张伟\t乙公司\t副总经理\n'
+            'Alexander Montgomery\tPheno\tTechnical Expert'
+        )
+
+        self.assertEqual(people, [
+            {'name': '张伟', 'title': '总经理', 'subtitle': '甲公司'},
+            {'name': '张伟', 'title': '副总经理', 'subtitle': '乙公司'},
+            {
+                'name': 'Alexander Montgomery',
+                'title': 'Technical Expert',
+                'subtitle': 'Pheno',
+            },
+        ])
+        parsed = backend.build_nameplate_parse_result(people, {})
+        self.assertEqual(parsed['names'], ['张伟', '张伟', 'Alexander Montgomery'])
+        self.assertEqual(parsed['people'], people)
+
     def test_nameplate_preview_renders_without_publishing(self):
         backend.devices_collection = FakeCollection([{
             'deviceId': 'A1B2C3', 'owner': 'bob', 'claimed': True, 'imageVersion': 8,
@@ -1016,6 +1037,21 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(parsed['templateConfig']['title'], '嘉宾')
         self.assertEqual(parsed['warnings'], ["请核对'张三'"])
         self.assertEqual(parsed['sourceSummary'], 'AI解析')
+
+    def test_nameplate_ai_output_preserves_per_person_details(self):
+        parsed = backend._parse_nameplate_ai_output(json.dumps({
+            'people': [
+                {'name': '张三', 'title': '总经理', 'subtitle': '甲公司'},
+                {'name': '李四', 'title': '', 'subtitle': '乙公司'},
+            ],
+            'templateConfig': {'title': '嘉宾', 'subtitle': '默认公司'},
+            'warnings': [],
+            'sourceSummary': '表格解析',
+        }, ensure_ascii=False))
+
+        self.assertEqual(parsed['names'], ['张三', '李四'])
+        self.assertEqual(parsed['people'][0]['title'], '总经理')
+        self.assertEqual(parsed['people'][1]['subtitle'], '乙公司')
 
     def test_nameplate_ai_retry_shares_one_sub_120_second_budget(self):
         logo_data_url = make_test_logo_data_url()
@@ -1109,6 +1145,48 @@ class BackendSecurityTests(unittest.TestCase):
             'names': ['张三'] * (backend.NAMEPLATE_MAX_NAMES + 1),
         })
         self.assertEqual(response.status_code, 400)
+
+    def test_nameplate_dispatch_prefers_per_person_title_and_company(self):
+        backend.devices_collection = FakeCollection([
+            {
+                'deviceId': device_id,
+                'deviceName': f'Device {index}',
+                'owner': 'bob',
+                'claimed': True,
+                'imageVersion': 0,
+            }
+            for index, device_id in enumerate(('A1B2C3', 'D4E5F6'), start=1)
+        ])
+        epd_data = 'a' * backend.EPD_EXPECTED_CHARS
+
+        with (
+            patch.object(
+                backend, 'render_template_with_preview',
+                return_value={'epdData': epd_data},
+            ) as render_mock,
+            patch.object(backend, 'save_device_image', return_value=True),
+        ):
+            response = self.client.post('/api/nameplates/dispatch', json={
+                'people': [
+                    {'name': '张三', 'title': '总经理', 'subtitle': '甲公司'},
+                    {'name': '李四', 'title': '', 'subtitle': ''},
+                ],
+                'deviceIds': ['A1B2C3', 'D4E5F6'],
+                'templateConfig': {
+                    'title': '统一嘉宾',
+                    'subtitle': '统一公司',
+                },
+            })
+
+        self.assertEqual(response.status_code, 200)
+        rendered_configs = [call.args[1] for call in render_mock.call_args_list]
+        self.assertEqual(rendered_configs[0]['title'], '总经理')
+        self.assertEqual(rendered_configs[0]['subtitle'], '甲公司')
+        self.assertEqual(rendered_configs[1]['title'], '统一嘉宾')
+        self.assertEqual(rendered_configs[1]['subtitle'], '统一公司')
+        assignments = response.get_json()['assignments']
+        self.assertEqual(assignments[0]['title'], '总经理')
+        self.assertEqual(assignments[1]['subtitle'], '统一公司')
 
     def test_xlsx_expansion_is_limited_before_openpyxl_parses_it(self):
         with tempfile.SpooledTemporaryFile() as workbook:

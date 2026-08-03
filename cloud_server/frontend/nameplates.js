@@ -3,7 +3,7 @@ let savedNameplateTemplates = [];
 let activeNameplateDesignConfig = {};
 let activeNameplateBackgroundStyle = 'formal_red';
 let nameplateDispatchModalReturnFocus = null;
-let parsedNameplateNames = [];
+let parsedNameplatePeople = [];
 let activeNameplatePreviewIndex = 0;
 let nameplatePreviewTimer = null;
 let nameplatePreviewRequestId = 0;
@@ -277,21 +277,36 @@ function escapeHtml(value) {
 }
 
 function parseNameInput() {
-    return parsedNameplateNames
-        .map(item => String(item || '').trim())
-        .filter(Boolean);
+    return parsePeopleInput().map(person => person.name);
+}
+
+function normalizeNameplatePerson(person) {
+    if (typeof person === 'string') person = { name: person };
+    const source = person && typeof person === 'object' ? person : {};
+    return {
+        name: String(source.name || source.fullName || '').trim(),
+        title: String(source.title || source.position || '').trim(),
+        subtitle: String(source.subtitle || source.company || source.companyName || '').trim(),
+    };
+}
+
+function parsePeopleInput() {
+    return parsedNameplatePeople
+        .map(normalizeNameplatePerson)
+        .filter(person => person.name);
 }
 
 function syncNameplateNamesInput() {
     const namesInput = document.getElementById('nameplateNamesInput');
     if (namesInput) {
-        namesInput.value = parsedNameplateNames.join('\n');
+        namesInput.value = parsedNameplatePeople.map(person => person.name || '').join('\n');
     }
 }
 
-function setParsedNameplateNames(names) {
-    parsedNameplateNames = Array.isArray(names)
-        ? names.map(name => String(name || '').trim()).filter(Boolean)
+function setParsedNameplatePeople(people, fallbackNames = []) {
+    const source = Array.isArray(people) && people.length ? people : fallbackNames;
+    parsedNameplatePeople = Array.isArray(source)
+        ? source.map(normalizeNameplatePerson).filter(person => person.name)
         : [];
     activeNameplatePreviewIndex = 0;
     syncNameplateNamesInput();
@@ -305,17 +320,18 @@ function bindNameplateReviewList() {
     if (!container) return;
 
     container.addEventListener('input', event => {
-        const input = event.target.closest('[data-nameplate-name-index]');
+        const input = event.target.closest('[data-nameplate-field]');
         if (!input) return;
-        const index = Number(input.dataset.nameplateNameIndex);
-        if (!Number.isInteger(index) || index < 0 || index >= parsedNameplateNames.length) return;
+        const index = Number(input.dataset.nameplateIndex);
+        const field = input.dataset.nameplateField;
+        if (!Number.isInteger(index) || index < 0 || index >= parsedNameplatePeople.length) return;
+        if (!['name', 'title', 'subtitle'].includes(field)) return;
 
-        parsedNameplateNames[index] = input.value;
+        parsedNameplatePeople[index][field] = input.value;
         activeNameplatePreviewIndex = Math.max(
             0,
-            parsedNameplateNames.slice(0, index + 1)
-                .map(item => String(item || '').trim())
-                .filter(Boolean).length - 1,
+            parsedNameplatePeople.slice(0, index + 1)
+                .filter(person => String(person.name || '').trim()).length - 1,
         );
         syncNameplateNamesInput();
         updateNameplateDispatchHint();
@@ -324,15 +340,14 @@ function bindNameplateReviewList() {
     });
 
     container.addEventListener('focusin', event => {
-        const input = event.target.closest('[data-nameplate-name-index]');
+        const input = event.target.closest('[data-nameplate-field]');
         if (!input) return;
-        const index = Number(input.dataset.nameplateNameIndex);
-        if (!Number.isInteger(index) || index < 0 || index >= parsedNameplateNames.length) return;
+        const index = Number(input.dataset.nameplateIndex);
+        if (!Number.isInteger(index) || index < 0 || index >= parsedNameplatePeople.length) return;
         const confirmedIndex = Math.max(
             0,
-            parsedNameplateNames.slice(0, index + 1)
-                .map(item => String(item || '').trim())
-                .filter(Boolean).length - 1,
+            parsedNameplatePeople.slice(0, index + 1)
+                .filter(person => String(person.name || '').trim()).length - 1,
         );
         if (activeNameplatePreviewIndex !== confirmedIndex) {
             activeNameplatePreviewIndex = confirmedIndex;
@@ -345,12 +360,12 @@ function bindNameplateReviewList() {
         const removeButton = event.target.closest('[data-remove-nameplate-index]');
         if (!removeButton) return;
         const index = Number(removeButton.dataset.removeNameplateIndex);
-        if (!Number.isInteger(index) || index < 0 || index >= parsedNameplateNames.length) return;
+        if (!Number.isInteger(index) || index < 0 || index >= parsedNameplatePeople.length) return;
 
-        parsedNameplateNames.splice(index, 1);
+        parsedNameplatePeople.splice(index, 1);
         activeNameplatePreviewIndex = Math.min(
             activeNameplatePreviewIndex,
-            Math.max(0, parsedNameplateNames.length - 1),
+            Math.max(0, parsePeopleInput().length - 1),
         );
         syncNameplateNamesInput();
         renderNameplateReviewList();
@@ -363,32 +378,46 @@ function renderNameplateReviewList() {
     const container = document.getElementById('nameplateNameReviewList');
     if (!container) return;
 
-    if (parsedNameplateNames.length === 0) {
+    if (parsedNameplatePeople.length === 0) {
         container.innerHTML = '<div class="nameplate-review-empty">请先在上方输入内容并解析</div>';
         return;
     }
 
-    container.innerHTML = parsedNameplateNames.map((name, index) => `
+    container.innerHTML = parsedNameplatePeople.map((person, index) => `
         <div class="nameplate-name-review-row" role="listitem">
             <span class="nameplate-review-order">${index + 1}</span>
-            <label class="sr-only" for="nameplateReviewName${index}">第 ${index + 1} 个姓名</label>
-            <input id="nameplateReviewName${index}" type="text" value="${escapeHtml(name)}" maxlength="64"
-                data-nameplate-name-index="${index}" autocomplete="off">
+            <div class="nameplate-review-fields">
+                <label>
+                    <span>姓名</span>
+                    <input id="nameplateReviewName${index}" type="text" value="${escapeHtml(person.name)}" maxlength="64"
+                        data-nameplate-index="${index}" data-nameplate-field="name" autocomplete="off">
+                </label>
+                <label>
+                    <span>职位</span>
+                    <input type="text" value="${escapeHtml(person.title)}" maxlength="40" placeholder="使用统一职位"
+                        data-nameplate-index="${index}" data-nameplate-field="title" autocomplete="off">
+                </label>
+                <label>
+                    <span>公司</span>
+                    <input type="text" value="${escapeHtml(person.subtitle)}" maxlength="40" placeholder="使用统一公司"
+                        data-nameplate-index="${index}" data-nameplate-field="subtitle" autocomplete="off">
+                </label>
+            </div>
             <button type="button" class="nameplate-review-remove" data-remove-nameplate-index="${index}"
-                aria-label="删除 ${escapeHtml(name || `第 ${index + 1} 个姓名`)}">删除</button>
+                aria-label="删除 ${escapeHtml(person.name || `第 ${index + 1} 个姓名`)}">删除</button>
         </div>
     `).join('');
 }
 
 function addNameplateReviewRow() {
-    parsedNameplateNames.push('');
-    activeNameplatePreviewIndex = parsedNameplateNames.length - 1;
+    parsedNameplatePeople.push({ name: '', title: '', subtitle: '' });
+    activeNameplatePreviewIndex = Math.max(0, parsePeopleInput().length - 1);
     syncNameplateNamesInput();
     renderNameplateReviewList();
     updateNameplateDispatchHint();
     updateNameplateCardPreviewState();
 
-    const input = document.querySelector(`[data-nameplate-name-index="${activeNameplatePreviewIndex}"]`);
+    const input = document.querySelector(`[data-nameplate-index="${parsedNameplatePeople.length - 1}"][data-nameplate-field="name"]`);
     input?.focus();
 }
 
@@ -399,6 +428,16 @@ function getCurrentTemplateConfig() {
         subtitle: document.getElementById('nameplateBatchSubtitle')?.value?.trim() || '',
         sleepIntervalSeconds: parseInt(document.getElementById('nameplateBatchWakeInterval')?.value || '43200', 10),
         ...activeNameplateDesignConfig,
+    };
+}
+
+function getEffectiveTemplateConfig(person) {
+    const config = getCurrentTemplateConfig();
+    const normalized = normalizeNameplatePerson(person);
+    return {
+        ...config,
+        title: normalized.title || config.title || '',
+        subtitle: normalized.subtitle || config.subtitle || '',
     };
 }
 
@@ -479,7 +518,7 @@ function applySavedNameplateTemplateById(templateId) {
 function applyParsedDraft(parsed) {
     if (!parsed) return;
 
-    setParsedNameplateNames(parsed.names);
+    setParsedNameplatePeople(parsed.people, parsed.names);
 
     const config = parsed.templateConfig || {};
     const titleInput = document.getElementById('nameplateBatchTitle');
@@ -584,7 +623,7 @@ function renderParsedPreview(parsed) {
     const preview = document.getElementById('nameplateParsedPreview');
     if (!preview) return;
 
-    const names = parsed?.names || [];
+    const people = parsed?.people || parsed?.names || [];
     const warnings = parsed?.warnings || [];
     const sourceText = parsed?.sourceSummary || (parsed?.aiUsed ? 'AI解析结果' : '本地规则解析');
     const warningHtml = warnings.length ? `
@@ -596,21 +635,21 @@ function renderParsedPreview(parsed) {
 
     preview.innerHTML = `
         <div class="activity-row">
-            <strong>已解析 ${names.length} 个姓名</strong>
-            <span>${escapeHtml(sourceText)} · 请在下方核对姓名和预览效果</span>
+            <strong>已解析 ${people.length} 人</strong>
+            <span>${escapeHtml(sourceText)} · 请在下方核对姓名、职位、公司和预览效果</span>
         </div>
         ${warningHtml}
     `;
 }
 
 function updateNameplateCardPreviewState() {
-    const names = parseNameInput();
+    const people = parsePeopleInput();
     const position = document.getElementById('nameplatePreviewPosition');
     const nameLabel = document.getElementById('nameplatePreviewName');
     const previousButton = document.getElementById('nameplatePreviewPrev');
     const nextButton = document.getElementById('nameplatePreviewNext');
 
-    if (names.length === 0) {
+    if (people.length === 0) {
         activeNameplatePreviewIndex = 0;
         if (position) position.textContent = '尚无名单';
         if (nameLabel) nameLabel.textContent = '等待姓名';
@@ -619,20 +658,20 @@ function updateNameplateCardPreviewState() {
         return;
     }
 
-    activeNameplatePreviewIndex = Math.min(activeNameplatePreviewIndex, names.length - 1);
-    if (position) position.textContent = `${activeNameplatePreviewIndex + 1} / ${names.length}`;
-    if (nameLabel) nameLabel.textContent = names[activeNameplatePreviewIndex];
+    activeNameplatePreviewIndex = Math.min(activeNameplatePreviewIndex, people.length - 1);
+    if (position) position.textContent = `${activeNameplatePreviewIndex + 1} / ${people.length}`;
+    if (nameLabel) nameLabel.textContent = people[activeNameplatePreviewIndex].name;
     if (previousButton) previousButton.disabled = activeNameplatePreviewIndex <= 0;
-    if (nextButton) nextButton.disabled = activeNameplatePreviewIndex >= names.length - 1;
+    if (nextButton) nextButton.disabled = activeNameplatePreviewIndex >= people.length - 1;
 }
 
 function moveNameplatePreview(direction) {
-    const names = parseNameInput();
-    if (names.length === 0) return;
+    const people = parsePeopleInput();
+    if (people.length === 0) return;
 
     activeNameplatePreviewIndex = Math.max(
         0,
-        Math.min(names.length - 1, activeNameplatePreviewIndex + Number(direction || 0)),
+        Math.min(people.length - 1, activeNameplatePreviewIndex + Number(direction || 0)),
     );
     updateNameplateCardPreviewState();
     scheduleNameplatePreview(true);
@@ -645,10 +684,10 @@ function scheduleNameplatePreview(immediate = false) {
     }
 
     updateNameplateCardPreviewState();
-    const names = parseNameInput();
+    const people = parsePeopleInput();
     const image = document.getElementById('nameplateCardPreviewImage');
     const empty = document.getElementById('nameplateCardPreviewEmpty');
-    if (names.length === 0) {
+    if (people.length === 0) {
         if (image) {
             image.hidden = true;
             image.removeAttribute('src');
@@ -669,11 +708,12 @@ function scheduleNameplatePreview(immediate = false) {
 
 async function refreshNameplateCardPreview() {
     nameplatePreviewTimer = null;
-    const names = parseNameInput();
-    if (names.length === 0) return;
+    const people = parsePeopleInput();
+    if (people.length === 0) return;
 
-    activeNameplatePreviewIndex = Math.min(activeNameplatePreviewIndex, names.length - 1);
-    const name = names[activeNameplatePreviewIndex];
+    activeNameplatePreviewIndex = Math.min(activeNameplatePreviewIndex, people.length - 1);
+    const person = people[activeNameplatePreviewIndex];
+    const name = person.name;
     const image = document.getElementById('nameplateCardPreviewImage');
     const empty = document.getElementById('nameplateCardPreviewEmpty');
     const requestId = ++nameplatePreviewRequestId;
@@ -693,7 +733,8 @@ async function refreshNameplateCardPreview() {
             },
             body: JSON.stringify({
                 name,
-                templateConfig: getCurrentTemplateConfig(),
+                person,
+                templateConfig: getEffectiveTemplateConfig(person),
             }),
         });
         const result = await response.json().catch(() => ({}));
@@ -798,10 +839,10 @@ function getSelectedNameplateDeviceIds() {
 }
 
 async function dispatchNameplates() {
-    const namesText = document.getElementById('nameplateNamesInput')?.value?.trim() || '';
+    const people = parsePeopleInput();
     const selectedDeviceIds = getSelectedNameplateDeviceIds();
 
-    if (!namesText) {
+    if (people.length === 0) {
         log('请输入要下发的人名名单', 'error');
         return;
     }
@@ -816,7 +857,7 @@ async function dispatchNameplates() {
         submitButton.disabled = true;
         submitButton.textContent = '下发中...';
     }
-    showNameplateDispatchLoading(selectedDeviceIds.length, parseNameInput().length);
+    showNameplateDispatchLoading(selectedDeviceIds.length, people.length);
 
     try {
         const templateConfig = getCurrentTemplateConfig();
@@ -828,7 +869,7 @@ async function dispatchNameplates() {
                 ...authHeaders()
             },
             body: JSON.stringify({
-                text: namesText,
+                people,
                 deviceIds: selectedDeviceIds,
                 templateConfig
             })
