@@ -181,7 +181,8 @@ NAMEPLATE_LOGO_MIME_FORMATS = {
     'image/webp': 'WEBP',
 }
 NAMEPLATE_DESIGN_CONFIG_KEYS = (
-    'logoDataUrl', 'logoFileName', 'logoX', 'logoY', 'companyX',
+    'logoDataUrl', 'logoFileName', 'logoX', 'logoY',
+    'companyX', 'companyPositionMode',
 )
 TEMPLATE_DAY_TIMEZONE = os.environ.get('TEMPLATE_DAY_TIMEZONE', 'Asia/Shanghai')
 try:
@@ -789,12 +790,17 @@ def normalize_nameplate_template_config(raw_config) -> dict:
         config['logoX'] = min(max(int(round(logo_x)), 0), EPD_WIDTH - 1)
         config['logoY'] = min(max(int(round(logo_y)), 0), EPD_HEIGHT - 1)
 
+    company_position_mode = str(
+        raw_config.get('companyPositionMode') or ''
+    ).strip().lower()
     company_x = raw_config.get('companyX')
     if (
+        company_position_mode == 'custom' and
         isinstance(company_x, (int, float)) and not isinstance(company_x, bool)
         and math.isfinite(company_x)
     ):
         config['companyX'] = min(max(int(round(company_x)), 0), EPD_WIDTH - 1)
+        config['companyPositionMode'] = 'custom'
 
     sleep_interval = raw_config.get('sleepIntervalSeconds')
     if isinstance(sleep_interval, (int, float)) and not isinstance(sleep_interval, bool):

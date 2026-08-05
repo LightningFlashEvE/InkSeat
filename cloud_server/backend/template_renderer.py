@@ -631,10 +631,12 @@ def _draw_left_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str,
         draw.text((xy[0], y), text, font=font, fill=fill)
 
 
-def _resolve_nameplate_company_x(config: Dict[str, Any], default_x: int,
-                                 company_width: int,
+def _resolve_nameplate_company_x(config: Dict[str, Any], company_width: int,
                                  reference_width: Optional[int] = None) -> int:
-    raw_x = config.get('companyX')
+    is_custom_position = str(
+        config.get('companyPositionMode') or ''
+    ).strip().lower() == 'custom'
+    raw_x = config.get('companyX') if is_custom_position else None
     if (
         isinstance(raw_x, (int, float)) and not isinstance(raw_x, bool)
         and math.isfinite(raw_x)
@@ -643,7 +645,7 @@ def _resolve_nameplate_company_x(config: Dict[str, Any], default_x: int,
         if reference_width is not None:
             x += int(round((reference_width - company_width) / 2))
     else:
-        x = default_x
+        x = int(round((800 - company_width) / 2))
     return min(max(x, 0), max(0, 800 - company_width))
 
 
@@ -675,7 +677,7 @@ def _draw_pheno_footer_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, na
         reference_font = _fit_single_line_font(draw, reference_text, 390, 22, 16)
         reference_width = _text_width(draw, reference_text, reference_font)
     company_x = _resolve_nameplate_company_x(
-        config, 326, company_width, reference_width
+        config, company_width, reference_width
     )
     _draw_left_text(
         draw, (company_x, 430), company_text, font_company, (0, 0, 0), anchor='lm'
@@ -744,7 +746,7 @@ def _draw_pheno_profile_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, n
         )
         reference_width = _text_width(draw, reference_text, reference_font)
     text_x = _resolve_nameplate_company_x(
-        config, round((800 - company_width) / 2), company_width, reference_width
+        config, company_width, reference_width
     )
     line_gap = 20
     line_y = 406

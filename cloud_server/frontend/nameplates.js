@@ -434,7 +434,10 @@ function getCurrentTemplateConfig() {
 function pickNameplateDesignConfig(config) {
     const source = config && typeof config === 'object' ? config : {};
     const designConfig = {};
-    ['logoDataUrl', 'logoFileName', 'logoX', 'logoY', 'companyX'].forEach(key => {
+    [
+        'logoDataUrl', 'logoFileName', 'logoX', 'logoY',
+        'companyX', 'companyPositionMode',
+    ].forEach(key => {
         if (source[key] !== undefined && source[key] !== null && source[key] !== '') {
             designConfig[key] = source[key];
         }

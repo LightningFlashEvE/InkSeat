@@ -24,9 +24,10 @@ var currentNameplateLogoFileName = '';
 var currentNameplateLogoPosition = null;
 var currentNameplateLogoBounds = null;
 var currentNameplateCompanyX = null;
+var currentNameplateCompanyPositionMode = 'auto';
 var currentNameplateCompanyBounds = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260805company1';
+const CONTROL_LAZY_ASSET_VERSION = '20260805axis1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -120,22 +121,29 @@ function getNameplateLogoConfig() {
 }
 
 function getNameplateCompanyConfig() {
-    return currentNameplateCompanyX === null
+    return currentNameplateCompanyPositionMode !== 'custom'
+        || currentNameplateCompanyX === null
         ? {}
-        : { companyX: Math.round(currentNameplateCompanyX) };
+        : {
+            companyX: Math.round(currentNameplateCompanyX),
+            companyPositionMode: 'custom',
+        };
 }
 
 function updateNameplateCompanyControls() {
     const resetButton = document.getElementById('resetNameplateCompanyPositionButton');
-    if (resetButton) resetButton.disabled = currentNameplateCompanyX === null;
+    if (resetButton) {
+        resetButton.disabled = currentNameplateCompanyPositionMode !== 'custom';
+    }
 }
 
 function setNameplateCompanyState(config = {}, options = {}) {
     const companyX = Number(config.companyX);
-    currentNameplateCompanyX = config.companyX !== undefined && config.companyX !== null
+    const hasCustomPosition = String(config.companyPositionMode || '').toLowerCase() === 'custom'
+        && config.companyX !== undefined && config.companyX !== null
         && Number.isFinite(companyX)
-        ? Math.round(companyX)
-        : null;
+    currentNameplateCompanyPositionMode = hasCustomPosition ? 'custom' : 'auto';
+    currentNameplateCompanyX = hasCustomPosition ? Math.round(companyX) : null;
     currentNameplateCompanyBounds = null;
     updateNameplateCompanyControls();
     if (options.render !== false) renderNameplatePreview();
@@ -299,10 +307,11 @@ function resetNameplateLogoPosition() {
 
 function resetNameplateCompanyPosition() {
     currentNameplateCompanyX = null;
+    currentNameplateCompanyPositionMode = 'auto';
     currentNameplateCompanyBounds = null;
     updateNameplateCompanyControls();
     renderNameplatePreview();
-    log('公司名称已恢复为当前背景样式的默认位置', 'success');
+    log('公司名称已恢复到与姓名、职位相同的中心线', 'success');
 }
 
 function restoreDefaultNameplateLogo() {
@@ -1149,8 +1158,11 @@ function drawConfiguredNameplateLogo(ctx, fallbackKey, defaultX, defaultY, width
     return true;
 }
 
-function resolveNameplateCompanyX(defaultX, companyWidth, canvasWidth) {
-    const rawX = currentNameplateCompanyX ?? defaultX;
+function resolveNameplateCompanyX(companyWidth, canvasWidth) {
+    const centeredX = (canvasWidth - companyWidth) / 2;
+    const rawX = currentNameplateCompanyPositionMode === 'custom'
+        ? (currentNameplateCompanyX ?? centeredX)
+        : centeredX;
     return Math.max(0, Math.min(canvasWidth - companyWidth, Math.round(rawX)));
 }
 
@@ -1201,7 +1213,7 @@ function drawPhenoFooterNameplate(ctx, width, height, name, style, roleText, com
     const companySize = fitCanvasFontSizeWithWeight(ctx, companyText, 390, 22, 16, '700');
     ctx.font = nameplateCanvasFont(companySize, '700', companyText);
     const companyWidth = ctx.measureText(companyText).width;
-    const companyX = resolveNameplateCompanyX(326, companyWidth, width);
+    const companyX = resolveNameplateCompanyX(companyWidth, width);
     ctx.fillStyle = 'black';
     ctx.fillText(companyText, companyX, 430);
     setNameplateCompanyBounds(
@@ -1277,9 +1289,7 @@ function drawPhenoProfileNameplate(ctx, width, height, name, roleText, companyTe
     const companySize = fitCanvasFontSizeWithWeight(ctx, companyText, 370, 22, 16, '400');
     ctx.font = nameplateCanvasFont(companySize, '400', companyText);
     const companyWidth = ctx.measureText(companyText).width;
-    const textX = resolveNameplateCompanyX(
-        Math.round((width - companyWidth) / 2), companyWidth, width
-    );
+    const textX = resolveNameplateCompanyX(companyWidth, width);
     const lineGap = 20;
     const lineY = 406;
     const lineHeight = 16;
@@ -2692,6 +2702,7 @@ function moveDraggedNameplateCompany(x, canvas) {
         0,
         Math.min(canvas.width - bounds.width, x - canvasDragState.itemOffsetX)
     );
+    currentNameplateCompanyPositionMode = 'custom';
     updateNameplateCompanyControls();
     renderCanvas();
     return true;
@@ -2763,6 +2774,7 @@ function initCanvasEvents() {
             canvasDragState.dragTarget = 'nameplate-company';
             canvasDragState.itemOffsetX = x - currentNameplateCompanyBounds.x;
             currentNameplateCompanyX = currentNameplateCompanyBounds.x;
+            currentNameplateCompanyPositionMode = 'custom';
             canvas.style.cursor = 'ew-resize';
             updateNameplateCompanyControls();
             renderCanvas();

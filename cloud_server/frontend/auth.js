@@ -1,6 +1,6 @@
 // 简单用户认证工具
 const AUTH_API_BASE = '';
-const AUTH_LOGIN_URL = 'login.html?v=20260805company1';
+const AUTH_LOGIN_URL = 'login.html?v=20260805axis1';
 let authRedirectInProgress = false;
 
 function getAuthToken() {

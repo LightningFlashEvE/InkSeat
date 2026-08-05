@@ -1023,6 +1023,7 @@ class BackendSecurityTests(unittest.TestCase):
                     'backgroundStyle': 'formal_red',
                     'subtitle': 'Advanced Quantum Microelectronics & Semiconductor',
                     'companyX': 260,
+                    'companyPositionMode': 'custom',
                 },
             })
 
@@ -1120,6 +1121,7 @@ class BackendSecurityTests(unittest.TestCase):
                 'logoX': 21,
                 'logoY': 34,
                 'companyX': 412,
+                'companyPositionMode': 'custom',
             })
 
         timeouts = [call.kwargs['timeout'] for call in post_mock.call_args_list]
@@ -1131,6 +1133,7 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(result['templateConfig']['logoX'], 21)
         self.assertEqual(result['templateConfig']['logoY'], 34)
         self.assertEqual(result['templateConfig']['companyX'], 412)
+        self.assertEqual(result['templateConfig']['companyPositionMode'], 'custom')
         self.assertEqual(result['templateConfig']['backgroundStyle'], 'formal_green')
         self.assertEqual(result['templateConfig']['title'], '统一职位')
         self.assertEqual(result['templateConfig']['subtitle'], '统一公司')
@@ -1432,6 +1435,7 @@ class NameplateRenderContractTests(unittest.TestCase):
             'logoX': -10,
             'logoY': 999,
             'companyX': 999,
+            'companyPositionMode': 'custom',
         })
 
         self.assertEqual(config['logoDataUrl'], logo_data_url)
@@ -1439,6 +1443,11 @@ class NameplateRenderContractTests(unittest.TestCase):
         self.assertEqual(config['logoX'], 0)
         self.assertEqual(config['logoY'], 479)
         self.assertEqual(config['companyX'], 799)
+        self.assertEqual(config['companyPositionMode'], 'custom')
+        self.assertNotIn(
+            'companyX',
+            backend.normalize_nameplate_template_config({'companyX': 123}),
+        )
         self.assertNotIn(
             'logoDataUrl',
             backend.normalize_nameplate_template_config({
@@ -1460,20 +1469,30 @@ class NameplateRenderContractTests(unittest.TestCase):
 
     def test_nameplate_company_uses_saved_horizontal_position_and_stays_visible(self):
         self.assertEqual(
-            template_renderer._resolve_nameplate_company_x({'companyX': 24}, 326, 120),
+            template_renderer._resolve_nameplate_company_x(
+                {'companyX': 24, 'companyPositionMode': 'custom'}, 120,
+            ),
             24,
         )
         self.assertEqual(
-            template_renderer._resolve_nameplate_company_x({'companyX': 999}, 326, 120),
+            template_renderer._resolve_nameplate_company_x(
+                {'companyX': 999, 'companyPositionMode': 'custom'}, 120,
+            ),
             680,
         )
         self.assertEqual(
-            template_renderer._resolve_nameplate_company_x({}, 326, 120),
-            326,
+            template_renderer._resolve_nameplate_company_x({}, 120),
+            340,
+        )
+        self.assertEqual(
+            template_renderer._resolve_nameplate_company_x({'companyX': 24}, 120),
+            340,
         )
         self.assertEqual(
             template_renderer._resolve_nameplate_company_x(
-                {'companyX': 260}, 326, 180, reference_width=390,
+                {'companyX': 260, 'companyPositionMode': 'custom'},
+                180,
+                reference_width=390,
             ),
             365,
         )
@@ -1488,6 +1507,7 @@ class NameplateRenderContractTests(unittest.TestCase):
             'backgroundStyle': 'formal_red',
             'subtitle': 'ACME',
             'companyX': 650,
+            'companyPositionMode': 'custom',
         })
         self.assertNotEqual(default_image.tobytes(), moved_image.tobytes())
 
