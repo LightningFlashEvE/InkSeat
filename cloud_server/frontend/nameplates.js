@@ -431,16 +431,6 @@ function getCurrentTemplateConfig() {
     };
 }
 
-function getEffectiveTemplateConfig(person) {
-    const config = getCurrentTemplateConfig();
-    const normalized = normalizeNameplatePerson(person);
-    return {
-        ...config,
-        title: normalized.title || config.title || '',
-        subtitle: normalized.subtitle || config.subtitle || '',
-    };
-}
-
 function pickNameplateDesignConfig(config) {
     const source = config && typeof config === 'object' ? config : {};
     const designConfig = {};
@@ -734,7 +724,7 @@ async function refreshNameplateCardPreview() {
             body: JSON.stringify({
                 name,
                 person,
-                templateConfig: getEffectiveTemplateConfig(person),
+                templateConfig: getCurrentTemplateConfig(),
             }),
         });
         const result = await response.json().catch(() => ({}));

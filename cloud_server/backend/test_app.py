@@ -1008,6 +1008,32 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(rendered_config['title'], 'Technical Expert')
         self.assertEqual(backend.devices_collection.documents, preview_before)
 
+    def test_nameplate_preview_keeps_company_center_when_person_company_changes(self):
+        with patch.object(
+            backend, 'render_template_with_preview',
+            return_value={'previewImage': 'preview-base64'},
+        ) as render_mock:
+            response = self.client.post('/api/nameplates/preview', json={
+                'person': {
+                    'name': '罗宇航',
+                    'title': '副局长',
+                    'subtitle': '中山市投资促进局',
+                },
+                'templateConfig': {
+                    'backgroundStyle': 'formal_red',
+                    'subtitle': 'Advanced Quantum Microelectronics & Semiconductor',
+                    'companyX': 260,
+                },
+            })
+
+        self.assertEqual(response.status_code, 200)
+        rendered_config = render_mock.call_args.args[1]
+        self.assertEqual(rendered_config['subtitle'], '中山市投资促进局')
+        self.assertEqual(
+            rendered_config['companyReferenceText'],
+            'Advanced Quantum Microelectronics & Semi',
+        )
+
     def test_nameplate_parse_accepts_standard_comma_separated_text_without_ai(self):
         with patch.object(backend, 'get_nameplate_ai_api_key', return_value=''):
             response = self.client.post('/api/nameplates/parse', data={
@@ -1189,6 +1215,7 @@ class BackendSecurityTests(unittest.TestCase):
         rendered_configs = [call.args[1] for call in render_mock.call_args_list]
         self.assertEqual(rendered_configs[0]['title'], '总经理')
         self.assertEqual(rendered_configs[0]['subtitle'], '甲公司')
+        self.assertEqual(rendered_configs[0]['companyReferenceText'], '统一公司')
         self.assertEqual(rendered_configs[1]['title'], '统一嘉宾')
         self.assertEqual(rendered_configs[1]['subtitle'], '统一公司')
         assignments = response.get_json()['assignments']
@@ -1443,6 +1470,12 @@ class NameplateRenderContractTests(unittest.TestCase):
         self.assertEqual(
             template_renderer._resolve_nameplate_company_x({}, 326, 120),
             326,
+        )
+        self.assertEqual(
+            template_renderer._resolve_nameplate_company_x(
+                {'companyX': 260}, 326, 180, reference_width=390,
+            ),
+            365,
         )
 
         default_image = template_renderer.render_template_image('nameplate', {

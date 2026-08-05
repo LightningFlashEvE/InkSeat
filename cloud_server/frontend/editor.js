@@ -26,7 +26,7 @@ var currentNameplateLogoBounds = null;
 var currentNameplateCompanyX = null;
 var currentNameplateCompanyBounds = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260803people1';
+const CONTROL_LAZY_ASSET_VERSION = '20260805company1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -1198,14 +1198,14 @@ function drawPhenoFooterNameplate(ctx, width, height, name, style, roleText, com
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    const companySize = fitCanvasFontSizeWithWeight(ctx, companyText, 390, 25, 18, '700');
+    const companySize = fitCanvasFontSizeWithWeight(ctx, companyText, 390, 22, 16, '700');
     ctx.font = nameplateCanvasFont(companySize, '700', companyText);
     const companyWidth = ctx.measureText(companyText).width;
     const companyX = resolveNameplateCompanyX(326, companyWidth, width);
     ctx.fillStyle = 'black';
-    ctx.fillText(companyText, companyX, 433);
+    ctx.fillText(companyText, companyX, 430);
     setNameplateCompanyBounds(
-        ctx, companyX, 433 - companySize / 2, companyWidth, companySize
+        ctx, companyX, 430 - companySize / 2, companyWidth, companySize
     );
 }
 

@@ -3874,6 +3874,9 @@ def preview_nameplate():
         if person['title']:
             template_config['title'] = person['title']
         if person['subtitle']:
+            reference_company = template_config.get('subtitle', '')
+            if reference_company and reference_company != person['subtitle']:
+                template_config['companyReferenceText'] = reference_company
             template_config['subtitle'] = person['subtitle']
         render_result = render_template_with_preview('nameplate', template_config)
         preview_image = render_result.get('previewImage') if isinstance(render_result, dict) else None
@@ -3971,6 +3974,9 @@ def dispatch_nameplates():
             if person['title']:
                 template_config['title'] = person['title']
             if person['subtitle']:
+                reference_company = template_config.get('subtitle', '')
+                if reference_company and reference_company != person['subtitle']:
+                    template_config['companyReferenceText'] = reference_company
                 template_config['subtitle'] = person['subtitle']
 
             try:
