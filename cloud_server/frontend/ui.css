@@ -1626,6 +1626,103 @@ body.control-page {
     padding: 10px 14px !important;
 }
 
+.control-page.device-editor-mode .toolbar {
+    justify-content: space-between;
+}
+
+.control-page .device-editor-toolbar-title {
+    min-width: 0;
+}
+
+.control-page .device-editor-toolbar-title strong,
+.control-page .device-editor-toolbar-title span {
+    display: block;
+}
+
+.control-page .device-editor-toolbar-title strong {
+    color: var(--ui-text);
+    font-size: 0.9rem;
+}
+
+.control-page .device-editor-toolbar-title span {
+    margin-top: 2px;
+    color: var(--ui-text-muted);
+    font-size: 0.72rem;
+}
+
+.control-page .device-editor-identity {
+    border-color: rgba(47, 128, 255, 0.36) !important;
+    background: rgba(47, 128, 255, 0.055) !important;
+}
+
+.control-page .device-editor-section-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.control-page .device-editor-section-head p {
+    margin-top: 4px;
+    color: var(--ui-text-muted);
+    font-size: 0.72rem;
+    line-height: 1.45;
+}
+
+.control-page .device-editor-section-head a {
+    flex: 0 0 auto;
+    color: #69a7ff;
+    font-size: 0.72rem;
+    text-decoration: none;
+}
+
+.control-page .device-editor-section-head a:hover {
+    text-decoration: underline;
+}
+
+.control-page .device-editor-name-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+}
+
+.control-page .device-editor-name-row .btn {
+    white-space: nowrap;
+}
+
+.control-page .device-editor-code-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--ui-line-soft);
+    color: var(--ui-text-muted);
+    font-size: 0.76rem;
+}
+
+.control-page .device-editor-code-row strong {
+    color: var(--ui-text);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    letter-spacing: 0.06em;
+}
+
+@media (max-width: 640px) {
+    .control-page .device-editor-toolbar-title {
+        width: 100%;
+    }
+
+    .control-page .device-editor-section-head {
+        align-items: center;
+    }
+
+    .control-page .device-editor-name-row {
+        grid-template-columns: 1fr;
+    }
+}
+
 .control-page .toolbar label {
     white-space: nowrap;
 }

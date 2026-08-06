@@ -805,32 +805,32 @@
             }
         }
     </style>
-    <script src="theme.js?v=20260805axis1"></script>
-    <link rel="stylesheet" href="ui.css?v=20260805axis1">
+    <script src="theme.js?v=20260806device1"></script>
+    <link rel="stylesheet" href="ui.css?v=20260806device1">
 </head>
 <body class="control-page meeting-device-page">
     <div class="meeting-page">
         <section class="meeting-shell control-shell">
             <aside class="meeting-sidebar" aria-label="主导航">
-                <a class="meeting-brand" href="index.html?v=20260805axis1" aria-label="会议牌管理">
+                <a class="meeting-brand" href="index.html?v=20260806device1" aria-label="会议牌管理">
                     <span class="meeting-brand-mark" aria-hidden="true"></span>
                     <span>会议牌管理</span>
                 </a>
 
                 <nav class="meeting-nav">
-                    <a class="meeting-nav-item" href="index.html?v=20260805axis1">
+                    <a class="meeting-nav-item" id="deviceNavLink" href="index.html?v=20260806device1">
                         <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
                         <span>设备</span>
                     </a>
-                    <a class="meeting-nav-item" href="nameplates.html?v=20260805axis1">
+                    <a class="meeting-nav-item" href="nameplates.html?v=20260806device1">
                         <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
                         <span>名单下发</span>
                     </a>
-                    <a class="meeting-nav-item active" href="control.html?v=20260805axis1" aria-current="page">
+                    <a class="meeting-nav-item active" id="templateDesignNavLink" href="control.html?v=20260806device1" aria-current="page">
                         <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
                         <span>模板设计</span>
                     </a>
-                    <a class="meeting-nav-item" href="settings.html?v=20260805axis1">
+                    <a class="meeting-nav-item" href="settings.html?v=20260806device1">
                         <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
                         <span>设置</span>
                     </a>
@@ -862,7 +862,7 @@
         <div class="left-sidebar">
             <div class="page-sidebar-content">
                 <div class="sidebar-header">
-                    <h3>页面</h3>
+                    <h3 id="pageSidebarHeading">页面</h3>
                     <button class="btn-new" id="newPageButton" type="button" onclick="showNewPageModal()" data-requires-device>+ 新建</button>
                 </div>
                 <div class="page-list" id="pageList">
@@ -889,6 +889,10 @@
         <!-- 主内容区 - 画布 -->
         <div class="canvas-area">
             <div class="toolbar">
+                <div class="device-editor-toolbar-title hidden" data-device-editor-only>
+                    <strong>设备屏幕编辑</strong>
+                    <span>修改仅作用于当前设备，不会覆盖已保存模板</span>
+                </div>
                 <div class="toolbar-group control-device-actions" data-requires-device-group>
                     <button class="btn btn-secondary" id="savePageButton" type="button" onclick="savePage()" data-requires-device>保存</button>
                     <button class="btn btn-success" id="publishPageButton" type="button" onclick="uploadToDevice()" data-requires-device>发布</button>
@@ -913,6 +917,27 @@
             </div>
 
             <div class="panel-content" id="editPanel">
+                <div class="panel-section device-editor-identity hidden" id="deviceEditorIdentitySection" data-device-editor-only>
+                    <div class="device-editor-section-head">
+                        <div>
+                            <h4>当前设备</h4>
+                            <p>修改设备名称不会影响设备编号、绑定关系或屏幕版本。</p>
+                        </div>
+                        <a href="index.html?v=20260806device1">返回设备列表</a>
+                    </div>
+                    <div class="form-group">
+                        <label for="deviceEditorNameInput">设备名称</label>
+                        <div class="device-editor-name-row">
+                            <input type="text" id="deviceEditorNameInput" maxlength="80" autocomplete="off" placeholder="例如：会议室 A 屏幕">
+                            <button class="btn btn-secondary btn-small" id="saveDeviceNameButton" type="button" onclick="renameCurrentDevice()">保存名称</button>
+                        </div>
+                    </div>
+                    <div class="device-editor-code-row">
+                        <span>设备编号</span>
+                        <strong id="deviceEditorCode">-</strong>
+                    </div>
+                </div>
+
                 <!-- 内容模式选择 -->
                 <div class="panel-section hidden">
                     <h4>内容模式</h4>
@@ -1070,7 +1095,7 @@
 
                 <!-- 模板模式控件 -->
                 <div id="templateModeControls">
-                    <div class="panel-section">
+                    <div class="panel-section" id="templatePickerSection" data-template-design-only>
                         <h4>当前模板</h4>
                         <div class="template-grid" id="templateGrid">
                             <!-- 模板将动态加载 -->
@@ -1147,8 +1172,8 @@
 
                     <!-- 铭牌模板配置 -->
                     <div id="nameplateTemplateConfig" class="panel-section">
-                        <h4>会议名牌设置</h4>
-                        <div class="form-group">
+                        <h4 id="nameplateConfigHeading">会议名牌设置</h4>
+                        <div class="form-group" id="nameplateTemplateNameGroup" data-template-design-only>
                             <label for="nameplateTemplateNameInput">模板名称</label>
                             <input type="text" id="nameplateTemplateNameInput" placeholder="如：会务通用模板" value="会议名牌模板">
                         </div>
@@ -1166,12 +1191,12 @@
                                 <button class="nameplate-inline-reset" id="resetNameplateCompanyPositionButton" type="button" onclick="resetNameplateCompanyPosition()" disabled>恢复默认位置</button>
                             </div>
                             <input type="text" id="nameplateSubtitleInput" placeholder="留空使用默认公司名" oninput="renderNameplatePreview()">
-                            <p class="nameplate-company-help">可直接左右拖动画布中的公司名称；位置会随模板保存。</p>
+                            <p class="nameplate-company-help" id="nameplateCompanyHelp">可直接左右拖动画布中的公司名称；位置会随模板保存。</p>
                         </div>
                         <div class="form-group nameplate-logo-control">
                             <label for="nameplateLogoInput">Logo</label>
                             <div class="nameplate-logo-current">
-                                <img id="nameplateLogoPreview" src="assets/nameplate/pheno-logo-black.png?v=20260805axis1" alt="默认 Pheno Logo">
+                                <img id="nameplateLogoPreview" src="assets/nameplate/pheno-logo-black.png?v=20260806device1" alt="默认 Pheno Logo">
                                 <div>
                                     <strong id="nameplateLogoStatus">默认 Pheno Logo</strong>
                                     <span>PNG、JPG 或 WebP，最大 5MB</span>
@@ -1183,7 +1208,7 @@
                                 <button class="btn btn-secondary btn-small" id="resetNameplateLogoPositionButton" type="button" onclick="resetNameplateLogoPosition()" disabled>默认位置</button>
                                 <button class="btn btn-secondary btn-small" id="restoreNameplateLogoButton" type="button" onclick="restoreDefaultNameplateLogo()" disabled>恢复 Pheno</button>
                             </div>
-                            <p class="nameplate-logo-help">上传后可直接拖动画布中的 Logo；位置会随模板保存。</p>
+                            <p class="nameplate-logo-help" id="nameplateLogoHelp">上传后可直接拖动画布中的 Logo；位置会随模板保存。</p>
                         </div>
                         <div class="form-group">
                             <label for="nameplateStyleSelect">背景样式</label>
@@ -1203,12 +1228,14 @@
                                 <option value="86400">每 24 小时</option>
                             </select>
                         </div>
-                        <button class="btn btn-secondary" id="saveTemplateButton" type="button" onclick="saveNameplateTemplate()" style="width:100%;">
-                            保存模板
-                        </button>
-                        <button class="btn btn-secondary" type="button" onclick="saveNameplateTemplateAsNew()" style="width:100%; margin-top: 10px;">
-                            另存为新模板
-                        </button>
+                        <div id="nameplateTemplateSaveActions" data-template-design-only>
+                            <button class="btn btn-secondary" id="saveTemplateButton" type="button" onclick="saveNameplateTemplate()" style="width:100%;">
+                                保存模板
+                            </button>
+                            <button class="btn btn-secondary" type="button" onclick="saveNameplateTemplateAsNew()" style="width:100%; margin-top: 10px;">
+                                另存为新模板
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1318,8 +1345,8 @@
     <input type="hidden" id="height" value="480">
 
     <script src="vendor/qrcode.min.js"></script>
-    <script src="auth.js?v=20260805axis1"></script>
-    <script src="app.js?v=20260805axis1"></script>
-    <script src="editor.js?v=20260805axis1"></script>
+    <script src="auth.js?v=20260806device1"></script>
+    <script src="app.js?v=20260806device1"></script>
+    <script src="editor.js?v=20260806device1"></script>
 </body>
 </html>

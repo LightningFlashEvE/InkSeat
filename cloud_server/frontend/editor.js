@@ -9,6 +9,8 @@ window.editorInitialized = true;
 // ==================== 全局变量 ====================
 // 以下变量是 editor.js 独有的，不与 app.js 冲突
 var deviceId = '';
+var deviceEditorMode = false;
+var currentDeviceEditorRecord = null;
 var pages = [];
 var templates = [];
 var currentPageId = null;
@@ -27,7 +29,7 @@ var currentNameplateCompanyX = null;
 var currentNameplateCompanyPositionMode = 'auto';
 var currentNameplateCompanyBounds = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260805axis1';
+const CONTROL_LAZY_ASSET_VERSION = '20260806device1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -355,6 +357,7 @@ function initEditorShell() {
     // 从URL获取设备ID
     const params = new URLSearchParams(window.location.search);
     deviceId = params.get('deviceId') || '';
+    deviceEditorMode = Boolean(deviceId);
 
     const deviceIdInput = document.getElementById('deviceId');
     if (deviceIdInput) deviceIdInput.value = deviceId;
@@ -373,6 +376,7 @@ function initEditorShell() {
     templates = [NAMEPLATE_TEMPLATE_FALLBACK];
     renderTemplateGrid();
     renderModalTemplateGrid();
+    configureEditorPageMode();
     updateDeviceBoundControls();
     ensureNameplateOnlyMode({ silent: true });
 }
@@ -387,7 +391,11 @@ async function initEditorDataAndControls() {
 
         await loadTemplates();
         ensureNameplateOnlyMode({ silent: true, skipRender: true });
-        await loadSavedNameplateTemplates({ applyFirst: !hasSelectedDevice(), silent: true });
+        if (isDeviceEditorMode()) {
+            await loadCurrentDeviceEditorState();
+        } else {
+            await loadSavedNameplateTemplates({ applyFirst: true, silent: true });
+        }
         await loadPages();
         updateDeviceBoundControls();
 
@@ -402,6 +410,165 @@ async function initEditorDataAndControls() {
 function hasSelectedDevice() {
     const inputValue = document.getElementById('deviceId')?.value?.trim() || '';
     return Boolean((deviceId || inputValue).trim());
+}
+
+function isDeviceEditorMode() {
+    return deviceEditorMode && hasSelectedDevice();
+}
+
+function setCurrentNavigationItem(element, current) {
+    if (!element) return;
+    element.classList.toggle('active', current);
+    if (current) {
+        element.setAttribute('aria-current', 'page');
+    } else {
+        element.removeAttribute('aria-current');
+    }
+}
+
+function configureEditorPageMode() {
+    const isDeviceEditor = isDeviceEditorMode();
+    document.body?.classList.toggle('device-editor-mode', isDeviceEditor);
+    document.title = isDeviceEditor ? '设备屏幕编辑' : '模板设计';
+
+    setCurrentNavigationItem(document.getElementById('deviceNavLink'), isDeviceEditor);
+    setCurrentNavigationItem(document.getElementById('templateDesignNavLink'), !isDeviceEditor);
+
+    document.querySelectorAll('[data-device-editor-only]').forEach(element => {
+        element.classList.toggle('hidden', !isDeviceEditor);
+    });
+    document.querySelectorAll('[data-template-design-only]').forEach(element => {
+        element.classList.toggle('hidden', isDeviceEditor);
+    });
+
+    const pageHeading = document.getElementById('pageSidebarHeading');
+    if (pageHeading) pageHeading.textContent = isDeviceEditor ? '设备页面' : '页面';
+
+    const saveButton = document.getElementById('savePageButton');
+    if (saveButton) saveButton.textContent = isDeviceEditor ? '保存草稿' : '保存';
+    const publishButton = document.getElementById('publishPageButton');
+    if (publishButton) publishButton.textContent = isDeviceEditor ? '发布到设备' : '发布';
+
+    const configHeading = document.getElementById('nameplateConfigHeading');
+    if (configHeading) {
+        configHeading.textContent = isDeviceEditor ? '当前屏幕内容' : '会议名牌设置';
+    }
+    const companyHelp = document.getElementById('nameplateCompanyHelp');
+    if (companyHelp) {
+        companyHelp.textContent = isDeviceEditor
+            ? '可直接左右拖动画布中的公司名称；发布后仅更新当前设备。'
+            : '可直接左右拖动画布中的公司名称；位置会随模板保存。';
+    }
+    const logoHelp = document.getElementById('nameplateLogoHelp');
+    if (logoHelp) {
+        logoHelp.textContent = isDeviceEditor
+            ? '上传后可直接拖动画布中的 Logo；发布后仅更新当前设备。'
+            : '上传后可直接拖动画布中的 Logo；位置会随模板保存。';
+    }
+
+    const nameInput = document.getElementById('deviceEditorNameInput');
+    if (nameInput && !nameInput.dataset.enterBound) {
+        nameInput.dataset.enterBound = 'true';
+        nameInput.addEventListener('keydown', event => {
+            if (event.key === 'Enter') renameCurrentDevice();
+        });
+    }
+}
+
+function updateDeviceEditorIdentity(device) {
+    if (!device || !isDeviceEditorMode()) return;
+    const deviceName = String(device.deviceName || device.deviceId || deviceId);
+    const deviceNameDisplay = document.getElementById('deviceNameDisplay');
+    if (deviceNameDisplay) deviceNameDisplay.textContent = deviceName;
+    const nameInput = document.getElementById('deviceEditorNameInput');
+    if (nameInput) nameInput.value = deviceName;
+    const code = document.getElementById('deviceEditorCode');
+    if (code) code.textContent = device.deviceId || deviceId;
+}
+
+function applyDeviceEditorRecord(device) {
+    if (!device || !isDeviceEditorMode()) return false;
+    currentDeviceEditorRecord = device;
+    updateDeviceEditorIdentity(device);
+
+    const config = device.templateConfig && typeof device.templateConfig === 'object'
+        ? device.templateConfig
+        : {};
+    applyNameplateTemplateConfig({
+        backgroundStyle: 'formal_red',
+        title: '',
+        subtitle: '',
+        sleepIntervalSeconds: device.sleepIntervalSeconds || 43200,
+        ...config,
+    }, { render: false });
+    ensureNameplateOnlyMode({ silent: true, skipRender: true });
+    renderNameplatePreview();
+    return true;
+}
+
+async function loadCurrentDeviceEditorState() {
+    if (!isDeviceEditorMode()) return false;
+    try {
+        const response = await authFetch(`${API_BASE}/api/devices/${encodeURIComponent(deviceId)}`, {
+            headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success || !result.device) {
+            throw new Error(result.error || '设备信息加载失败');
+        }
+        applyDeviceEditorRecord(result.device);
+        log(`已加载 ${result.device.deviceName || deviceId} 当前使用的屏幕`, 'success');
+        return true;
+    } catch (error) {
+        console.error('加载设备编辑状态失败:', error);
+        log('加载当前设备屏幕失败: ' + error.message, 'error');
+        return false;
+    }
+}
+
+async function renameCurrentDevice() {
+    if (!isDeviceEditorMode()) return;
+    const input = document.getElementById('deviceEditorNameInput');
+    const button = document.getElementById('saveDeviceNameButton');
+    const deviceName = input?.value?.replace(/\s+/g, ' ').trim() || '';
+    if (!deviceName || deviceName.length > 80) {
+        log('设备名称需为 1–80 个字符', 'error');
+        input?.focus();
+        return;
+    }
+
+    try {
+        if (button) {
+            button.disabled = true;
+            button.textContent = '保存中...';
+        }
+        const response = await authFetch(`${API_BASE}/api/devices/${encodeURIComponent(deviceId)}`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(typeof getAuthHeaders === 'function' ? getAuthHeaders() : {})
+            },
+            body: JSON.stringify({ deviceName })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success || !result.device) {
+            throw new Error(result.error || '设备名称保存失败');
+        }
+        currentDeviceEditorRecord = {
+            ...(currentDeviceEditorRecord || {}),
+            ...result.device,
+        };
+        updateDeviceEditorIdentity(currentDeviceEditorRecord);
+        log(`设备名称已修改为：${result.device.deviceName}`, 'success');
+    } catch (error) {
+        console.error('修改设备名称失败:', error);
+        log('设备名称保存失败: ' + error.message, 'error');
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = '保存名称';
+        }
+    }
 }
 
 function escapeHtml(value) {
@@ -649,11 +816,13 @@ function getNameplateTemplateName() {
 function applyNameplateTemplateConfig(config, options = {}) {
     if (!config) return false;
 
+    const nameInput = document.getElementById('nameplateNameInput');
     const styleSelect = document.getElementById('nameplateStyleSelect');
     const titleInput = document.getElementById('nameplateTitleInput');
     const subtitleInput = document.getElementById('nameplateSubtitleInput');
     const wakeSelect = document.getElementById('nameplateWakeInterval');
 
+    if (nameInput && config.name !== undefined) nameInput.value = config.name || '';
     if (styleSelect && config.backgroundStyle) styleSelect.value = config.backgroundStyle;
     if (titleInput && config.title !== undefined) titleInput.value = config.title || '';
     if (subtitleInput && config.subtitle !== undefined) subtitleInput.value = config.subtitle || '';
@@ -1653,6 +1822,9 @@ function loadPageToCanvas(page) {
         }
 
         currentTemplateId = template.templateId;
+        if (template.templateId === NAMEPLATE_TEMPLATE_ID && data.templateConfig) {
+            applyNameplateTemplateConfig(data.templateConfig, { render: false });
+        }
         // 模板页默认不加载图片/文字叠加
         sourceImage = null;
         textItems = [];

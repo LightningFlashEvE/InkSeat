@@ -279,6 +279,83 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(backend.devices_collection.documents[0]['owner'], 'alice')
         self.assertEqual(len(backend.pairing_codes_collection.documents), 1)
 
+    def test_device_editor_reads_only_owned_screen_state(self):
+        backend.devices_collection = FakeCollection([{
+            'deviceId': 'A1B2C3',
+            'deviceName': '前台会议牌',
+            'owner': 'bob',
+            'claimed': True,
+            'imageVersion': 7,
+            'activeContentMode': 'template',
+            'activeTemplateId': 'nameplate',
+            'activeContentLabel': '会议名牌 · 张三',
+            'templateConfig': {
+                'name': '张三',
+                'title': '技术专家',
+                'subtitle': '甲公司',
+                'backgroundStyle': 'formal_red',
+            },
+            'deviceKeyHash': 'must-not-leak',
+        }])
+
+        response = self.client.get('/api/devices/A1B2C3')
+
+        self.assertEqual(response.status_code, 200)
+        device = response.get_json()['device']
+        self.assertEqual(device['deviceName'], '前台会议牌')
+        self.assertEqual(device['imageVersion'], 7)
+        self.assertEqual(device['templateConfig']['name'], '张三')
+        self.assertNotIn('deviceKeyHash', device)
+
+    def test_device_name_can_be_changed_only_by_owner(self):
+        backend.devices_collection = FakeCollection([
+            {
+                'deviceId': 'A1B2C3', 'deviceName': '旧名称',
+                'owner': 'bob', 'claimed': True,
+            },
+            {
+                'deviceId': 'D4E5F6', 'deviceName': '其他人的设备',
+                'owner': 'alice', 'claimed': True,
+            },
+        ])
+
+        renamed = self.client.patch('/api/devices/A1B2C3', json={
+            'deviceName': '  新名称\n会议室  ',
+        })
+        denied = self.client.patch('/api/devices/D4E5F6', json={
+            'deviceName': '越权修改',
+        })
+
+        self.assertEqual(renamed.status_code, 200)
+        self.assertEqual(renamed.get_json()['device']['deviceName'], '新名称 会议室')
+        self.assertEqual(
+            backend.devices_collection.find_one({'deviceId': 'A1B2C3'})['deviceName'],
+            '新名称 会议室',
+        )
+        self.assertEqual(denied.status_code, 404)
+        self.assertEqual(
+            backend.devices_collection.find_one({'deviceId': 'D4E5F6'})['deviceName'],
+            '其他人的设备',
+        )
+
+    def test_device_name_rejects_empty_or_oversized_values(self):
+        backend.devices_collection = FakeCollection([{
+            'deviceId': 'A1B2C3', 'deviceName': '旧名称',
+            'owner': 'bob', 'claimed': True,
+        }])
+
+        empty = self.client.patch('/api/devices/A1B2C3', json={'deviceName': ' \n '})
+        oversized = self.client.patch('/api/devices/A1B2C3', json={
+            'deviceName': '设' * 81,
+        })
+
+        self.assertEqual(empty.status_code, 400)
+        self.assertEqual(oversized.status_code, 400)
+        self.assertEqual(
+            backend.devices_collection.find_one({'deviceId': 'A1B2C3'})['deviceName'],
+            '旧名称',
+        )
+
     def test_pairing_code_is_required(self):
         backend.pairing_codes_collection = FakeCollection([
             {'deviceId': 'A1B2C3', 'code': '123456', 'expiresAt': datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1)}

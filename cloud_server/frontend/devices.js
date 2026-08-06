@@ -304,7 +304,7 @@ function renderDevices() {
                 <td>${escapeHtml(view.lastSeenText)}</td>
                 <td>
                     <div class="meeting-row-actions">
-                        <button class="meeting-table-action icon-edit" type="button" title="单台编辑与下发" aria-label="单台编辑与下发" onclick="event.stopPropagation(); openDevice('${safeId}')"></button>
+                        <button class="meeting-table-action icon-edit" type="button" title="编辑设备屏幕与名称" aria-label="编辑设备屏幕与名称" onclick="event.stopPropagation(); openDevice('${safeId}')"></button>
                         <button class="meeting-table-action icon-delete danger" type="button" title="删除设备" aria-label="删除设备" onclick="event.stopPropagation(); removeDevice('${safeId}')"></button>
                     </div>
                 </td>
@@ -533,7 +533,7 @@ function setSignalIndicator(id, rssi) {
 }
 
 function openDevice(deviceId) {
-    window.location.href = `control.html?v=20260805axis1&deviceId=${encodeURIComponent(deviceId)}`;
+    window.location.href = `control.html?v=20260806device1&view=device-editor&deviceId=${encodeURIComponent(deviceId)}`;
 }
 
 let pollingInterval = null;

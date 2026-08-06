@@ -2442,10 +2442,43 @@ def add_device():
         print(f'❌ Error adding device: {e}')
         return jsonify({'success': False, 'error': 'Failed to add device'}), 500
 
-@app.route('/api/devices/<device_id>', methods=['DELETE'])
+def serialize_device_editor_state(device: dict) -> dict:
+    """Return only the device fields needed by the single-screen editor."""
+    device_id = normalize_device_id(device.get('deviceId'))
+    content_meta = get_device_content_metadata(device)
+    raw_template_config = device.get('templateConfig')
+    template_config = {}
+    if isinstance(raw_template_config, dict):
+        template_config = normalize_nameplate_template_config(raw_template_config)
+        person_name = str(
+            raw_template_config.get('name')
+            or raw_template_config.get('personName')
+            or ''
+        ).strip()
+        if person_name:
+            template_config['name'] = person_name[:NAMEPLATE_MAX_NAME_LEN]
+
+    result = {
+        'deviceId': device_id,
+        'deviceName': device.get('deviceName') or device_id,
+        'imageVersion': int(device.get('imageVersion') or 0),
+        'activeContentMode': content_meta['activeContentMode'],
+        'activeTemplateId': content_meta['activeTemplateId'],
+        'activeContentLabel': content_meta['activeContentLabel'],
+        'sleepIntervalSeconds': content_meta['sleepIntervalSeconds'],
+        'templateConfig': template_config,
+    }
+    updated_at = device.get('updatedAt')
+    result['updatedAt'] = (
+        updated_at.isoformat() if hasattr(updated_at, 'isoformat') else updated_at
+    )
+    return result
+
+
+@app.route('/api/devices/<device_id>', methods=['GET', 'PATCH', 'DELETE'])
 @login_required
-def delete_device(device_id):
-    """删除当前用户的设备"""
+def manage_device(device_id):
+    """Read, rename, or delete one device owned by the current user."""
     try:
         user = getattr(request, 'user', None)
         owner = user.get('username') if user else None
@@ -2455,6 +2488,42 @@ def delete_device(device_id):
             return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
         if devices_collection is None or not owner:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
+
+        if request.method == 'GET':
+            device = devices_collection.find_one(
+                {'deviceId': clean_id, 'owner': owner}, {'_id': 0}
+            )
+            if device is None:
+                return jsonify({'success': False, 'error': 'Device not found'}), 404
+            return jsonify({
+                'success': True,
+                'device': serialize_device_editor_state(device),
+            })
+
+        if request.method == 'PATCH':
+            data = request.get_json(silent=True) or {}
+            raw_name = data.get('deviceName')
+            if not isinstance(raw_name, str):
+                return jsonify({'success': False, 'error': 'Invalid device name'}), 400
+            device_name = re.sub(r'[\x00-\x1f\x7f]+', ' ', raw_name).strip()
+            device_name = re.sub(r'\s+', ' ', device_name)
+            if not 1 <= len(device_name) <= 80:
+                return jsonify({'success': False, 'error': 'Invalid device name'}), 400
+
+            with get_device_write_lock(clean_id):
+                updated_device = devices_collection.find_one_and_update(
+                    {'deviceId': clean_id, 'owner': owner},
+                    {'$set': {'deviceName': device_name, 'updatedAt': utcnow()}},
+                    return_document=ReturnDocument.AFTER,
+                )
+            if updated_device is None:
+                return jsonify({'success': False, 'error': 'Device not found'}), 404
+
+            print(f'✅ Device renamed: {clean_id} -> {device_name}')
+            return jsonify({
+                'success': True,
+                'device': serialize_device_editor_state(updated_device),
+            })
 
         with get_device_write_lock(clean_id):
             result = devices_collection.delete_one({'deviceId': clean_id, 'owner': owner})
