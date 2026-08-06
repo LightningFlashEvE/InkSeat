@@ -52,6 +52,8 @@ NAMEPLATE_LOGO_MIME_FORMATS = {
     'image/webp': 'WEBP',
 }
 NAMEPLATE_E6_ALGORITHM = 'nearest_color'
+NAMEPLATE_COMPANY_FONT_MAX_SIZE = 26
+NAMEPLATE_COMPANY_FONT_MIN_SIZE = 18
 
 
 def _local_now() -> datetime:
@@ -670,12 +672,24 @@ def _draw_pheno_footer_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, na
         img, config, 'pheno-logo-black.png', 108, 410, 181, 39
     )
 
-    font_company = _fit_single_line_font(draw, company_text, 390, 22, 16)
+    font_company = _fit_single_line_font(
+        draw,
+        company_text,
+        390,
+        NAMEPLATE_COMPANY_FONT_MAX_SIZE,
+        NAMEPLATE_COMPANY_FONT_MIN_SIZE,
+    )
     company_width = _text_width(draw, company_text, font_company)
     reference_width = None
     reference_text = str(config.get('companyReferenceText') or '').strip()
     if reference_text and reference_text != company_text:
-        reference_font = _fit_single_line_font(draw, reference_text, 390, 22, 16)
+        reference_font = _fit_single_line_font(
+            draw,
+            reference_text,
+            390,
+            NAMEPLATE_COMPANY_FONT_MAX_SIZE,
+            NAMEPLATE_COMPANY_FONT_MIN_SIZE,
+        )
         reference_width = _text_width(draw, reference_text, reference_font)
     company_x = _resolve_nameplate_company_x(
         config, company_width, reference_width
@@ -737,13 +751,25 @@ def _draw_pheno_profile_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, n
     if role_text and font_role:
         _draw_left_text(draw, (text_left, 244), role_text, font_role, (0, 0, 0), anchor='lt')
 
-    font_company = _fit_single_line_font(draw, company_text, 370, 22, 16, bold=False)
+    font_company = _fit_single_line_font(
+        draw,
+        company_text,
+        370,
+        NAMEPLATE_COMPANY_FONT_MAX_SIZE,
+        NAMEPLATE_COMPANY_FONT_MIN_SIZE,
+        bold=False,
+    )
     company_width = _text_width(draw, company_text, font_company)
     reference_width = None
     reference_text = str(config.get('companyReferenceText') or '').strip()
     if reference_text and reference_text != company_text:
         reference_font = _fit_single_line_font(
-            draw, reference_text, 370, 22, 16, bold=False
+            draw,
+            reference_text,
+            370,
+            NAMEPLATE_COMPANY_FONT_MAX_SIZE,
+            NAMEPLATE_COMPANY_FONT_MIN_SIZE,
+            bold=False,
         )
         reference_width = _text_width(draw, reference_text, reference_font)
     text_x = _resolve_nameplate_company_x(

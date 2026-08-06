@@ -1697,6 +1697,33 @@ class NameplateRenderContractTests(unittest.TestCase):
         })
         self.assertNotEqual(default_image.tobytes(), moved_image.tobytes())
 
+    def test_nameplate_company_uses_larger_readable_default_font(self):
+        company_text = '现象创新（深圳）科技有限公司'
+        for background_style in ('formal_red', 'formal_blue'):
+            with patch.object(
+                template_renderer,
+                '_fit_single_line_font',
+                wraps=template_renderer._fit_single_line_font,
+            ) as fit_mock:
+                template_renderer.render_template_image('nameplate', {
+                    'name': '张三',
+                    'backgroundStyle': background_style,
+                    'subtitle': company_text,
+                })
+
+            company_calls = [
+                call for call in fit_mock.call_args_list
+                if len(call.args) >= 5 and call.args[1] == company_text
+            ]
+            self.assertTrue(company_calls)
+            self.assertEqual(
+                company_calls[0].args[3:5],
+                (
+                    template_renderer.NAMEPLATE_COMPANY_FONT_MAX_SIZE,
+                    template_renderer.NAMEPLATE_COMPANY_FONT_MIN_SIZE,
+                ),
+            )
+
     def test_real_nameplate_render_matches_firmware_contract(self):
         config = {
             'name': '张三',

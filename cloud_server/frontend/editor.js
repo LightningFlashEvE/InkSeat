@@ -29,7 +29,7 @@ var currentNameplateCompanyX = null;
 var currentNameplateCompanyPositionMode = 'auto';
 var currentNameplateCompanyBounds = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260806device4';
+const CONTROL_LAZY_ASSET_VERSION = '20260806company1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -39,6 +39,8 @@ const NAMEPLATE_LOGO_OUTPUT_MAX_HEIGHT = 320;
 const NAMEPLATE_LOGO_ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const NAMEPLATE_COMPANY_CN = '现象创新（深圳）科技有限公司';
 const NAMEPLATE_COMPANY_EN = 'Pheno Innovations Technology Co., Ltd.';
+const NAMEPLATE_COMPANY_FONT_MAX_SIZE = 26;
+const NAMEPLATE_COMPANY_FONT_MIN_SIZE = 18;
 const NAMEPLATE_BRAND_ASSET_PATHS = {
     blackLogo: `assets/nameplate/pheno-logo-black.png?v=${CONTROL_LAZY_ASSET_VERSION}`,
     whiteLogo: `assets/nameplate/pheno-logo-white.png?v=${CONTROL_LAZY_ASSET_VERSION}`,
@@ -1382,7 +1384,14 @@ function drawPhenoFooterNameplate(ctx, width, height, name, style, roleText, com
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    const companySize = fitCanvasFontSizeWithWeight(ctx, companyText, 390, 22, 16, '700');
+    const companySize = fitCanvasFontSizeWithWeight(
+        ctx,
+        companyText,
+        390,
+        NAMEPLATE_COMPANY_FONT_MAX_SIZE,
+        NAMEPLATE_COMPANY_FONT_MIN_SIZE,
+        '700'
+    );
     ctx.font = nameplateCanvasFont(companySize, '700', companyText);
     const companyWidth = ctx.measureText(companyText).width;
     const companyX = resolveNameplateCompanyX(companyWidth, width);
@@ -1458,7 +1467,14 @@ function drawPhenoProfileNameplate(ctx, width, height, name, roleText, companyTe
         ctx.fillText(roleText, textLeft, 244);
     }
 
-    const companySize = fitCanvasFontSizeWithWeight(ctx, companyText, 370, 22, 16, '400');
+    const companySize = fitCanvasFontSizeWithWeight(
+        ctx,
+        companyText,
+        370,
+        NAMEPLATE_COMPANY_FONT_MAX_SIZE,
+        NAMEPLATE_COMPANY_FONT_MIN_SIZE,
+        '400'
+    );
     ctx.font = nameplateCanvasFont(companySize, '400', companyText);
     const companyWidth = ctx.measureText(companyText).width;
     const textX = resolveNameplateCompanyX(companyWidth, width);
