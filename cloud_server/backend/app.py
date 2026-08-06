@@ -40,7 +40,13 @@ import io
 from config import Config
 from db_indexes import ensure_all_indexes
 from six_color_epd import process_e6_image_from_base64
-from template_renderer import render_template_with_preview, _fetch_weather, _fetch_quote, _encode_epd_string
+from template_renderer import (
+    NAMEPLATE_E6_ALGORITHM,
+    render_template_with_preview,
+    _fetch_weather,
+    _fetch_quote,
+    _encode_epd_string,
+)
 
 # ==================== Flask 应用初始化 ====================
 app = Flask(__name__)
@@ -3827,7 +3833,8 @@ def api_quote():
 def device_set_template():
     """
     为设备设置模板配置，并立即渲染保存 EPD 数据。
-    如果前端提供了 imageBase64（Canvas 截图），用它做抖动处理（确保画布=预览=设备三端一致）；
+    如果前端提供了 imageBase64（Canvas 截图），按模板选择六色映射算法
+    （确保画布=预览=设备三端一致）；
     否则用后端 Pillow 渲染（定时唤醒自动更新场景）。
     同时保存 templateConfig，供设备后续唤醒时按需更新。
     """
@@ -3860,14 +3867,26 @@ def device_set_template():
     data_4bit_b64 = None
 
     if image_base64:
-        # 前端提供了 Canvas 截图：用它做 Floyd-Steinberg 抖动处理
+        # 前端提供了 Canvas 截图：名牌等扁平图文禁用误差扩散，避免文字和 Logo 边缘彩色锯齿。
         # 确保画布（mainCanvas）= 预览（processedCanvas）= 设备屏幕 三端一致
         try:
-            result = process_e6_image_from_base64(image_base64, 800, 480, algorithm='floyd_steinberg')
+            canvas_algorithm = (
+                NAMEPLATE_E6_ALGORITHM if template_id == 'nameplate'
+                else 'floyd_steinberg'
+            )
+            result = process_e6_image_from_base64(
+                image_base64,
+                800,
+                480,
+                algorithm=canvas_algorithm,
+            )
             epd_data = _encode_epd_string(np.array(result['colorIndices']).reshape(480, 800))
             preview_image_b64 = result.get('previewImage')
             data_4bit_b64 = result.get('data4bit')
-            print(f'✅ 模板通过前端Canvas截图处理: {clean_id}, EPD长度={len(epd_data)}')
+            print(
+                f'✅ 模板通过前端Canvas截图处理: {clean_id}, '
+                f'算法={canvas_algorithm}, EPD长度={len(epd_data)}'
+            )
         except ValueError:
             return jsonify({'success': False, 'error': 'Invalid image input'}), 400
         except Exception as e:

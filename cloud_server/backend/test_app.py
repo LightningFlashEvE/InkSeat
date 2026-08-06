@@ -925,6 +925,39 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(weather.status_code, 401)
         self.assertEqual(quote.status_code, 401)
 
+    def test_nameplate_canvas_publish_uses_crisp_quantization(self):
+        backend.devices_collection = FakeCollection([{
+            'deviceId': 'A1B2C3',
+            'owner': 'bob',
+            'claimed': True,
+            'imageVersion': 7,
+        }])
+        color_indices = backend.np.zeros((480, 800), dtype=backend.np.uint8)
+
+        with (
+            patch.object(
+                backend,
+                'process_e6_image_from_base64',
+                return_value={'colorIndices': color_indices},
+            ) as process_mock,
+            patch.object(backend, 'save_device_image', return_value=True),
+        ):
+            response = self.client.post('/api/device/template', json={
+                'deviceId': 'A1B2C3',
+                'templateId': 'nameplate',
+                'templateConfig': {'name': '张三'},
+                'imageBase64': 'ZmFrZQ==',
+            })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            process_mock.call_args.kwargs['algorithm'],
+            template_renderer.NAMEPLATE_E6_ALGORITHM,
+        )
+        stored = backend.devices_collection.find_one({'deviceId': 'A1B2C3'})
+        self.assertEqual(stored['imageVersion'], 8)
+        self.assertEqual(stored['renderSource'], 'canvas')
+
     def test_legacy_page_without_device_scope_is_fail_closed(self):
         backend.pages_collection = FakeCollection([{
             'pageId': 'legacy-page', 'name': 'orphan', 'data': {},
