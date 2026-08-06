@@ -13,22 +13,22 @@ const BUILTIN_NAMEPLATE_TEMPLATES = [
     {
         templateId: '__builtin_pheno_red',
         name: 'Pheno 红色底栏',
-        templateConfig: { backgroundStyle: 'formal_red', title: '', subtitle: '', sleepIntervalSeconds: 43200 },
+        templateConfig: { backgroundStyle: 'formal_red', title: '', subtitle: '', sleepIntervalSeconds: 86400 },
     },
     {
         templateId: '__builtin_pheno_green',
         name: 'Pheno 绿色底栏',
-        templateConfig: { backgroundStyle: 'formal_green', title: '', subtitle: '', sleepIntervalSeconds: 43200 },
+        templateConfig: { backgroundStyle: 'formal_green', title: '', subtitle: '', sleepIntervalSeconds: 86400 },
     },
     {
         templateId: '__builtin_pheno_band',
         name: 'Pheno 绿色横幅',
-        templateConfig: { backgroundStyle: 'plain', title: '', subtitle: '', sleepIntervalSeconds: 43200 },
+        templateConfig: { backgroundStyle: 'plain', title: '', subtitle: '', sleepIntervalSeconds: 86400 },
     },
     {
         templateId: '__builtin_pheno_profile',
         name: 'Pheno 职务名片',
-        templateConfig: { backgroundStyle: 'formal_blue', title: 'Technical Expert', subtitle: '', sleepIntervalSeconds: 43200 },
+        templateConfig: { backgroundStyle: 'formal_blue', title: 'Technical Expert', subtitle: '', sleepIntervalSeconds: 86400 },
     },
 ];
 
@@ -426,7 +426,7 @@ function getCurrentTemplateConfig() {
         backgroundStyle: activeNameplateBackgroundStyle,
         title: document.getElementById('nameplateBatchTitle')?.value?.trim() || '',
         subtitle: document.getElementById('nameplateBatchSubtitle')?.value?.trim() || '',
-        sleepIntervalSeconds: parseInt(document.getElementById('nameplateBatchWakeInterval')?.value || '43200', 10),
+        sleepIntervalSeconds: parseInt(document.getElementById('nameplateBatchWakeInterval')?.value || '86400', 10),
         ...activeNameplateDesignConfig,
     };
 }

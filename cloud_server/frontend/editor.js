@@ -29,7 +29,7 @@ var currentNameplateCompanyX = null;
 var currentNameplateCompanyPositionMode = 'auto';
 var currentNameplateCompanyBounds = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260806device1';
+const CONTROL_LAZY_ASSET_VERSION = '20260806device2';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -57,7 +57,8 @@ const NAMEPLATE_TEMPLATE_FALLBACK = {
         name: '',
         backgroundStyle: 'formal_red',
         title: '',
-        subtitle: ''
+        subtitle: '',
+        sleepIntervalSeconds: 86400
     }
 };
 const BUILTIN_NAMEPLATE_TEMPLATES = [
@@ -65,25 +66,25 @@ const BUILTIN_NAMEPLATE_TEMPLATES = [
         templateId: '__builtin_pheno_red',
         name: 'Pheno 红色底栏',
         builtin: true,
-        templateConfig: { backgroundStyle: 'formal_red', title: '', subtitle: '', sleepIntervalSeconds: 43200 },
+        templateConfig: { backgroundStyle: 'formal_red', title: '', subtitle: '', sleepIntervalSeconds: 86400 },
     },
     {
         templateId: '__builtin_pheno_green',
         name: 'Pheno 绿色底栏',
         builtin: true,
-        templateConfig: { backgroundStyle: 'formal_green', title: '', subtitle: '', sleepIntervalSeconds: 43200 },
+        templateConfig: { backgroundStyle: 'formal_green', title: '', subtitle: '', sleepIntervalSeconds: 86400 },
     },
     {
         templateId: '__builtin_pheno_band',
         name: 'Pheno 绿色横幅',
         builtin: true,
-        templateConfig: { backgroundStyle: 'plain', title: '', subtitle: '', sleepIntervalSeconds: 43200 },
+        templateConfig: { backgroundStyle: 'plain', title: '', subtitle: '', sleepIntervalSeconds: 86400 },
     },
     {
         templateId: '__builtin_pheno_profile',
         name: 'Pheno 职务名片',
         builtin: true,
-        templateConfig: { backgroundStyle: 'formal_blue', title: 'Technical Expert', subtitle: '', sleepIntervalSeconds: 43200 },
+        templateConfig: { backgroundStyle: 'formal_blue', title: 'Technical Expert', subtitle: '', sleepIntervalSeconds: 86400 },
     },
 ];
 
@@ -396,7 +397,9 @@ async function initEditorDataAndControls() {
         } else {
             await loadSavedNameplateTemplates({ applyFirst: true, silent: true });
         }
-        await loadPages();
+        if (!isDeviceEditorMode()) {
+            await loadPages();
+        }
         updateDeviceBoundControls();
 
         console.log('[Editor] 初始化完成');
@@ -498,7 +501,7 @@ function applyDeviceEditorRecord(device) {
         backgroundStyle: 'formal_red',
         title: '',
         subtitle: '',
-        sleepIntervalSeconds: device.sleepIntervalSeconds || 43200,
+        sleepIntervalSeconds: device.sleepIntervalSeconds || 86400,
         ...config,
     }, { render: false });
     ensureNameplateOnlyMode({ silent: true, skipRender: true });
@@ -788,7 +791,7 @@ function getCurrentTemplateConfig() {
             title: document.getElementById('nameplateTitleInput')?.value?.trim() || '',
             subtitle: document.getElementById('nameplateSubtitleInput')?.value?.trim() || '',
             backgroundStyle: document.getElementById('nameplateStyleSelect')?.value || 'formal_red',
-            sleepIntervalSeconds: parseInt(document.getElementById('nameplateWakeInterval')?.value || '43200', 10),
+            sleepIntervalSeconds: parseInt(document.getElementById('nameplateWakeInterval')?.value || '86400', 10),
             ...getNameplateLogoConfig(),
             ...getNameplateCompanyConfig(),
         };
@@ -803,7 +806,7 @@ function getSavableNameplateTemplateConfig() {
         backgroundStyle: config.backgroundStyle || 'formal_red',
         title: config.title || '',
         subtitle: config.subtitle || '',
-        sleepIntervalSeconds: parseInt(config.sleepIntervalSeconds || '43200', 10) || 43200,
+        sleepIntervalSeconds: parseInt(config.sleepIntervalSeconds || '86400', 10) || 86400,
         ...getNameplateLogoConfig(),
         ...getNameplateCompanyConfig(),
     };
@@ -952,7 +955,7 @@ function startNewNameplateTemplate() {
     if (titleInput) titleInput.value = '';
     if (subtitleInput) subtitleInput.value = '';
     if (styleSelect) styleSelect.value = 'formal_red';
-    if (wakeSelect) wakeSelect.value = '43200';
+    if (wakeSelect) wakeSelect.value = '86400';
     setNameplateLogoState({}, { render: false });
     setNameplateCompanyState({}, { render: false });
     renderNameplatePreview();

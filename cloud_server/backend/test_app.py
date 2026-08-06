@@ -356,6 +356,19 @@ class BackendSecurityTests(unittest.TestCase):
             '旧名称',
         )
 
+    def test_nameplate_default_sleep_interval_is_24_hours(self):
+        metadata = backend.build_content_metadata('template', 'nameplate')
+
+        self.assertEqual(metadata['sleepIntervalSeconds'], 24 * 60 * 60)
+        template = next(
+            item for item in backend.get_active_templates()
+            if item['templateId'] == 'nameplate'
+        )
+        self.assertEqual(
+            template['defaultData']['sleepIntervalSeconds'],
+            24 * 60 * 60,
+        )
+
     def test_pairing_code_is_required(self):
         backend.pairing_codes_collection = FakeCollection([
             {'deviceId': 'A1B2C3', 'code': '123456', 'expiresAt': datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1)}

@@ -195,7 +195,7 @@ TEMPLATE_SLEEP_INTERVAL_SECONDS = {
     'quote': 24 * 60 * 60,
     'todo': DEFAULT_SLEEP_INTERVAL_SECONDS,
     'qrcode': DEFAULT_SLEEP_INTERVAL_SECONDS,
-    'nameplate': DEFAULT_SLEEP_INTERVAL_SECONDS,
+    'nameplate': 24 * 60 * 60,
 }
 CONTENT_MODE_LABELS = {
     'image': '普通图片',
@@ -3386,7 +3386,8 @@ TEMPLATES = [
             'name': '',
             'backgroundStyle': 'formal_red',
             'title': '',
-            'subtitle': ''
+            'subtitle': '',
+            'sleepIntervalSeconds': 24 * 60 * 60,
         }
     }
 ]
