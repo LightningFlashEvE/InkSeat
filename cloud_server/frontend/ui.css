@@ -1627,7 +1627,7 @@ body.control-page {
 }
 
 .control-page.device-editor-mode .toolbar {
-    justify-content: space-between;
+    justify-content: flex-start;
 }
 
 .control-page .device-editor-toolbar-title {
@@ -1648,6 +1648,20 @@ body.control-page {
     margin-top: 2px;
     color: var(--ui-text-muted);
     font-size: 0.72rem;
+}
+
+.control-page .device-editor-publish-footer {
+    flex: 0 0 auto;
+    padding: 14px 15px 16px;
+    border-top: 1px solid var(--ui-line-soft);
+    background: rgba(9, 12, 10, 0.96);
+}
+
+.control-page .device-editor-publish-button {
+    width: 100%;
+    min-height: 46px;
+    border-radius: 12px;
+    font-weight: 700;
 }
 
 .control-page .device-editor-identity {
