@@ -388,6 +388,18 @@ def quantize_to_palette(img: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     return quantized, color_indices
 
 
+def convert_to_e6_nearest_color(
+    img: Image.Image,
+    target_size: Optional[Tuple[int, int]] = None
+) -> Tuple[Image.Image, np.ndarray]:
+    """Map flat artwork to the nearest E6 color without error diffusion."""
+    rgb_img = img.convert("RGB")
+    if target_size is not None and rgb_img.size != target_size:
+        rgb_img = rgb_img.resize(target_size, Image.LANCZOS)
+
+    quantized, color_indices = quantize_to_palette(np.asarray(rgb_img))
+    return Image.fromarray(quantized), color_indices
+
 def convert_to_e6_with_gradient_blend(
     img: Image.Image,
     target_size: Optional[Tuple[int, int]] = None,
@@ -490,7 +502,7 @@ def build_preview_image(color_indices: np.ndarray) -> Image.Image:
 def process_e6_image(
     img: Image.Image,
     target_size: Optional[Tuple[int, int]] = None,
-    algorithm: Literal['floyd_steinberg', 'gradient_blend', 'grayscale_color_map'] = 'floyd_steinberg',
+    algorithm: Literal['floyd_steinberg', 'nearest_color', 'gradient_blend', 'grayscale_color_map'] = 'floyd_steinberg',
     grad_thresh: int = 40
 ) -> dict:
     """
@@ -499,7 +511,7 @@ def process_e6_image(
     参数：
         img: PIL.Image
         target_size: (width, height)，默认(800, 480)
-        algorithm: 处理算法，'floyd_steinberg'、'gradient_blend' 或 'grayscale_color_map'
+        algorithm: 处理算法，'floyd_steinberg'、'nearest_color'、'gradient_blend' 或 'grayscale_color_map'
         grad_thresh: 梯度阈值（仅用于 gradient_blend 算法），默认40
     
     返回：
@@ -520,6 +532,10 @@ def process_e6_image(
         # Floyd-Steinberg算法：使用paletted图像作为预览（包含抖动效果）
         # paletted是P模式，需要转换为RGB
         preview = paletted.convert("RGB")
+    elif algorithm == 'nearest_color':
+        quantized_img, color_indices = convert_to_e6_nearest_color(img, target_size)
+        paletted = quantized_img
+        preview = quantized_img
     elif algorithm == 'gradient_blend':
         quantized_img, color_indices = convert_to_e6_with_gradient_blend(
             img, target_size, grad_thresh
@@ -563,7 +579,7 @@ def process_e6_image_from_base64(
     base64_data: str,
     width: int = 800,
     height: int = 480,
-    algorithm: Literal['floyd_steinberg', 'gradient_blend', 'grayscale_color_map'] = 'floyd_steinberg',
+    algorithm: Literal['floyd_steinberg', 'nearest_color', 'gradient_blend', 'grayscale_color_map'] = 'floyd_steinberg',
     grad_thresh: int = 40
 ) -> dict:
     """
@@ -573,7 +589,7 @@ def process_e6_image_from_base64(
         base64_data: base64编码的图片数据（不含data:image前缀）
         width: 目标宽度
         height: 目标高度
-        algorithm: 处理算法，'floyd_steinberg'、'gradient_blend' 或 'grayscale_color_map'
+        algorithm: 处理算法，'floyd_steinberg'、'nearest_color'、'gradient_blend' 或 'grayscale_color_map'
         grad_thresh: 梯度阈值（仅用于 gradient_blend 算法），默认40
     
     返回：

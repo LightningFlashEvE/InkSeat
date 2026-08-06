@@ -51,6 +51,7 @@ NAMEPLATE_LOGO_MIME_FORMATS = {
     'image/jpeg': 'JPEG',
     'image/webp': 'WEBP',
 }
+NAMEPLATE_E6_ALGORITHM = 'nearest_color'
 
 
 def _local_now() -> datetime:
@@ -445,7 +446,7 @@ def render_todo(config: Dict[str, Any]) -> str:
 def render_nameplate(config: Dict[str, Any]) -> str:
     """渲染铭牌模板，返回 EPD a~p 字符串"""
     img = _render_nameplate_image(config)
-    return _pil_to_epd_string(img)
+    return _pil_to_epd_string(img, algorithm=NAMEPLATE_E6_ALGORITHM)
 
 
 # ==================== 模板渲染（返回 PIL Image） ====================
@@ -881,8 +882,12 @@ def render_template_with_preview(template_id: str, config: Dict[str, Any]) -> di
         img.save(orig_buffer, format='PNG')
         original_b64 = base64.b64encode(orig_buffer.getvalue()).decode('utf-8')
 
-        # 3. 原始图 → Floyd-Steinberg 抖动处理
-        result = process_e6_image(img, target_size=(800, 480), algorithm='floyd_steinberg')
+        # 3. 名牌等扁平图文直接映射六色，照片型模板保留误差扩散抖动。
+        algorithm = (
+            NAMEPLATE_E6_ALGORITHM if template_id == 'nameplate'
+            else 'floyd_steinberg'
+        )
+        result = process_e6_image(img, target_size=(800, 480), algorithm=algorithm)
 
         # 抖动后预览图 → Base64
         preview_buffer = io.BytesIO()

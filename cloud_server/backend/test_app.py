@@ -48,6 +48,7 @@ except ModuleNotFoundError:
 import app as backend  # noqa: E402
 import config as backend_config  # noqa: E402
 import db_indexes  # noqa: E402
+import six_color_epd  # noqa: E402
 import template_renderer  # noqa: E402
 
 
@@ -1664,18 +1665,43 @@ class NameplateRenderContractTests(unittest.TestCase):
         self.assertNotEqual(default_image.tobytes(), moved_image.tobytes())
 
     def test_real_nameplate_render_matches_firmware_contract(self):
-        result = backend.render_template_with_preview('nameplate', {
+        config = {
             'name': '张三',
             'backgroundStyle': 'formal_red',
             'title': '技术专家',
             'subtitle': '现象光伏',
             'sleepIntervalSeconds': 43200,
-        })
+        }
+        with patch.object(
+            template_renderer,
+            'process_e6_image',
+            wraps=template_renderer.process_e6_image,
+        ) as process_mock:
+            result = backend.render_template_with_preview('nameplate', config)
         epd_data = result.get('epdData')
 
+        self.assertEqual(
+            process_mock.call_args.kwargs.get('algorithm'),
+            template_renderer.NAMEPLATE_E6_ALGORITHM,
+        )
         self.assertEqual(len(epd_data), backend.EPD_EXPECTED_CHARS)
         self.assertLessEqual(set(epd_data), backend.EPD_ALLOWED_CHARS)
         self.assertTrue(result.get('previewImage'))
+        self.assertEqual(epd_data, template_renderer.render_nameplate(config))
+
+    def test_nearest_color_quantization_does_not_diffuse_gray_pixels(self):
+        dark_gray = Image.new('RGB', (32, 32), (127, 127, 127))
+        light_gray = Image.new('RGB', (32, 32), (128, 128, 128))
+
+        dark_result = six_color_epd.process_e6_image(
+            dark_gray, target_size=(32, 32), algorithm='nearest_color'
+        )
+        light_result = six_color_epd.process_e6_image(
+            light_gray, target_size=(32, 32), algorithm='nearest_color'
+        )
+
+        self.assertEqual(set(dark_result['color_indices'].ravel().tolist()), {0x0})
+        self.assertEqual(set(light_result['color_indices'].ravel().tolist()), {0x1})
 
 
 class IndexMigrationTests(unittest.TestCase):
