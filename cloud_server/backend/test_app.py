@@ -1676,6 +1676,23 @@ class NameplateRenderContractTests(unittest.TestCase):
 
         self.assertEqual(image.getpixel((100, 30)), (0, 0, 255))
 
+    def test_footer_nameplates_default_logo_to_left_safe_edge(self):
+        for background_style in ('formal_red', 'formal_green'):
+            with patch.object(
+                template_renderer,
+                '_paste_configured_nameplate_logo',
+            ) as logo_mock:
+                template_renderer.render_template_image('nameplate', {
+                    'name': '张三',
+                    'backgroundStyle': background_style,
+                })
+
+            self.assertEqual(
+                logo_mock.call_args.args[3],
+                template_renderer.NAMEPLATE_FOOTER_LOGO_DEFAULT_X,
+            )
+            self.assertEqual(logo_mock.call_args.args[4], 410)
+
     def test_nameplate_company_uses_saved_horizontal_position_and_stays_visible(self):
         self.assertEqual(
             template_renderer._resolve_nameplate_company_x(

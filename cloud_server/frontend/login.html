@@ -134,8 +134,8 @@
             color: #38a169;
         }
     </style>
-    <script src="theme.js?v=20260806templatefix1"></script>
-    <link rel="stylesheet" href="ui.css?v=20260806templatefix1">
+    <script src="theme.js?v=20260806logoleft1"></script>
+    <link rel="stylesheet" href="ui.css?v=20260806logoleft1">
 </head>
 <body class="login-page">
     <div class="card">
@@ -168,7 +168,7 @@
         <div id="status" class="status">首次使用请先注册账号</div>
     </div>
 
-    <script src="auth.js?v=20260806templatefix1"></script>
+    <script src="auth.js?v=20260806logoleft1"></script>
     <script>
         function setStatus(msg, type) {
             const el = document.getElementById('status');
@@ -227,7 +227,7 @@
                     setAuth(data.token, data.user);
                     setStatus('登录成功，正在跳转...', 'success');
                     setTimeout(() => {
-                        window.location.href = 'index.html?v=20260806templatefix1';
+                        window.location.href = 'index.html?v=20260806logoleft1';
                     }, 600);
                 } else if (res.status === 429) {
                     setStatus('登录尝试过于频繁，请稍后再试', 'error');

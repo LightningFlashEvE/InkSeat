@@ -29,7 +29,7 @@ var currentNameplateCompanyX = null;
 var currentNameplateCompanyPositionMode = 'auto';
 var currentNameplateCompanyBounds = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260806templatefix1';
+const CONTROL_LAZY_ASSET_VERSION = '20260806logoleft1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -41,6 +41,7 @@ const NAMEPLATE_COMPANY_CN = '现象创新（深圳）科技有限公司';
 const NAMEPLATE_COMPANY_EN = 'Pheno Innovations Technology Co., Ltd.';
 const NAMEPLATE_COMPANY_FONT_MAX_SIZE = 26;
 const NAMEPLATE_COMPANY_FONT_MIN_SIZE = 18;
+const NAMEPLATE_FOOTER_LOGO_DEFAULT_X = 24;
 const NAMEPLATE_BRAND_ASSET_PATHS = {
     blackLogo: `assets/nameplate/pheno-logo-black.png?v=${CONTROL_LAZY_ASSET_VERSION}`,
     whiteLogo: `assets/nameplate/pheno-logo-white.png?v=${CONTROL_LAZY_ASSET_VERSION}`,
@@ -1386,7 +1387,16 @@ function drawPhenoFooterNameplate(ctx, width, height, name, style, roleText, com
         ctx.fillText(roleText, width / 2, 276);
     }
 
-    drawConfiguredNameplateLogo(ctx, 'blackLogo', 108, 410, 181, 39, width, height);
+    drawConfiguredNameplateLogo(
+        ctx,
+        'blackLogo',
+        NAMEPLATE_FOOTER_LOGO_DEFAULT_X,
+        410,
+        181,
+        39,
+        width,
+        height
+    );
 
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';

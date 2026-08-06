@@ -54,6 +54,7 @@ NAMEPLATE_LOGO_MIME_FORMATS = {
 NAMEPLATE_E6_ALGORITHM = 'nearest_color'
 NAMEPLATE_COMPANY_FONT_MAX_SIZE = 26
 NAMEPLATE_COMPANY_FONT_MIN_SIZE = 18
+NAMEPLATE_FOOTER_LOGO_DEFAULT_X = 24
 
 
 def _local_now() -> datetime:
@@ -669,7 +670,8 @@ def _draw_pheno_footer_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, na
         _draw_text_centered(draw, role_text, 400, 276, font_role, (255, 255, 255))
 
     _paste_configured_nameplate_logo(
-        img, config, 'pheno-logo-black.png', 108, 410, 181, 39
+        img, config, 'pheno-logo-black.png',
+        NAMEPLATE_FOOTER_LOGO_DEFAULT_X, 410, 181, 39
     )
 
     font_company = _fit_single_line_font(
