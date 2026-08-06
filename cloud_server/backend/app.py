@@ -544,11 +544,31 @@ def parse_nameplate_names_from_text(text: str) -> list[str]:
 
 
 def _clean_nameplate_detail(raw_value, max_length=40) -> str:
+    """Normalize one or more roles/organizations for a nameplate line."""
     if raw_value is None:
         return ''
-    value = re.sub(r'\s+', ' ', str(raw_value)).strip()
-    value = value.strip(' "\'“”‘’[]【】')
-    return value[:max_length]
+
+    parts = []
+    seen = set()
+
+    def append_item(raw_item):
+        if raw_item is None:
+            return
+        if isinstance(raw_item, (list, tuple)):
+            for nested_item in raw_item:
+                append_item(nested_item)
+            return
+        value = re.sub(r'\s+', ' ', str(raw_item)).strip()
+        value = value.strip(' "\'“”‘’[]【】')
+        for part in re.split(r'\s*(?:/|／|、|[;；|])\s*', value):
+            part = part.strip(' "\'“”‘’[]【】')
+            key = part.casefold()
+            if part and key not in seen:
+                seen.add(key)
+                parts.append(part)
+
+    append_item(raw_value)
+    return ' / '.join(parts)[:max_length]
 
 
 def normalize_nameplate_person(raw_value) -> dict:
@@ -563,24 +583,17 @@ def normalize_nameplate_person(raw_value) -> dict:
     if not name:
         return {}
 
-    title = _clean_nameplate_detail(
-        raw_value.get('title')
-        or raw_value.get('position')
-        or raw_value.get('jobTitle')
-        or raw_value.get('role')
-        or raw_value.get('职位')
-        or raw_value.get('职务')
-    )
-    subtitle = _clean_nameplate_detail(
-        raw_value.get('subtitle')
-        or raw_value.get('company')
-        or raw_value.get('companyName')
-        or raw_value.get('organization')
-        or raw_value.get('organisation')
-        or raw_value.get('unit')
-        or raw_value.get('公司')
-        or raw_value.get('单位')
-    )
+    title = _clean_nameplate_detail([
+        raw_value.get(key) for key in (
+            'title', 'position', 'jobTitle', 'role', '职位', '职务'
+        ) if raw_value.get(key)
+    ])
+    subtitle = _clean_nameplate_detail([
+        raw_value.get(key) for key in (
+            'subtitle', 'company', 'companyName', 'organization',
+            'organisation', 'unit', '公司', '单位'
+        ) if raw_value.get(key)
+    ])
     return {'name': name, 'title': title, 'subtitle': subtitle}
 
 
@@ -1267,8 +1280,14 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
                     'required': ['name', 'title', 'subtitle'],
                     'properties': {
                         'name': {'type': 'string'},
-                        'title': {'type': 'string'},
-                        'subtitle': {'type': 'string'},
+                        'title': {
+                            'type': 'string',
+                            'description': '该人的全部职位；多个职位按原文顺序用 " / " 连接。',
+                        },
+                        'subtitle': {
+                            'type': 'string',
+                            'description': '该人的全部公司或单位；多个单位按原文顺序用 " / " 连接。',
+                        },
                     },
                 },
                 'description': '按原始顺序提取的逐人名单；title 是该人的职位，subtitle 是该人的公司或单位。'
@@ -1299,6 +1318,9 @@ def call_openai_nameplate_parser(source_text: str, image_parts: list[dict], base
         'people 必须是逐人对象数组，每项都包含 name、title、subtitle；没有职位或公司时对应字段返回空字符串。'
         '只提取人名，不要把单位、职务、标题、设备编号、电话、序号当作姓名。'
         '保持名单原始顺序，并把每个人同一行或同一表格行中的职位匹配到 title、公司或单位匹配到 subtitle。'
+        '同一人有多个职位、职务或职称时，不判断主次、不丢弃，按原文顺序去重后全部写入 title，并用半角斜杠两侧留空格连接，例如“院长 / 院士”。'
+        '同一人有多个公司、单位或机构时，也不判断主次、不丢弃，按原文顺序去重后全部写入 subtitle，例如“深圳技术大学聚龙学院 / 加拿大工程院”。'
+        '仅仅存在多个职位或多个单位不属于不确定情况，不要因此写入 warnings；只有无法判断内容属于哪位人员或文字无法辨认时才提示核对。'
         '逐人的 title 和 subtitle 优先；templateConfig.title 与 templateConfig.subtitle 只是名单字段缺失时使用的默认值，不要用某一个人的信息覆盖它们。'
         '用户没有明确要求修改模板时，templateConfig 必须原样保留当前默认模板对应字段。'
         'backgroundStyle 可使用 formal_red=Pheno红色底栏、formal_green=Pheno绿色底栏、plain=Pheno绿色横幅、formal_blue=Pheno职务名片。'

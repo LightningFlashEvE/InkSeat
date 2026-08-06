@@ -982,6 +982,28 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(parsed['names'], ['张伟', '张伟', 'Alexander Montgomery'])
         self.assertEqual(parsed['people'], people)
 
+    def test_nameplate_person_joins_multiple_titles_and_companies_with_slashes(self):
+        person = backend.normalize_nameplate_person({
+            'name': '刘清侠',
+            'title': ['院长', '院士'],
+            'position': '院长',
+            'subtitle': '深圳技术大学聚龙学院、加拿大工程院',
+        })
+
+        self.assertEqual(person, {
+            'name': '刘清侠',
+            'title': '院长 / 院士',
+            'subtitle': '深圳技术大学聚龙学院 / 加拿大工程院',
+        })
+
+        second_person = backend.normalize_nameplate_person({
+            'name': '张国芳',
+            '职位': '主席；董事长',
+            '公司': '坪山区工商业联合会 / 六和集团',
+        })
+        self.assertEqual(second_person['title'], '主席 / 董事长')
+        self.assertEqual(second_person['subtitle'], '坪山区工商业联合会 / 六和集团')
+
     def test_nameplate_preview_renders_without_publishing(self):
         backend.devices_collection = FakeCollection([{
             'deviceId': 'A1B2C3', 'owner': 'bob', 'claimed': True, 'imageVersion': 8,
@@ -1138,6 +1160,46 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(result['templateConfig']['title'], '统一职位')
         self.assertEqual(result['templateConfig']['subtitle'], '统一公司')
         self.assertEqual(result['templateConfig']['sleepIntervalSeconds'], 21600)
+
+    def test_nameplate_ai_prompt_requires_all_roles_and_companies_with_slashes(self):
+        response = SimpleNamespace(
+            status_code=200,
+            text='',
+            json=lambda: {
+                'choices': [{
+                    'message': {
+                        'content': json.dumps({
+                            'people': [{
+                                'name': '刘清侠',
+                                'title': '院长 / 院士',
+                                'subtitle': '深圳技术大学聚龙学院 / 加拿大工程院',
+                            }],
+                            'templateConfig': {},
+                            'warnings': [],
+                            'sourceSummary': 'test',
+                        }, ensure_ascii=False),
+                    },
+                }],
+            },
+        )
+
+        with (
+            patch.object(backend, 'get_nameplate_ai_api_key', return_value='test-key'),
+            patch.dict(os.environ, {'NAMEPLATE_AI_API_MODE': 'chat_completions'}),
+            patch.object(backend.requests, 'post', return_value=response) as post_mock,
+        ):
+            result = backend.call_openai_nameplate_parser('刘清侠名单信息', [], {})
+
+        prompt = post_mock.call_args.kwargs['json']['messages'][0]['content'][0]['text']
+        self.assertIn('不判断主次、不丢弃', prompt)
+        self.assertIn('院长 / 院士', prompt)
+        self.assertIn('多个职位或多个单位不属于不确定情况', prompt)
+        self.assertEqual(result['people'][0]['title'], '院长 / 院士')
+        self.assertEqual(
+            result['people'][0]['subtitle'],
+            '深圳技术大学聚龙学院 / 加拿大工程院',
+        )
+        self.assertEqual(result['warnings'], [])
 
     def test_nameplate_dispatch_deadline_reports_unprocessed_devices(self):
         backend.devices_collection = FakeCollection([
