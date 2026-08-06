@@ -237,7 +237,8 @@ class BackendSecurityTests(unittest.TestCase):
             name: getattr(backend, name)
             for name in (
                 'users_collection', 'devices_collection', 'device_status_collection',
-                'pages_collection', 'pairing_codes_collection', 'ALLOW_REGISTRATION',
+                'pages_collection', 'pairing_codes_collection',
+                'saved_nameplate_templates_collection', 'ALLOW_REGISTRATION',
                 'DEVICE_AUTH_REQUIRED', 'ADMIN_BOOTSTRAP_TOKEN', 'DATA_DIR',
             )
         }
@@ -247,6 +248,7 @@ class BackendSecurityTests(unittest.TestCase):
         backend.device_status_collection = FakeCollection()
         backend.pages_collection = FakeCollection()
         backend.pairing_codes_collection = FakeCollection()
+        backend.saved_nameplate_templates_collection = FakeCollection()
         backend.ALLOW_REGISTRATION = False
         backend.DEVICE_AUTH_REQUIRED = True
         backend.ADMIN_BOOTSTRAP_TOKEN = 'bootstrap-' + ('A' * 32)
@@ -957,6 +959,27 @@ class BackendSecurityTests(unittest.TestCase):
         stored = backend.devices_collection.find_one({'deviceId': 'A1B2C3'})
         self.assertEqual(stored['imageVersion'], 8)
         self.assertEqual(stored['renderSource'], 'canvas')
+
+    def test_saving_builtin_nameplate_creates_user_template_copy(self):
+        response = self.client.post('/api/nameplate/templates', json={
+            'templateId': '__builtin_pheno_red',
+            'name': 'Pheno 红色底栏',
+            'templateConfig': {
+                'backgroundStyle': 'formal_red',
+                'title': '技术专家',
+            },
+        })
+
+        self.assertEqual(response.status_code, 200)
+        saved = response.get_json()['template']
+        self.assertRegex(saved['templateId'], r'^[0-9a-f]{12}$')
+        self.assertNotEqual(saved['templateId'], '__builtin_pheno_red')
+        stored = backend.saved_nameplate_templates_collection.find_one({
+            'owner': 'bob',
+            'templateId': saved['templateId'],
+        })
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored['templateConfig']['backgroundStyle'], 'formal_red')
 
     def test_legacy_page_without_device_scope_is_fail_closed(self):
         backend.pages_collection = FakeCollection([{

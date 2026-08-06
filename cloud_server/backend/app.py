@@ -3483,6 +3483,9 @@ def save_saved_nameplate_template():
             return jsonify({'success': False, 'error': 'Missing owner'}), 401
 
         template_id = str(data.get('templateId') or '').strip()
+        # 内置模板不是数据库记录；保存它等价于为当前用户创建一份可编辑副本。
+        if template_id.startswith('__builtin_'):
+            template_id = ''
         name = normalize_nameplate_template_name(data.get('name'))
         template_config = normalize_nameplate_template_config(data.get('templateConfig'))
         now = utcnow()

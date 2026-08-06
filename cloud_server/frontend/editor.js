@@ -29,7 +29,7 @@ var currentNameplateCompanyX = null;
 var currentNameplateCompanyPositionMode = 'auto';
 var currentNameplateCompanyBounds = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260806company1';
+const CONTROL_LAZY_ASSET_VERSION = '20260806templatefix1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -945,6 +945,10 @@ function selectSavedNameplateTemplate(templateId, options = {}) {
     return true;
 }
 
+function isBuiltInNameplateTemplateId(templateId) {
+    return BUILTIN_NAMEPLATE_TEMPLATES.some(template => template.templateId === templateId);
+}
+
 function startNewNameplateTemplate() {
     activeSavedNameplateTemplateId = '';
     const nameInput = document.getElementById('nameplateTemplateNameInput');
@@ -968,7 +972,9 @@ function startNewNameplateTemplate() {
 async function saveNameplateTemplate(options = {}) {
     const config = getSavableNameplateTemplateConfig();
     try {
-        const templateId = options.asNew ? '' : activeSavedNameplateTemplateId;
+        const templateId = (
+            options.asNew || isBuiltInNameplateTemplateId(activeSavedNameplateTemplateId)
+        ) ? '' : activeSavedNameplateTemplateId;
         const response = await authFetch(`${API_BASE}/api/nameplate/templates`, {
             method: 'POST',
             headers: {

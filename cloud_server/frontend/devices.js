@@ -533,7 +533,7 @@ function setSignalIndicator(id, rssi) {
 }
 
 function openDevice(deviceId) {
-    window.location.href = `control.html?v=20260806company1&view=device-editor&deviceId=${encodeURIComponent(deviceId)}`;
+    window.location.href = `control.html?v=20260806templatefix1&view=device-editor&deviceId=${encodeURIComponent(deviceId)}`;
 }
 
 let pollingInterval = null;
