@@ -29,7 +29,7 @@ var currentNameplateCompanyX = null;
 var currentNameplateCompanyPositionMode = 'auto';
 var currentNameplateCompanyBounds = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260806logoleft1';
+const CONTROL_LAZY_ASSET_VERSION = '20260807titlesample1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -39,6 +39,7 @@ const NAMEPLATE_LOGO_OUTPUT_MAX_HEIGHT = 320;
 const NAMEPLATE_LOGO_ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const NAMEPLATE_COMPANY_CN = '现象创新（深圳）科技有限公司';
 const NAMEPLATE_COMPANY_EN = 'Pheno Innovations Technology Co., Ltd.';
+const NAMEPLATE_TITLE_SAMPLE_CN = '技术专家';
 const NAMEPLATE_COMPANY_FONT_MAX_SIZE = 26;
 const NAMEPLATE_COMPANY_FONT_MIN_SIZE = 18;
 const NAMEPLATE_FOOTER_LOGO_DEFAULT_X = 24;
@@ -69,19 +70,19 @@ const BUILTIN_NAMEPLATE_TEMPLATES = [
         templateId: '__builtin_pheno_red',
         name: 'Pheno 红色底栏',
         builtin: true,
-        templateConfig: { backgroundStyle: 'formal_red', title: '', subtitle: '', sleepIntervalSeconds: 86400 },
+        templateConfig: { backgroundStyle: 'formal_red', title: NAMEPLATE_TITLE_SAMPLE_CN, subtitle: '', sleepIntervalSeconds: 86400 },
     },
     {
         templateId: '__builtin_pheno_green',
         name: 'Pheno 绿色底栏',
         builtin: true,
-        templateConfig: { backgroundStyle: 'formal_green', title: '', subtitle: '', sleepIntervalSeconds: 86400 },
+        templateConfig: { backgroundStyle: 'formal_green', title: NAMEPLATE_TITLE_SAMPLE_CN, subtitle: '', sleepIntervalSeconds: 86400 },
     },
     {
         templateId: '__builtin_pheno_band',
         name: 'Pheno 绿色横幅',
         builtin: true,
-        templateConfig: { backgroundStyle: 'plain', title: '', subtitle: '', sleepIntervalSeconds: 86400 },
+        templateConfig: { backgroundStyle: 'plain', title: NAMEPLATE_TITLE_SAMPLE_CN, subtitle: '', sleepIntervalSeconds: 86400 },
     },
     {
         templateId: '__builtin_pheno_profile',
