@@ -52,6 +52,10 @@ NAMEPLATE_LOGO_MIME_FORMATS = {
     'image/webp': 'WEBP',
 }
 NAMEPLATE_E6_ALGORITHM = 'nearest_color'
+NAMEPLATE_NAME_WITH_ROLE_MAX_SIZE = 132
+NAMEPLATE_PROFILE_NAME_MAX_SIZE = 108
+NAMEPLATE_ROLE_CENTER_Y = 288
+NAMEPLATE_PROFILE_ROLE_TOP = 270
 NAMEPLATE_COMPANY_FONT_MAX_SIZE = 26
 NAMEPLATE_COMPANY_FONT_MIN_SIZE = 18
 NAMEPLATE_FOOTER_LOGO_DEFAULT_X = 24
@@ -662,12 +666,20 @@ def _draw_pheno_footer_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, na
     draw.rectangle((0, 0, 799, footer_top - 1), fill=accent)
     draw.rectangle((0, footer_top, 799, 479), fill=(255, 255, 255))
 
-    font_name = _fit_single_line_font(draw, name, 590, 118 if has_role else 148, 62 if has_role else 72)
+    font_name = _fit_single_line_font(
+        draw,
+        name,
+        590,
+        NAMEPLATE_NAME_WITH_ROLE_MAX_SIZE if has_role else 148,
+        62 if has_role else 72,
+    )
     _draw_text_centered(draw, name, 400, 155 if has_role else 184, font_name, (255, 255, 255))
 
     if has_role:
         font_role = _fit_single_line_font(draw, role_text, 590, 48, 28, bold=False)
-        _draw_text_centered(draw, role_text, 400, 276, font_role, (255, 255, 255))
+        _draw_text_centered(
+            draw, role_text, 400, NAMEPLATE_ROLE_CENTER_Y, font_role, (255, 255, 255)
+        )
 
     _paste_configured_nameplate_logo(
         img, config, 'pheno-logo-black.png',
@@ -708,12 +720,20 @@ def _draw_pheno_green_band_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw
     draw.rectangle((0, 0, 799, band_top - 1), fill=(255, 255, 255))
     draw.rectangle((0, band_top, 799, 479), fill=(0, 255, 0))
 
-    font_name = _fit_single_line_font(draw, name, 590, 118 if has_role else 150, 62 if has_role else 72)
+    font_name = _fit_single_line_font(
+        draw,
+        name,
+        590,
+        NAMEPLATE_NAME_WITH_ROLE_MAX_SIZE if has_role else 150,
+        62 if has_role else 72,
+    )
     _draw_text_centered(draw, name, 400, 155 if has_role else 184, font_name, (0, 0, 0))
 
     if has_role:
         font_role = _fit_single_line_font(draw, role_text, 590, 48, 28, bold=False)
-        _draw_text_centered(draw, role_text, 400, 276, font_role, (0, 0, 0))
+        _draw_text_centered(
+            draw, role_text, 400, NAMEPLATE_ROLE_CENTER_Y, font_role, (0, 0, 0)
+        )
 
     _paste_configured_nameplate_logo(
         img, config, 'pheno-logo-white.png', 276, 390, 248, 54
@@ -730,7 +750,9 @@ def _draw_pheno_profile_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, n
     min_margin = 80
     max_text_width = 800 - min_margin * 2 - mark_size - gap
 
-    font_name = _fit_single_line_font(draw, name, max_text_width, 96, 58)
+    font_name = _fit_single_line_font(
+        draw, name, max_text_width, NAMEPLATE_PROFILE_NAME_MAX_SIZE, 58
+    )
     name_width = _text_width(draw, name, font_name)
 
     role_width = 0
@@ -751,7 +773,14 @@ def _draw_pheno_profile_nameplate(img: Image.Image, draw: ImageDraw.ImageDraw, n
 
     _draw_left_text(draw, (text_left, 151), name, font_name, (0, 0, 0), anchor='lt')
     if role_text and font_role:
-        _draw_left_text(draw, (text_left, 244), role_text, font_role, (0, 0, 0), anchor='lt')
+        _draw_left_text(
+            draw,
+            (text_left, NAMEPLATE_PROFILE_ROLE_TOP),
+            role_text,
+            font_role,
+            (0, 0, 0),
+            anchor='lt',
+        )
 
     font_company = _fit_single_line_font(
         draw,

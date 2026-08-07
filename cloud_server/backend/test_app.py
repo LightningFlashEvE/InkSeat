@@ -1764,6 +1764,72 @@ class NameplateRenderContractTests(unittest.TestCase):
                 ),
             )
 
+    def test_nameplate_name_is_larger_and_role_is_lower(self):
+        for background_style in ('formal_red', 'plain'):
+            with patch.object(
+                template_renderer,
+                '_fit_single_line_font',
+                wraps=template_renderer._fit_single_line_font,
+            ) as fit_mock, patch.object(
+                template_renderer,
+                '_draw_text_centered',
+                wraps=template_renderer._draw_text_centered,
+            ) as centered_mock:
+                template_renderer.render_template_image('nameplate', {
+                    'name': '张三',
+                    'backgroundStyle': background_style,
+                    'title': '技术专家',
+                })
+
+            name_calls = [
+                call for call in fit_mock.call_args_list
+                if len(call.args) >= 5 and call.args[1] == '张三'
+            ]
+            role_calls = [
+                call for call in centered_mock.call_args_list
+                if len(call.args) >= 4 and call.args[1] == '技术专家'
+            ]
+            self.assertEqual(
+                name_calls[0].args[3],
+                template_renderer.NAMEPLATE_NAME_WITH_ROLE_MAX_SIZE,
+            )
+            self.assertEqual(
+                role_calls[0].args[3],
+                template_renderer.NAMEPLATE_ROLE_CENTER_Y,
+            )
+
+        with patch.object(
+            template_renderer,
+            '_fit_single_line_font',
+            wraps=template_renderer._fit_single_line_font,
+        ) as fit_mock, patch.object(
+            template_renderer,
+            '_draw_left_text',
+            wraps=template_renderer._draw_left_text,
+        ) as left_mock:
+            template_renderer.render_template_image('nameplate', {
+                'name': 'Wright',
+                'backgroundStyle': 'formal_blue',
+                'title': 'Technical Expert',
+            })
+
+        name_calls = [
+            call for call in fit_mock.call_args_list
+            if len(call.args) >= 5 and call.args[1] == 'Wright'
+        ]
+        role_calls = [
+            call for call in left_mock.call_args_list
+            if len(call.args) >= 3 and call.args[2] == 'Technical Expert'
+        ]
+        self.assertEqual(
+            name_calls[0].args[3],
+            template_renderer.NAMEPLATE_PROFILE_NAME_MAX_SIZE,
+        )
+        self.assertEqual(
+            role_calls[0].args[1][1],
+            template_renderer.NAMEPLATE_PROFILE_ROLE_TOP,
+        )
+
     def test_real_nameplate_render_matches_firmware_contract(self):
         config = {
             'name': '张三',
