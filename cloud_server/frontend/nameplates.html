@@ -32,32 +32,32 @@
             background: #eef5f7 !important;
         }
     </style>
-    <script src="theme.js?v=20260807namefont1"></script>
-    <link rel="stylesheet" href="ui.css?v=20260807namefont1">
+    <script src="theme.js?v=20260807peoplecard1"></script>
+    <link rel="stylesheet" href="ui.css?v=20260807peoplecard1">
 </head>
 <body class="dashboard-page nameplates-page meeting-device-page">
     <div class="meeting-page">
         <div class="app-shell">
             <aside class="meeting-sidebar" aria-label="主导航">
-                <a class="meeting-brand" href="index.html?v=20260807namefont1" aria-label="会议牌管理">
+                <a class="meeting-brand" href="index.html?v=20260807peoplecard1" aria-label="会议牌管理">
                     <span class="meeting-brand-mark" aria-hidden="true"></span>
                     <span>会议牌管理</span>
                 </a>
 
                 <nav class="meeting-nav">
-                    <a class="meeting-nav-item" href="index.html?v=20260807namefont1">
+                    <a class="meeting-nav-item" href="index.html?v=20260807peoplecard1">
                         <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
                         <span>设备</span>
                     </a>
-                    <a class="meeting-nav-item active" href="nameplates.html?v=20260807namefont1" aria-current="page">
+                    <a class="meeting-nav-item active" href="nameplates.html?v=20260807peoplecard1" aria-current="page">
                         <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
                         <span>名单下发</span>
                     </a>
-                    <a class="meeting-nav-item" href="control.html?v=20260807namefont1">
+                    <a class="meeting-nav-item" href="control.html?v=20260807peoplecard1">
                         <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
                         <span>模板设计</span>
                     </a>
-                    <a class="meeting-nav-item" href="settings.html?v=20260807namefont1">
+                    <a class="meeting-nav-item" href="settings.html?v=20260807peoplecard1">
                         <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
                         <span>设置</span>
                     </a>
@@ -109,6 +109,20 @@
                 </div>
             </section>
 
+            <section class="nameplate-review-list-panel command-panel nameplate-people-review-panel" aria-labelledby="nameplateReviewListTitle">
+                <div class="nameplate-review-head">
+                    <div>
+                        <span class="panel-eyebrow">Parsed People</span>
+                        <h3 id="nameplateReviewListTitle">已解析名单</h3>
+                    </div>
+                    <button class="btn btn-small btn-secondary" type="button" onclick="addNameplateReviewRow()">添加人员</button>
+                </div>
+                <div class="nameplate-name-review-list" id="nameplateNameReviewList" role="list">
+                    <div class="nameplate-review-empty">请先在上方输入内容并解析</div>
+                </div>
+                <textarea id="nameplateNamesInput" hidden aria-hidden="true"></textarea>
+            </section>
+
             <section class="nameplate-panel command-panel" id="nameplate-dispatch" aria-labelledby="nameplateReviewTitle">
                 <div class="section-header compact">
                     <div>
@@ -119,42 +133,26 @@
                 </div>
 
                 <div class="nameplate-review-layout">
-                    <div class="nameplate-review-column">
-                        <section class="nameplate-card-preview-panel" aria-labelledby="nameplateCardPreviewTitle">
-                            <div class="nameplate-review-head">
-                                <div>
-                                    <span class="panel-eyebrow">Display Preview</span>
-                                    <h3 id="nameplateCardPreviewTitle">铭牌效果预览</h3>
-                                </div>
-                                <span id="nameplatePreviewPosition">尚无名单</span>
+                    <section class="nameplate-card-preview-panel" aria-labelledby="nameplateCardPreviewTitle">
+                        <div class="nameplate-review-head">
+                            <div>
+                                <span class="panel-eyebrow">Display Preview</span>
+                                <h3 id="nameplateCardPreviewTitle">铭牌效果预览</h3>
                             </div>
-                            <div class="nameplate-card-preview" id="nameplateCardPreview" aria-live="polite">
-                                <img id="nameplateCardPreviewImage" alt="" hidden>
-                                <div class="nameplate-card-preview-empty" id="nameplateCardPreviewEmpty">
-                                    解析名单后显示实际墨水屏效果
-                                </div>
+                            <span id="nameplatePreviewPosition">尚无名单</span>
+                        </div>
+                        <div class="nameplate-card-preview" id="nameplateCardPreview" aria-live="polite">
+                            <img id="nameplateCardPreviewImage" alt="" hidden>
+                            <div class="nameplate-card-preview-empty" id="nameplateCardPreviewEmpty">
+                                解析名单后显示实际墨水屏效果
                             </div>
-                            <div class="nameplate-preview-controls">
-                                <button class="btn btn-small btn-secondary" type="button" id="nameplatePreviewPrev" onclick="moveNameplatePreview(-1)" disabled>上一张</button>
-                                <strong id="nameplatePreviewName">等待姓名</strong>
-                                <button class="btn btn-small btn-secondary" type="button" id="nameplatePreviewNext" onclick="moveNameplatePreview(1)" disabled>下一张</button>
-                            </div>
-                        </section>
-
-                        <section class="nameplate-review-list-panel" aria-labelledby="nameplateReviewListTitle">
-                            <div class="nameplate-review-head">
-                                <div>
-                                    <span class="panel-eyebrow">Parsed People</span>
-                                    <h3 id="nameplateReviewListTitle">已解析名单</h3>
-                                </div>
-                                <button class="btn btn-small btn-secondary" type="button" onclick="addNameplateReviewRow()">添加人员</button>
-                            </div>
-                            <div class="nameplate-name-review-list" id="nameplateNameReviewList" role="list">
-                                <div class="nameplate-review-empty">请先在上方输入内容并解析</div>
-                            </div>
-                            <textarea id="nameplateNamesInput" hidden aria-hidden="true"></textarea>
-                        </section>
-                    </div>
+                        </div>
+                        <div class="nameplate-preview-controls">
+                            <button class="btn btn-small btn-secondary" type="button" id="nameplatePreviewPrev" onclick="moveNameplatePreview(-1)" disabled>上一张</button>
+                            <strong id="nameplatePreviewName">等待姓名</strong>
+                            <button class="btn btn-small btn-secondary" type="button" id="nameplatePreviewNext" onclick="moveNameplatePreview(1)" disabled>下一张</button>
+                        </div>
+                    </section>
 
                     <div class="nameplate-options nameplate-template-options">
                         <div class="nameplate-review-head">
@@ -253,7 +251,7 @@
         </section>
     </div>
 
-    <script src="auth.js?v=20260807namefont1"></script>
-    <script src="nameplates.js?v=20260807namefont1"></script>
+    <script src="auth.js?v=20260807peoplecard1"></script>
+    <script src="nameplates.js?v=20260807peoplecard1"></script>
 </body>
 </html>
