@@ -1785,6 +1785,8 @@ body.control-page {
 
 .control-page .canvas-wrapper {
     padding: 22px !important;
+    flex-direction: column;
+    gap: 16px;
 }
 
 .control-page .canvas-container {
@@ -1804,6 +1806,26 @@ body.control-page {
 .control-page .canvas-container #mainCanvas {
     width: 100% !important;
     height: auto !important;
+}
+
+.control-page .canvas-status-badge {
+    flex: 0 0 auto;
+    width: fit-content;
+    max-width: min(100%, 820px);
+    justify-content: center;
+    gap: 14px !important;
+    padding: 9px 15px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 999px;
+    background: rgba(17, 24, 29, 0.72);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+    backdrop-filter: blur(18px) saturate(135%);
+    -webkit-backdrop-filter: blur(18px) saturate(135%);
+}
+
+.control-page .canvas-status-badge .status-item {
+    min-width: 0;
+    white-space: nowrap;
 }
 
 .control-page .cropper-stage {
@@ -4621,12 +4643,6 @@ body.login-page {
         margin-right: 0 !important;
     }
 
-    .control-page .device-status {
-        flex: 1 1 200px;
-        flex-wrap: wrap;
-        gap: 10px !important;
-    }
-
     .control-page .top-bar .actions {
         flex: 0 0 auto;
     }
@@ -5608,6 +5624,14 @@ html[data-theme="light"] .control-page .canvas-area {
     background-image: none !important;
 }
 
+html.theme-light .control-page .canvas-status-badge,
+html[data-theme="light"] .control-page .canvas-status-badge {
+    color: #0b1720;
+    background: rgba(255, 255, 255, 0.88);
+    border-color: rgba(36, 63, 76, 0.14);
+    box-shadow: 0 8px 24px rgba(36, 93, 112, 0.12);
+}
+
 html.theme-light .control-page .left-sidebar,
 html.theme-light .control-page .right-panel,
 html[data-theme="light"] .control-page .left-sidebar,
@@ -6285,11 +6309,19 @@ body.control-page .panel-tab {
 
     .control-page .canvas-wrapper {
         padding: 0;
+        gap: 12px;
     }
 
     .control-page .canvas-container {
         width: min(100%, 390px);
         margin: 0 auto;
+    }
+
+    .control-page .canvas-status-badge {
+        max-width: min(100%, 390px);
+        padding: 8px 13px;
+        flex-wrap: wrap;
+        gap: 8px 12px !important;
     }
 
     .control-page .panel-tabs {
