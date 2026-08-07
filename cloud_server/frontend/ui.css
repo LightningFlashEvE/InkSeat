@@ -6401,3 +6401,16 @@ body.control-page .panel-tab {
         scrollbar-width: thin;
     }
 }
+
+/* Nameplate dispatch: make devices that missed their expected wake report
+   visually distinct without changing the online or sleeping cards. */
+.nameplates-page .nameplate-device-row.is-offline {
+    background: rgba(232, 72, 72, 0.14) !important;
+    border-color: rgba(238, 105, 105, 0.34) !important;
+}
+
+html.theme-light .nameplates-page .nameplate-device-row.is-offline,
+html[data-theme="light"] .nameplates-page .nameplate-device-row.is-offline {
+    background: #fff0f0 !important;
+    border-color: rgba(201, 67, 67, 0.24) !important;
+}

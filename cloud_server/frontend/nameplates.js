@@ -244,7 +244,7 @@ function log(message, type = 'info') {
 
 async function loadDevices() {
     try {
-        const response = await authFetch(`${API_BASE}/api/devices/list`, {
+        const response = await authFetch(`${API_BASE}/api/devices`, {
             headers: { ...authHeaders() }
         });
         const result = await response.json();
@@ -253,11 +253,20 @@ async function loadDevices() {
             throw new Error(result.error || '加载设备列表失败');
         }
 
-        devices = (result.devices || []).map(device => ({
-            id: device.deviceId,
-            name: device.deviceName || device.deviceId,
-            addedAt: device.addedAt ? new Date(device.addedAt).getTime() : Date.now()
-        }));
+        devices = (result.devices || []).map(device => {
+            const status = device.online === true
+                ? 'online'
+                : device.sleeping === true
+                    ? 'sleeping'
+                    : 'offline';
+            return {
+                id: device.deviceId,
+                name: device.deviceName || device.deviceId,
+                addedAt: device.addedAt ? new Date(device.addedAt).getTime() : Date.now(),
+                status,
+                statusText: status === 'online' ? '在线' : status === 'sleeping' ? '睡眠' : '离线',
+            };
+        });
         renderNameplateDeviceList();
         updateNameplateDispatchHint();
     } catch (error) {
@@ -769,8 +778,10 @@ function renderNameplateDeviceList() {
 
     container.innerHTML = orderedDevices.map((device, index) => {
         const checked = !hasExistingSelection || selectedIds.has(device.id);
+        const offlineClass = device.status === 'offline' ? ' is-offline' : '';
         return `
-            <label class="nameplate-device-row">
+            <label class="nameplate-device-row${offlineClass}" data-device-status="${escapeHtml(device.status)}"
+                   aria-label="${escapeHtml(`${device.name}，设备编号 ${device.id}，${device.statusText}`)}">
                 <input type="checkbox" name="nameplateDevice" value="${escapeHtml(device.id)}" ${checked ? 'checked' : ''} onchange="updateNameplateDispatchHint()">
                 <span class="nameplate-device-order">${index + 1}</span>
                 <span class="nameplate-device-name">${escapeHtml(device.name)}</span>
