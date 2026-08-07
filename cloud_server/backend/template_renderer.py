@@ -46,6 +46,8 @@ _NAMEPLATE_ASSET_CACHE: dict[str, Image.Image] = {}
 NAMEPLATE_LOGO_MAX_BYTES = 512 * 1024
 NAMEPLATE_LOGO_MAX_DIMENSION = 4096
 NAMEPLATE_LOGO_MAX_PIXELS = 4096 * 4096
+NAMEPLATE_LOGO_SCALE_MIN = 0.5
+NAMEPLATE_LOGO_SCALE_MAX = 2.0
 NAMEPLATE_LOGO_MIME_FORMATS = {
     'image/png': 'PNG',
     'image/jpeg': 'JPEG',
@@ -288,10 +290,22 @@ def _contain_nameplate_asset(asset: Image.Image, width: int, height: int) -> Ima
 def _paste_configured_nameplate_logo(img: Image.Image, config: Dict[str, Any],
                                      fallback_filename: str, default_x: int, default_y: int,
                                      width: int, height: int) -> None:
+    if config.get('logoHidden') is True:
+        return
+
     custom_logo = _load_custom_nameplate_logo(str(config.get('logoDataUrl') or ''))
     asset = custom_logo.copy() if custom_logo is not None else _load_nameplate_asset(fallback_filename)
     if asset is None:
         return
+
+    raw_scale = config.get('logoScale')
+    scale = float(raw_scale) if (
+        isinstance(raw_scale, (int, float)) and not isinstance(raw_scale, bool)
+        and math.isfinite(raw_scale)
+    ) else 1.0
+    scale = min(max(scale, NAMEPLATE_LOGO_SCALE_MIN), NAMEPLATE_LOGO_SCALE_MAX)
+    width = max(1, round(width * scale))
+    height = max(1, round(height * scale))
 
     x = config.get('logoX')
     y = config.get('logoY')

@@ -181,13 +181,15 @@ PAGE_MAX_THUMBNAIL_BYTES = 256 * 1024
 NAMEPLATE_LOGO_MAX_BYTES = 512 * 1024
 NAMEPLATE_LOGO_MAX_DIMENSION = 4096
 NAMEPLATE_LOGO_MAX_PIXELS = 4096 * 4096
+NAMEPLATE_LOGO_SCALE_MIN = 0.5
+NAMEPLATE_LOGO_SCALE_MAX = 2.0
 NAMEPLATE_LOGO_MIME_FORMATS = {
     'image/png': 'PNG',
     'image/jpeg': 'JPEG',
     'image/webp': 'WEBP',
 }
 NAMEPLATE_DESIGN_CONFIG_KEYS = (
-    'logoDataUrl', 'logoFileName', 'logoX', 'logoY',
+    'logoDataUrl', 'logoFileName', 'logoX', 'logoY', 'logoHidden', 'logoScale',
     'companyX', 'companyPositionMode',
 )
 TEMPLATE_DAY_TIMEZONE = os.environ.get('TEMPLATE_DAY_TIMEZONE', 'Asia/Shanghai')
@@ -798,6 +800,22 @@ def normalize_nameplate_template_config(raw_config) -> dict:
         logo_file_name = str(raw_config.get('logoFileName') or '').strip()
         if logo_file_name:
             config['logoFileName'] = logo_file_name[:100]
+
+    if raw_config.get('logoHidden') is True:
+        config['logoHidden'] = True
+
+    logo_scale = raw_config.get('logoScale')
+    if (
+        isinstance(logo_scale, (int, float)) and not isinstance(logo_scale, bool)
+        and math.isfinite(logo_scale)
+    ):
+        config['logoScale'] = round(
+            min(
+                max(float(logo_scale), NAMEPLATE_LOGO_SCALE_MIN),
+                NAMEPLATE_LOGO_SCALE_MAX,
+            ),
+            2,
+        )
 
     logo_x = raw_config.get('logoX')
     logo_y = raw_config.get('logoY')

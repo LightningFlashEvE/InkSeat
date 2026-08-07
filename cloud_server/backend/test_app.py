@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from docx import Document
-from PIL import Image
+from PIL import Image, ImageChops
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -947,7 +947,11 @@ class BackendSecurityTests(unittest.TestCase):
             response = self.client.post('/api/device/template', json={
                 'deviceId': 'A1B2C3',
                 'templateId': 'nameplate',
-                'templateConfig': {'name': '张三'},
+                'templateConfig': {
+                    'name': '张三',
+                    'logoHidden': True,
+                    'logoScale': 1.4,
+                },
                 'imageBase64': 'ZmFrZQ==',
             })
 
@@ -959,6 +963,8 @@ class BackendSecurityTests(unittest.TestCase):
         stored = backend.devices_collection.find_one({'deviceId': 'A1B2C3'})
         self.assertEqual(stored['imageVersion'], 8)
         self.assertEqual(stored['renderSource'], 'canvas')
+        self.assertTrue(stored['templateConfig']['logoHidden'])
+        self.assertEqual(stored['templateConfig']['logoScale'], 1.4)
 
     def test_saving_builtin_nameplate_creates_user_template_copy(self):
         response = self.client.post('/api/nameplate/templates', json={
@@ -1289,6 +1295,8 @@ class BackendSecurityTests(unittest.TestCase):
                 'logoFileName': 'event-logo.png',
                 'logoX': 21,
                 'logoY': 34,
+                'logoHidden': True,
+                'logoScale': 1.4,
                 'companyX': 412,
                 'companyPositionMode': 'custom',
             })
@@ -1301,6 +1309,8 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(result['templateConfig']['logoDataUrl'], logo_data_url)
         self.assertEqual(result['templateConfig']['logoX'], 21)
         self.assertEqual(result['templateConfig']['logoY'], 34)
+        self.assertTrue(result['templateConfig']['logoHidden'])
+        self.assertEqual(result['templateConfig']['logoScale'], 1.4)
         self.assertEqual(result['templateConfig']['companyX'], 412)
         self.assertEqual(result['templateConfig']['companyPositionMode'], 'custom')
         self.assertEqual(result['templateConfig']['backgroundStyle'], 'formal_green')
@@ -1643,6 +1653,8 @@ class NameplateRenderContractTests(unittest.TestCase):
             'logoFileName': '  event-logo.png  ',
             'logoX': -10,
             'logoY': 999,
+            'logoHidden': True,
+            'logoScale': 9,
             'companyX': 999,
             'companyPositionMode': 'custom',
         })
@@ -1651,6 +1663,8 @@ class NameplateRenderContractTests(unittest.TestCase):
         self.assertEqual(config['logoFileName'], 'event-logo.png')
         self.assertEqual(config['logoX'], 0)
         self.assertEqual(config['logoY'], 479)
+        self.assertTrue(config['logoHidden'])
+        self.assertEqual(config['logoScale'], backend.NAMEPLATE_LOGO_SCALE_MAX)
         self.assertEqual(config['companyX'], 799)
         self.assertEqual(config['companyPositionMode'], 'custom')
         self.assertNotIn(
@@ -1662,6 +1676,10 @@ class NameplateRenderContractTests(unittest.TestCase):
             backend.normalize_nameplate_template_config({
                 'logoDataUrl': 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
             }),
+        )
+        self.assertNotIn(
+            'logoScale',
+            backend.normalize_nameplate_template_config({'logoScale': '1.5'}),
         )
 
     def test_custom_nameplate_logo_uses_saved_canvas_position(self):
@@ -1675,6 +1693,43 @@ class NameplateRenderContractTests(unittest.TestCase):
         })
 
         self.assertEqual(image.getpixel((100, 30)), (0, 0, 255))
+
+    def test_nameplate_logo_can_be_hidden_and_scaled(self):
+        white = Image.new('RGB', (800, 480), (255, 255, 255))
+        hidden = white.copy()
+        with patch.object(template_renderer, '_load_nameplate_asset') as asset_mock:
+            template_renderer._paste_configured_nameplate_logo(
+                hidden,
+                {'logoHidden': True, 'logoScale': 1.5},
+                'test-logo.png',
+                10,
+                20,
+                100,
+                20,
+            )
+        asset_mock.assert_not_called()
+        self.assertIsNone(ImageChops.difference(hidden, white).getbbox())
+
+        scaled = white.copy()
+        asset = Image.new('RGBA', (100, 20), (0, 0, 255, 255))
+        with patch.object(
+            template_renderer,
+            '_load_nameplate_asset',
+            return_value=asset,
+        ):
+            template_renderer._paste_configured_nameplate_logo(
+                scaled,
+                {'logoScale': 1.5},
+                'test-logo.png',
+                10,
+                20,
+                100,
+                20,
+            )
+        self.assertEqual(
+            ImageChops.difference(scaled, white).getbbox(),
+            (10, 20, 160, 50),
+        )
 
     def test_footer_nameplates_default_logo_to_left_safe_edge(self):
         for background_style in ('formal_red', 'formal_green'):

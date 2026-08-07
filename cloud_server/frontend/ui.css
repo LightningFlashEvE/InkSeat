@@ -1610,6 +1610,40 @@ body.control-page {
     white-space: nowrap;
 }
 
+.control-page .nameplate-logo-size-control {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.control-page .nameplate-logo-size-control > span {
+    color: var(--ui-text-muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.control-page .nameplate-logo-size-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 54px minmax(0, 1fr);
+    align-items: center;
+    gap: 6px;
+}
+
+.control-page .nameplate-logo-size-actions .btn {
+    min-width: 0;
+    padding: 7px 5px;
+    font-size: 0.72rem;
+}
+
+.control-page .nameplate-logo-size-actions output {
+    color: var(--ui-text);
+    font-size: 0.74rem;
+    font-weight: 800;
+    text-align: center;
+}
+
 .control-page .nameplate-logo-help,
 .control-page .nameplate-company-help {
     margin: 7px 0 0;

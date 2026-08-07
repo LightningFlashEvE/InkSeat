@@ -25,17 +25,22 @@ var currentNameplateLogoDataUrl = '';
 var currentNameplateLogoFileName = '';
 var currentNameplateLogoPosition = null;
 var currentNameplateLogoBounds = null;
+var currentNameplateLogoHidden = false;
+var currentNameplateLogoScale = 1;
 var currentNameplateCompanyX = null;
 var currentNameplateCompanyPositionMode = 'auto';
 var currentNameplateCompanyBounds = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260807offlinecard1';
+const CONTROL_LAZY_ASSET_VERSION = '20260807logotools1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
 const NAMEPLATE_LOGO_MAX_PIXELS = 4096 * 4096;
 const NAMEPLATE_LOGO_OUTPUT_MAX_WIDTH = 640;
 const NAMEPLATE_LOGO_OUTPUT_MAX_HEIGHT = 320;
+const NAMEPLATE_LOGO_SCALE_MIN = 0.5;
+const NAMEPLATE_LOGO_SCALE_MAX = 2;
+const NAMEPLATE_LOGO_SCALE_STEP = 0.1;
 const NAMEPLATE_LOGO_ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const NAMEPLATE_COMPANY_CN = '现象创新（深圳）科技有限公司';
 const NAMEPLATE_COMPANY_EN = 'Pheno Innovations Technology Co., Ltd.';
@@ -118,6 +123,12 @@ function isSupportedNameplateLogoDataUrl(value) {
 
 function getNameplateLogoConfig() {
     const config = {};
+    if (currentNameplateLogoHidden) {
+        config.logoHidden = true;
+    }
+    if (Math.abs(currentNameplateLogoScale - 1) > 0.001) {
+        config.logoScale = Math.round(currentNameplateLogoScale * 100) / 100;
+    }
     if (currentNameplateLogoDataUrl) {
         config.logoDataUrl = currentNameplateLogoDataUrl;
         if (currentNameplateLogoFileName) {
@@ -165,18 +176,44 @@ function updateNameplateLogoControls() {
     const status = document.getElementById('nameplateLogoStatus');
     const restoreButton = document.getElementById('restoreNameplateLogoButton');
     const resetPositionButton = document.getElementById('resetNameplateLogoPositionButton');
+    const deleteButton = document.getElementById('deleteNameplateLogoButton');
+    const decreaseButton = document.getElementById('decreaseNameplateLogoSizeButton');
+    const increaseButton = document.getElementById('increaseNameplateLogoSizeButton');
+    const scaleOutput = document.getElementById('nameplateLogoScaleOutput');
 
     if (preview) {
         preview.src = currentNameplateLogoDataUrl || NAMEPLATE_BRAND_ASSET_PATHS.blackLogo;
-        preview.alt = currentNameplateLogoDataUrl ? '当前自定义 Logo' : '默认 Pheno Logo';
+        preview.alt = currentNameplateLogoHidden
+            ? ''
+            : currentNameplateLogoDataUrl ? '当前自定义 Logo' : '默认 Pheno Logo';
+        preview.hidden = currentNameplateLogoHidden;
     }
     if (status) {
-        status.textContent = currentNameplateLogoDataUrl
+        status.textContent = currentNameplateLogoHidden
+            ? '已删除 Logo'
+            : currentNameplateLogoDataUrl
             ? (currentNameplateLogoFileName || '自定义 Logo')
             : '默认 Pheno Logo';
     }
-    if (restoreButton) restoreButton.disabled = !currentNameplateLogoDataUrl && !currentNameplateLogoPosition;
-    if (resetPositionButton) resetPositionButton.disabled = !currentNameplateLogoPosition;
+    if (restoreButton) {
+        restoreButton.disabled = !currentNameplateLogoHidden
+            && !currentNameplateLogoDataUrl
+            && !currentNameplateLogoPosition
+            && Math.abs(currentNameplateLogoScale - 1) <= 0.001;
+    }
+    if (resetPositionButton) {
+        resetPositionButton.disabled = currentNameplateLogoHidden || !currentNameplateLogoPosition;
+    }
+    if (deleteButton) deleteButton.disabled = currentNameplateLogoHidden;
+    if (decreaseButton) {
+        decreaseButton.disabled = currentNameplateLogoHidden
+            || currentNameplateLogoScale <= NAMEPLATE_LOGO_SCALE_MIN + 0.001;
+    }
+    if (increaseButton) {
+        increaseButton.disabled = currentNameplateLogoHidden
+            || currentNameplateLogoScale >= NAMEPLATE_LOGO_SCALE_MAX - 0.001;
+    }
+    if (scaleOutput) scaleOutput.textContent = `${Math.round(currentNameplateLogoScale * 100)}%`;
 }
 
 function setNameplateLogoState(config = {}, options = {}) {
@@ -187,6 +224,11 @@ function setNameplateLogoState(config = {}, options = {}) {
     currentNameplateLogoFileName = logoDataUrl
         ? String(config.logoFileName || '').trim().slice(0, 100)
         : '';
+    currentNameplateLogoHidden = config.logoHidden === true;
+    const requestedLogoScale = Number(config.logoScale);
+    currentNameplateLogoScale = Number.isFinite(requestedLogoScale)
+        ? Math.min(NAMEPLATE_LOGO_SCALE_MAX, Math.max(NAMEPLATE_LOGO_SCALE_MIN, requestedLogoScale))
+        : 1;
 
     const hasLogoPosition = config.logoX !== undefined && config.logoX !== null
         && config.logoY !== undefined && config.logoY !== null;
@@ -296,6 +338,8 @@ async function handleNameplateLogoFile(event) {
         setNameplateLogoState({
             logoDataUrl,
             logoFileName: file.name,
+            logoHidden: false,
+            logoScale: currentNameplateLogoScale,
             ...(currentNameplateLogoPosition ? {
                 logoX: currentNameplateLogoPosition.x,
                 logoY: currentNameplateLogoPosition.y,
@@ -314,6 +358,56 @@ function resetNameplateLogoPosition() {
     updateNameplateLogoControls();
     renderNameplatePreview();
     log('Logo 已恢复为当前背景样式的默认位置', 'success');
+}
+
+function deleteNameplateLogo() {
+    setNameplateLogoState({
+        logoHidden: true,
+        logoScale: currentNameplateLogoScale,
+        ...(currentNameplateLogoPosition ? {
+            logoX: currentNameplateLogoPosition.x,
+            logoY: currentNameplateLogoPosition.y,
+        } : {}),
+    });
+    log('Logo 已删除，发布后当前设备将不再显示 Logo', 'success');
+}
+
+function adjustNameplateLogoScale(delta) {
+    if (currentNameplateLogoHidden) return;
+    const previousScale = currentNameplateLogoScale;
+    const nextScale = Math.min(
+        NAMEPLATE_LOGO_SCALE_MAX,
+        Math.max(
+            NAMEPLATE_LOGO_SCALE_MIN,
+            Math.round((previousScale + Number(delta || 0)) * 10) / 10
+        )
+    );
+    if (Math.abs(nextScale - previousScale) <= 0.001) return;
+
+    const bounds = currentNameplateLogoBounds;
+    const canvas = document.getElementById('mainCanvas');
+    if (bounds && canvas) {
+        const centerX = bounds.x + bounds.width / 2;
+        const centerY = bounds.y + bounds.height / 2;
+        const nextWidth = bounds.width * nextScale / previousScale;
+        const nextHeight = bounds.height * nextScale / previousScale;
+        currentNameplateLogoPosition = {
+            x: Math.max(0, Math.min(canvas.width - nextWidth, centerX - nextWidth / 2)),
+            y: Math.max(0, Math.min(canvas.height - nextHeight, centerY - nextHeight / 2)),
+        };
+    }
+    currentNameplateLogoScale = nextScale;
+    updateNameplateLogoControls();
+    renderNameplatePreview();
+    log(`Logo 大小已调整为 ${Math.round(nextScale * 100)}%`, 'success');
+}
+
+function decreaseNameplateLogoSize() {
+    adjustNameplateLogoScale(-NAMEPLATE_LOGO_SCALE_STEP);
+}
+
+function increaseNameplateLogoSize() {
+    adjustNameplateLogoScale(NAMEPLATE_LOGO_SCALE_STEP);
 }
 
 function resetNameplateCompanyPosition() {
@@ -473,7 +567,7 @@ function configureEditorPageMode() {
     const logoHelp = document.getElementById('nameplateLogoHelp');
     if (logoHelp) {
         logoHelp.textContent = isDeviceEditor
-            ? '上传后可直接拖动画布中的 Logo；发布后仅更新当前设备。'
+            ? '可上传、删除、调整大小或拖动 Logo；发布后仅更新当前设备。'
             : '上传后可直接拖动画布中的 Logo；位置会随模板保存。';
     }
 
@@ -906,7 +1000,7 @@ function renderSavedNameplateTemplateList(errorMessage = '') {
         const meta = [
             config.title || '无职务',
             config.subtitle || '默认公司',
-            config.logoDataUrl ? '自定义 Logo' : '默认 Logo',
+            config.logoHidden ? '无 Logo' : config.logoDataUrl ? '自定义 Logo' : '默认 Logo',
         ].join(' / ');
         const badge = template.builtin ? '<em>内置</em>' : '<em>已保存</em>';
         const deleteButton = template.builtin
@@ -1289,6 +1383,7 @@ function getLoadedNameplateAsset(key) {
 }
 
 function getConfiguredNameplateLogoAsset(fallbackKey) {
+    if (currentNameplateLogoHidden) return null;
     if (currentNameplateLogoDataUrl) {
         return getLoadedNameplateAsset('customLogo');
     }
@@ -1296,13 +1391,15 @@ function getConfiguredNameplateLogoAsset(fallbackKey) {
 }
 
 function resolveNameplateLogoBounds(defaultX, defaultY, width, height, canvasWidth, canvasHeight) {
+    const scaledWidth = Math.max(1, Math.round(width * currentNameplateLogoScale));
+    const scaledHeight = Math.max(1, Math.round(height * currentNameplateLogoScale));
     const rawX = currentNameplateLogoPosition?.x ?? defaultX;
     const rawY = currentNameplateLogoPosition?.y ?? defaultY;
     return {
-        x: Math.max(0, Math.min(canvasWidth - width, Math.round(rawX))),
-        y: Math.max(0, Math.min(canvasHeight - height, Math.round(rawY))),
-        width,
-        height,
+        x: Math.max(0, Math.min(canvasWidth - scaledWidth, Math.round(rawX))),
+        y: Math.max(0, Math.min(canvasHeight - scaledHeight, Math.round(rawY))),
+        width: scaledWidth,
+        height: scaledHeight,
     };
 }
 
@@ -1317,6 +1414,10 @@ function drawImageContained(ctx, img, bounds) {
 
 function drawConfiguredNameplateLogo(ctx, fallbackKey, defaultX, defaultY, width, height,
                                      canvasWidth, canvasHeight) {
+    if (currentNameplateLogoHidden) {
+        currentNameplateLogoBounds = null;
+        return false;
+    }
     const bounds = resolveNameplateLogoBounds(
         defaultX, defaultY, width, height, canvasWidth, canvasHeight
     );
