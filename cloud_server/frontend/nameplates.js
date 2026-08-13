@@ -446,11 +446,16 @@ function pickNameplateDesignConfig(config) {
     [
         'logoDataUrl', 'logoFileName', 'logoX', 'logoY',
         'companyX', 'companyPositionMode',
+        'layoutMode', 'backgroundColor', 'backgroundImageDataUrl',
+        'backgroundImageFileName', 'backgroundFit',
     ].forEach(key => {
         if (source[key] !== undefined && source[key] !== null && source[key] !== '') {
             designConfig[key] = source[key];
         }
     });
+    if (Array.isArray(source.elements)) {
+        designConfig.elements = source.elements.map(element => ({ ...element }));
+    }
     return designConfig;
 }
 

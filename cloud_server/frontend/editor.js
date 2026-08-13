@@ -32,8 +32,21 @@ var currentNameplateCompanyPositionMode = 'auto';
 var currentNameplateCompanyBounds = null;
 var currentNameplateTextBounds = { name: null, title: null, subtitle: null };
 var activeNameplateInlineEditor = null;
+var currentNameplateLayoutMode = 'builtin';
+var customNameplateState = {
+    backgroundColor: 'white',
+    backgroundImageDataUrl: '',
+    backgroundImageFileName: '',
+    backgroundFit: 'cover',
+    elements: [],
+};
+var selectedCustomNameplateElementId = '';
+var currentCustomNameplateElementBounds = new Map();
+var customNameplateAssetCache = new Map();
+var customNameplateDirty = false;
+var applyingNameplateTemplateConfig = false;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260813inlineedit1';
+const CONTROL_LAZY_ASSET_VERSION = '20260813customtemplate1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -44,6 +57,10 @@ const NAMEPLATE_LOGO_SCALE_MIN = 0.5;
 const NAMEPLATE_LOGO_SCALE_MAX = 2;
 const NAMEPLATE_LOGO_SCALE_STEP = 0.1;
 const NAMEPLATE_LOGO_ACCEPTED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const NAMEPLATE_CUSTOM_BACKGROUND_MAX_SOURCE_BYTES = 8 * 1024 * 1024;
+const NAMEPLATE_CUSTOM_BACKGROUND_MAX_DATA_BYTES = 2 * 1024 * 1024;
+const NAMEPLATE_CUSTOM_MAX_ELEMENTS = 24;
+const NAMEPLATE_CUSTOM_MAX_IMAGE_ELEMENTS = 8;
 const NAMEPLATE_COMPANY_CN = '现象创新（深圳）科技有限公司';
 const NAMEPLATE_COMPANY_EN = 'Pheno Innovations Technology Co., Ltd.';
 const NAMEPLATE_TITLE_SAMPLE_CN = '技术专家';
@@ -426,7 +443,532 @@ function restoreDefaultNameplateLogo() {
     log('已恢复默认 Pheno Logo 和默认位置', 'success');
 }
 
+function isCustomNameplateLayout() {
+    return currentNameplateLayoutMode === 'custom';
+}
+
+function cloneCustomNameplateElements(elements) {
+    return (Array.isArray(elements) ? elements : [])
+        .filter(element => element && (element.kind === 'text' || element.kind === 'image'))
+        .slice(0, NAMEPLATE_CUSTOM_MAX_ELEMENTS)
+        .map(element => ({ ...element }));
+}
+
+function createBlankCustomNameplateState() {
+    return {
+        backgroundColor: 'white',
+        backgroundImageDataUrl: '',
+        backgroundImageFileName: '',
+        backgroundFit: 'cover',
+        elements: [],
+    };
+}
+
+function setNameplateLayoutMode(mode, options = {}) {
+    currentNameplateLayoutMode = mode === 'custom' ? 'custom' : 'builtin';
+    const builtinFields = document.getElementById('builtinNameplateFields');
+    const customFields = document.getElementById('customNameplateFields');
+    builtinFields?.classList.toggle('hidden', isCustomNameplateLayout());
+    customFields?.classList.toggle('hidden', !isCustomNameplateLayout());
+    document.querySelector('.nameplate-company-control')?.classList.toggle(
+        'custom-layout-preview-fields', isCustomNameplateLayout()
+    );
+
+    const heading = document.getElementById('nameplateConfigHeading');
+    if (heading) {
+        heading.textContent = isCustomNameplateLayout()
+            ? (isDeviceEditorMode() ? '自定义屏幕内容' : '自定义模板设置')
+            : (isDeviceEditorMode() ? '当前屏幕内容' : '会议名牌设置');
+    }
+    const companyHelp = document.getElementById('nameplateCompanyHelp');
+    if (companyHelp && isCustomNameplateLayout()) {
+        companyHelp.textContent = '这些内容只用于预览；画布中的动态文字会在名单下发时自动替换。';
+    } else if (companyHelp) {
+        companyHelp.textContent = isDeviceEditorMode()
+            ? '双击画布中的姓名、职位或公司名称可直接编辑；公司名称还可左右拖动。'
+            : '双击画布中的姓名、职位或公司名称可直接编辑；公司位置会随模板保存。';
+    }
+
+    if (options.render !== false) renderNameplatePreview();
+    renderTemplateGrid();
+}
+
+function setCustomNameplateState(config = {}, options = {}) {
+    customNameplateState = {
+        backgroundColor: config.backgroundColor === 'black' ? 'black' : 'white',
+        backgroundImageDataUrl: isSupportedNameplateLogoDataUrl(config.backgroundImageDataUrl)
+            ? config.backgroundImageDataUrl
+            : '',
+        backgroundImageFileName: String(config.backgroundImageFileName || '').trim().slice(0, 100),
+        backgroundFit: ['cover', 'contain', 'stretch'].includes(config.backgroundFit)
+            ? config.backgroundFit
+            : 'cover',
+        elements: cloneCustomNameplateElements(config.elements),
+    };
+    selectedCustomNameplateElementId = '';
+    currentCustomNameplateElementBounds = new Map();
+    customNameplateAssetCache = new Map();
+    updateCustomNameplateControls();
+    if (options.dirty !== undefined) customNameplateDirty = Boolean(options.dirty);
+    if (options.render !== false) renderNameplatePreview();
+}
+
+function getCustomNameplateConfig() {
+    return {
+        layoutMode: 'custom',
+        backgroundColor: customNameplateState.backgroundColor,
+        backgroundFit: customNameplateState.backgroundFit,
+        ...(customNameplateState.backgroundImageDataUrl ? {
+            backgroundImageDataUrl: customNameplateState.backgroundImageDataUrl,
+            backgroundImageFileName: customNameplateState.backgroundImageFileName,
+        } : {}),
+        elements: cloneCustomNameplateElements(customNameplateState.elements),
+    };
+}
+
+function markCustomNameplateDirty() {
+    if (!isCustomNameplateLayout() || applyingNameplateTemplateConfig) return;
+    customNameplateDirty = true;
+    renderTemplateGrid();
+}
+
+function confirmDiscardCustomNameplateChanges() {
+    return !isCustomNameplateLayout() || !customNameplateDirty
+        || window.confirm('当前自定义模板尚未保存，确定放弃这些修改吗？');
+}
+
+function getCustomNameplateAsset(dataUrl) {
+    if (!dataUrl) return null;
+    const cached = customNameplateAssetCache.get(dataUrl);
+    if (cached) return cached.complete && cached.naturalWidth ? cached : null;
+    const image = new Image();
+    image.onload = () => {
+        if (isCustomNameplateLayout()) renderCanvas();
+    };
+    image.onerror = () => {
+        customNameplateAssetCache.delete(dataUrl);
+        log('自定义模板中的图片加载失败，请重新上传', 'error');
+    };
+    image.src = dataUrl;
+    customNameplateAssetCache.set(dataUrl, image);
+    return null;
+}
+
+function drawCustomImageCover(ctx, image, width, height, fit) {
+    if (fit === 'stretch') {
+        ctx.drawImage(image, 0, 0, width, height);
+        return;
+    }
+    const scale = fit === 'contain'
+        ? Math.min(width / image.naturalWidth, height / image.naturalHeight)
+        : Math.max(width / image.naturalWidth, height / image.naturalHeight);
+    const drawWidth = image.naturalWidth * scale;
+    const drawHeight = image.naturalHeight * scale;
+    ctx.drawImage(image, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+}
+
+function getCustomNameplateText(element) {
+    if (element.binding === 'name') {
+        return document.getElementById('nameplateNameInput')?.value?.trim() || '姓名';
+    }
+    if (element.binding === 'title') {
+        return document.getElementById('nameplateTitleInput')?.value?.trim() || '职位';
+    }
+    if (element.binding === 'subtitle') {
+        return document.getElementById('nameplateSubtitleInput')?.value?.trim() || '公司名称';
+    }
+    return String(element.text || '');
+}
+
+function renderCustomNameplateTemplate(ctx, width, height) {
+    currentNameplateLogoBounds = null;
+    currentNameplateCompanyBounds = null;
+    currentNameplateTextBounds = { name: null, title: null, subtitle: null };
+    currentCustomNameplateElementBounds = new Map();
+
+    ctx.fillStyle = customNameplateState.backgroundColor === 'black' ? 'black' : 'white';
+    ctx.fillRect(0, 0, width, height);
+    const background = getCustomNameplateAsset(customNameplateState.backgroundImageDataUrl);
+    if (background) {
+        drawCustomImageCover(ctx, background, width, height, customNameplateState.backgroundFit);
+    }
+
+    customNameplateState.elements.forEach(element => {
+        if (element.kind === 'text') {
+            const text = getCustomNameplateText(element);
+            if (!text) return;
+            const size = Math.min(200, Math.max(16, Number(element.fontSize) || 64));
+            const align = ['left', 'right'].includes(element.align) ? element.align : 'center';
+            ctx.font = nameplateCanvasFont(size, element.fontWeight === '400' ? '400' : '700', text);
+            ctx.fillStyle = ['black', 'white', 'red', 'green', 'blue', 'yellow'].includes(element.color)
+                ? element.color : 'black';
+            ctx.textAlign = align;
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, element.x, element.y);
+            const metrics = ctx.measureText(text);
+            const textWidth = Math.max(1, metrics.width);
+            const textX = align === 'center' ? element.x - textWidth / 2
+                : align === 'right' ? element.x - textWidth : element.x;
+            const bounds = { x: textX, y: element.y - size / 2, width: textWidth, height: size };
+            currentCustomNameplateElementBounds.set(String(element.id), bounds);
+            if (['name', 'title', 'subtitle'].includes(element.binding)) {
+                currentNameplateTextBounds[element.binding] = {
+                    ...bounds,
+                    fontSize: size,
+                    fontWeight: element.fontWeight === '400' ? '400' : '700',
+                    color: ctx.fillStyle,
+                    align,
+                    text,
+                };
+            }
+        } else if (element.kind === 'image') {
+            const image = getCustomNameplateAsset(element.imageDataUrl);
+            const bounds = {
+                x: Number(element.x) || 0,
+                y: Number(element.y) || 0,
+                width: Math.max(16, Number(element.width) || 160),
+                height: Math.max(16, Number(element.height) || 80),
+            };
+            currentCustomNameplateElementBounds.set(String(element.id), bounds);
+            if (image) drawImageContained(ctx, image, bounds);
+        }
+
+        if (String(element.id) === String(selectedCustomNameplateElementId)) {
+            const bounds = currentCustomNameplateElementBounds.get(String(element.id));
+            if (bounds) {
+                ctx.save();
+                ctx.strokeStyle = '#2563eb';
+                ctx.lineWidth = 3;
+                ctx.setLineDash([8, 6]);
+                ctx.strokeRect(bounds.x - 5, bounds.y - 5, bounds.width + 10, bounds.height + 10);
+                ctx.restore();
+            }
+        }
+    });
+}
+
+async function normalizeCustomNameplateRasterFile(file, options = {}) {
+    const maxSourceBytes = options.maxSourceBytes || NAMEPLATE_LOGO_MAX_SOURCE_BYTES;
+    const maxDataBytes = options.maxDataBytes || NAMEPLATE_LOGO_MAX_DATA_BYTES;
+    const maxWidth = options.maxWidth || NAMEPLATE_LOGO_OUTPUT_MAX_WIDTH;
+    const maxHeight = options.maxHeight || NAMEPLATE_LOGO_OUTPUT_MAX_HEIGHT;
+    if (!file || !NAMEPLATE_LOGO_ACCEPTED_TYPES.has(file.type)) {
+        throw new Error('仅支持 PNG、JPG 或 WebP 图片');
+    }
+    if (file.size <= 0 || file.size > maxSourceBytes) {
+        throw new Error(`图片文件不能超过 ${Math.round(maxSourceBytes / 1024 / 1024)}MB`);
+    }
+    const image = await loadNameplateLogoFileImage(file);
+    if (!image.naturalWidth || !image.naturalHeight
+        || image.naturalWidth > 4096 || image.naturalHeight > 4096
+        || image.naturalWidth * image.naturalHeight > NAMEPLATE_LOGO_MAX_PIXELS) {
+        throw new Error('图片尺寸过大，长宽请控制在 4096 像素以内');
+    }
+
+    const baseScale = Math.min(1, maxWidth / image.naturalWidth, maxHeight / image.naturalHeight);
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+        const scale = baseScale * Math.pow(0.82, attempt);
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        context.imageSmoothingEnabled = true;
+        context.imageSmoothingQuality = 'high';
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const candidates = [
+            canvas.toDataURL('image/webp', Math.max(0.68, 0.92 - attempt * 0.05)),
+            canvas.toDataURL('image/png'),
+        ];
+        const accepted = candidates.find(dataUrl => (
+            isSupportedNameplateLogoDataUrl(dataUrl)
+            && getDataUrlDecodedByteLength(dataUrl) <= maxDataBytes
+        ));
+        if (accepted) return { dataUrl: accepted, width: canvas.width, height: canvas.height };
+    }
+    throw new Error('图片内容过于复杂，请压缩后重试');
+}
+
+async function handleCustomNameplateBackground(event) {
+    const input = event?.target || document.getElementById('customBackgroundInput');
+    const file = input?.files?.[0];
+    if (!file) return;
+    try {
+        const normalized = await normalizeCustomNameplateRasterFile(file, {
+            maxSourceBytes: NAMEPLATE_CUSTOM_BACKGROUND_MAX_SOURCE_BYTES,
+            maxDataBytes: NAMEPLATE_CUSTOM_BACKGROUND_MAX_DATA_BYTES,
+            maxWidth: 1600,
+            maxHeight: 960,
+        });
+        customNameplateState.backgroundImageDataUrl = normalized.dataUrl;
+        customNameplateState.backgroundImageFileName = file.name.slice(0, 100);
+        customNameplateAssetCache.delete(normalized.dataUrl);
+        markCustomNameplateDirty();
+        updateCustomNameplateControls();
+        renderNameplatePreview();
+        log('背景图片已添加', 'success');
+    } catch (error) {
+        log('背景图片上传失败: ' + error.message, 'error');
+    } finally {
+        if (input) input.value = '';
+    }
+}
+
+function removeCustomNameplateBackground() {
+    customNameplateState.backgroundImageDataUrl = '';
+    customNameplateState.backgroundImageFileName = '';
+    markCustomNameplateDirty();
+    updateCustomNameplateControls();
+    renderNameplatePreview();
+}
+
+function updateCustomNameplateBackgroundFit(value) {
+    customNameplateState.backgroundFit = ['contain', 'stretch'].includes(value) ? value : 'cover';
+    markCustomNameplateDirty();
+    renderNameplatePreview();
+}
+
+function updateCustomTextBindingControls() {
+    const binding = document.getElementById('customTextBindingSelect')?.value || 'name';
+    document.getElementById('customStaticTextGroup')?.classList.toggle('hidden', binding !== 'static');
+}
+
+function createCustomElementId(prefix) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+function addCustomNameplateText() {
+    if (customNameplateState.elements.length >= NAMEPLATE_CUSTOM_MAX_ELEMENTS) {
+        log(`画布元素不能超过 ${NAMEPLATE_CUSTOM_MAX_ELEMENTS} 个`, 'error');
+        return;
+    }
+    const binding = document.getElementById('customTextBindingSelect')?.value || 'name';
+    const staticText = document.getElementById('customStaticTextInput')?.value?.trim() || '';
+    if (binding === 'static' && !staticText) {
+        log('请输入固定文字内容', 'error');
+        document.getElementById('customStaticTextInput')?.focus();
+        return;
+    }
+    const sameTypeCount = customNameplateState.elements.filter(item => item.kind === 'text').length;
+    const element = {
+        id: createCustomElementId('text'),
+        kind: 'text',
+        binding,
+        text: binding === 'static' ? staticText.slice(0, 160) : '',
+        x: 400,
+        y: Math.min(420, 150 + sameTypeCount * 70),
+        fontSize: Math.min(200, Math.max(16, parseInt(document.getElementById('customTextSizeInput')?.value || '64', 10))),
+        fontWeight: document.getElementById('customTextWeightSelect')?.value === '400' ? '400' : '700',
+        color: document.getElementById('customTextColorSelect')?.value || 'black',
+        align: document.getElementById('customTextAlignSelect')?.value || 'center',
+    };
+    customNameplateState.elements.push(element);
+    selectedCustomNameplateElementId = element.id;
+    if (binding === 'static') document.getElementById('customStaticTextInput').value = '';
+    markCustomNameplateDirty();
+    updateCustomNameplateControls();
+    renderNameplatePreview();
+    log('文字已添加，可直接拖动画布调整位置', 'success');
+}
+
+async function handleCustomNameplateImage(event) {
+    const input = event?.target || document.getElementById('customImageInput');
+    const file = input?.files?.[0];
+    if (!file) return;
+    const imageCount = customNameplateState.elements.filter(item => item.kind === 'image').length;
+    if (imageCount >= NAMEPLATE_CUSTOM_MAX_IMAGE_ELEMENTS) {
+        log(`Logo / 图片不能超过 ${NAMEPLATE_CUSTOM_MAX_IMAGE_ELEMENTS} 张`, 'error');
+        input.value = '';
+        return;
+    }
+    try {
+        const normalized = await normalizeCustomNameplateRasterFile(file);
+        const scale = Math.min(1, 220 / normalized.width, 130 / normalized.height);
+        const width = Math.max(32, Math.round(normalized.width * scale));
+        const height = Math.max(24, Math.round(normalized.height * scale));
+        const element = {
+            id: createCustomElementId('image'),
+            kind: 'image',
+            imageDataUrl: normalized.dataUrl,
+            fileName: file.name.slice(0, 100),
+            x: Math.round((800 - width) / 2),
+            y: Math.round((480 - height) / 2),
+            width,
+            height,
+        };
+        customNameplateState.elements.push(element);
+        selectedCustomNameplateElementId = element.id;
+        markCustomNameplateDirty();
+        updateCustomNameplateControls();
+        renderNameplatePreview();
+        log('Logo / 图片已添加，可直接拖动和缩放', 'success');
+    } catch (error) {
+        log('图片上传失败: ' + error.message, 'error');
+    } finally {
+        if (input) input.value = '';
+    }
+}
+
+function getSelectedCustomNameplateElement() {
+    return customNameplateState.elements.find(
+        element => String(element.id) === String(selectedCustomNameplateElementId)
+    ) || null;
+}
+
+function selectCustomNameplateElement(elementId) {
+    selectedCustomNameplateElementId = String(elementId || '');
+    updateCustomNameplateControls();
+    renderNameplatePreview();
+}
+
+function updateSelectedCustomElementField(field, value) {
+    const element = getSelectedCustomNameplateElement();
+    if (!element) return;
+    if (element.kind === 'text') {
+        if (field === 'binding') element.binding = ['name', 'title', 'subtitle'].includes(value) ? value : 'static';
+        else if (field === 'text') element.text = String(value || '').slice(0, 160);
+        else if (field === 'fontSize') element.fontSize = Math.min(200, Math.max(16, parseInt(value || '64', 10)));
+        else if (field === 'fontWeight') element.fontWeight = value === '400' ? '400' : '700';
+        else if (field === 'color') element.color = ['white', 'red', 'green', 'blue', 'yellow'].includes(value) ? value : 'black';
+        else if (field === 'align') element.align = ['left', 'right'].includes(value) ? value : 'center';
+    }
+    markCustomNameplateDirty();
+    updateCustomNameplateControls({ preserveInspectorFocus: true });
+    renderNameplatePreview();
+}
+
+function resizeSelectedCustomElement(direction) {
+    const element = getSelectedCustomNameplateElement();
+    if (!element) return;
+    if (element.kind === 'text') {
+        element.fontSize = Math.min(200, Math.max(16, Number(element.fontSize || 64) + direction * 6));
+    } else {
+        const factor = direction > 0 ? 1.12 : 0.88;
+        const centerX = element.x + element.width / 2;
+        const centerY = element.y + element.height / 2;
+        element.width = Math.min(800, Math.max(16, Math.round(element.width * factor)));
+        element.height = Math.min(480, Math.max(16, Math.round(element.height * factor)));
+        element.x = Math.max(0, Math.min(800 - element.width, centerX - element.width / 2));
+        element.y = Math.max(0, Math.min(480 - element.height, centerY - element.height / 2));
+    }
+    markCustomNameplateDirty();
+    updateCustomNameplateControls();
+    renderNameplatePreview();
+}
+
+function moveSelectedCustomElementLayer(direction) {
+    const index = customNameplateState.elements.findIndex(
+        element => String(element.id) === String(selectedCustomNameplateElementId)
+    );
+    if (index < 0) return;
+    const target = Math.max(0, Math.min(customNameplateState.elements.length - 1, index + Number(direction || 0)));
+    if (target === index) return;
+    const [element] = customNameplateState.elements.splice(index, 1);
+    customNameplateState.elements.splice(target, 0, element);
+    markCustomNameplateDirty();
+    updateCustomNameplateControls();
+    renderNameplatePreview();
+}
+
+function deleteSelectedCustomElement() {
+    const id = String(selectedCustomNameplateElementId || '');
+    if (!id) return;
+    customNameplateState.elements = customNameplateState.elements.filter(
+        element => String(element.id) !== id
+    );
+    selectedCustomNameplateElementId = '';
+    markCustomNameplateDirty();
+    updateCustomNameplateControls();
+    renderNameplatePreview();
+}
+
+function updateCustomNameplateControls(options = {}) {
+    const uploadLabel = document.getElementById('customBackgroundUploadLabel');
+    if (uploadLabel) uploadLabel.textContent = customNameplateState.backgroundImageFileName || '上传背景图片';
+    const removeButton = document.getElementById('removeCustomBackgroundButton');
+    if (removeButton) removeButton.disabled = !customNameplateState.backgroundImageDataUrl;
+    const fitSelect = document.getElementById('customBackgroundFitSelect');
+    if (fitSelect) fitSelect.value = customNameplateState.backgroundFit;
+    updateCustomTextBindingControls();
+    renderCustomNameplateElementList(options);
+}
+
+function renderCustomNameplateElementList(options = {}) {
+    const list = document.getElementById('customElementList');
+    const inspector = document.getElementById('customElementInspector');
+    const actions = document.getElementById('customElementActions');
+    if (!list || !inspector || !actions) return;
+    list.replaceChildren();
+    if (!customNameplateState.elements.length) {
+        const empty = document.createElement('div');
+        empty.className = 'custom-element-empty';
+        empty.textContent = '还没有添加元素';
+        list.appendChild(empty);
+    } else {
+        customNameplateState.elements.slice().reverse().forEach(element => {
+            const row = document.createElement('button');
+            row.type = 'button';
+            row.className = 'custom-element-row';
+            row.classList.toggle('active', String(element.id) === String(selectedCustomNameplateElementId));
+            const label = element.kind === 'image'
+                ? (element.fileName || '图片')
+                : element.binding === 'name' ? '姓名'
+                : element.binding === 'title' ? '职位'
+                : element.binding === 'subtitle' ? '公司名称'
+                : (element.text || '固定文字');
+            row.innerHTML = `<span>${element.kind === 'image' ? '图片' : '文字'}</span><strong>${escapeHtml(label)}</strong>`;
+            row.addEventListener('click', () => selectCustomNameplateElement(element.id));
+            list.appendChild(row);
+        });
+    }
+
+    const element = getSelectedCustomNameplateElement();
+    inspector.classList.toggle('hidden', !element);
+    actions.classList.toggle('hidden', !element);
+    if (!element) {
+        inspector.replaceChildren();
+        return;
+    }
+    const activeId = options.preserveInspectorFocus ? document.activeElement?.dataset?.customField : '';
+    const selectionStart = options.preserveInspectorFocus && document.activeElement?.selectionStart;
+    if (element.kind === 'text') {
+        inspector.innerHTML = `
+            <label><span>类型</span><select data-custom-field="binding">
+                <option value="name"${element.binding === 'name' ? ' selected' : ''}>姓名（动态）</option>
+                <option value="title"${element.binding === 'title' ? ' selected' : ''}>职位（动态）</option>
+                <option value="subtitle"${element.binding === 'subtitle' ? ' selected' : ''}>公司（动态）</option>
+                <option value="static"${element.binding === 'static' ? ' selected' : ''}>固定文字</option>
+            </select></label>
+            <label class="${element.binding === 'static' ? '' : 'hidden'}"><span>内容</span><input data-custom-field="text" maxlength="160" value="${escapeHtml(element.text || '')}"></label>
+            <div class="custom-control-grid compact">
+                <label>字号<input data-custom-field="fontSize" type="number" min="16" max="200" value="${element.fontSize}"></label>
+                <label>粗细<select data-custom-field="fontWeight"><option value="700"${element.fontWeight !== '400' ? ' selected' : ''}>粗体</option><option value="400"${element.fontWeight === '400' ? ' selected' : ''}>常规</option></select></label>
+                <label>颜色<select data-custom-field="color">${['black','white','red','green','blue','yellow'].map(color => `<option value="${color}"${element.color === color ? ' selected' : ''}>${{black:'黑色',white:'白色',red:'红色',green:'绿色',blue:'蓝色',yellow:'黄色'}[color]}</option>`).join('')}</select></label>
+                <label>对齐<select data-custom-field="align"><option value="center"${element.align === 'center' ? ' selected' : ''}>居中</option><option value="left"${element.align === 'left' ? ' selected' : ''}>左</option><option value="right"${element.align === 'right' ? ' selected' : ''}>右</option></select></label>
+            </div>`;
+        inspector.querySelectorAll('[data-custom-field]').forEach(control => {
+            const eventName = control.tagName === 'INPUT' ? 'input' : 'change';
+            control.addEventListener(eventName, () => updateSelectedCustomElementField(control.dataset.customField, control.value));
+        });
+        if (activeId) {
+            const active = inspector.querySelector(`[data-custom-field="${activeId}"]`);
+            active?.focus({ preventScroll: true });
+            if (typeof selectionStart === 'number' && active?.setSelectionRange) {
+                active.setSelectionRange(selectionStart, selectionStart);
+            }
+        }
+    } else {
+        inspector.innerHTML = `<div class="custom-image-inspector"><strong>${escapeHtml(element.fileName || '图片')}</strong><span>${Math.round(element.width)} × ${Math.round(element.height)} px</span></div>`;
+    }
+}
+
 loadNameplateBrandAssets();
+
+window.addEventListener('beforeunload', event => {
+    if (!isCustomNameplateLayout() || !customNameplateDirty) return;
+    event.preventDefault();
+    event.returnValue = '';
+});
 
 // 注意：以下变量在 app.js 中已定义，这里不再声明
 // currentMode, sourceImage, textItems, mixedTextItems,
@@ -802,13 +1344,37 @@ function renderTemplateGrid() {
     const grid = document.getElementById('templateGrid');
     if (!grid) return;
 
-    grid.innerHTML = templates.map(t => `
-        <button type="button" class="template-card" data-template-id="${escapeHtml(t.templateId)}" aria-pressed="${t.templateId === currentTemplateId ? 'true' : 'false'}" onclick="selectTemplate('${escapeHtml(escapeJsString(t.templateId))}')">
-            ${renderTemplateIcon(t)}
-            <span class="name">${escapeHtml(t.name)}</span>
-            <span class="desc">${escapeHtml(t.description)}</span>
-        </button>
-    `).join('');
+    const selected = [...BUILTIN_NAMEPLATE_TEMPLATES, ...savedNameplateTemplates]
+        .find(template => template.templateId === activeSavedNameplateTemplateId);
+    const unsaved = isCustomNameplateLayout() && (!selected || customNameplateDirty);
+    const displayName = unsaved
+        ? (getNameplateTemplateName() || '未保存的自定义模板')
+        : (selected?.name || getNameplateTemplateName() || '会议名牌模板');
+    const badge = unsaved ? '未保存' : selected?.builtin ? '内置' : '已保存';
+    const description = isCustomNameplateLayout()
+        ? `自定义画布 · ${customNameplateState.elements.length} 个元素`
+        : 'Pheno 会议名牌';
+
+    grid.innerHTML = `
+        <div class="current-template-card${unsaved ? ' is-unsaved' : ''}" aria-live="polite">
+            <canvas id="currentTemplatePreviewCanvas" width="160" height="96" aria-label="当前模板缩略图"></canvas>
+            <div class="current-template-copy">
+                <span class="current-template-badge">${badge}</span>
+                <strong>${escapeHtml(displayName)}</strong>
+                <span>${escapeHtml(description)}</span>
+            </div>
+        </div>
+    `;
+    syncCurrentTemplatePreview();
+}
+
+function syncCurrentTemplatePreview() {
+    const source = document.getElementById('mainCanvas');
+    const preview = document.getElementById('currentTemplatePreviewCanvas');
+    if (!source || !preview) return;
+    const context = preview.getContext('2d');
+    context.clearRect(0, 0, preview.width, preview.height);
+    context.drawImage(source, 0, 0, preview.width, preview.height);
 }
 
 function renderModalTemplateGrid() {
@@ -896,8 +1462,9 @@ function getCurrentTemplateConfig() {
             subtitle: document.getElementById('nameplateSubtitleInput')?.value?.trim() || '',
             backgroundStyle: document.getElementById('nameplateStyleSelect')?.value || 'formal_red',
             sleepIntervalSeconds: parseInt(document.getElementById('nameplateWakeInterval')?.value || '86400', 10),
-            ...getNameplateLogoConfig(),
-            ...getNameplateCompanyConfig(),
+            ...(isCustomNameplateLayout()
+                ? getCustomNameplateConfig()
+                : { ...getNameplateLogoConfig(), ...getNameplateCompanyConfig() }),
         };
     }
     // todo 等模板暂无配置
@@ -911,8 +1478,9 @@ function getSavableNameplateTemplateConfig() {
         title: config.title || '',
         subtitle: config.subtitle || '',
         sleepIntervalSeconds: parseInt(config.sleepIntervalSeconds || '86400', 10) || 86400,
-        ...getNameplateLogoConfig(),
-        ...getNameplateCompanyConfig(),
+        ...(isCustomNameplateLayout()
+            ? getCustomNameplateConfig()
+            : { ...getNameplateLogoConfig(), ...getNameplateCompanyConfig() }),
     };
 }
 
@@ -922,6 +1490,8 @@ function getNameplateTemplateName() {
 
 function applyNameplateTemplateConfig(config, options = {}) {
     if (!config) return false;
+
+    applyingNameplateTemplateConfig = true;
 
     const nameInput = document.getElementById('nameplateNameInput');
     const styleSelect = document.getElementById('nameplateStyleSelect');
@@ -934,12 +1504,21 @@ function applyNameplateTemplateConfig(config, options = {}) {
     if (titleInput && config.title !== undefined) titleInput.value = config.title || '';
     if (subtitleInput && config.subtitle !== undefined) subtitleInput.value = config.subtitle || '';
     if (wakeSelect && config.sleepIntervalSeconds) wakeSelect.value = String(config.sleepIntervalSeconds);
-    setNameplateLogoState(config, { render: false });
-    setNameplateCompanyState(config, { render: false });
+    if (config.layoutMode === 'custom') {
+        setCustomNameplateState(config, { render: false, dirty: false });
+        setNameplateLayoutMode('custom', { render: false });
+    } else {
+        setNameplateLogoState(config, { render: false });
+        setNameplateCompanyState(config, { render: false });
+        setNameplateLayoutMode('builtin', { render: false });
+    }
+    customNameplateDirty = false;
+    applyingNameplateTemplateConfig = false;
 
     if (options.render !== false) {
         renderNameplatePreview();
     }
+    renderTemplateGrid();
     return true;
 }
 
@@ -971,8 +1550,12 @@ async function loadSavedNameplateTemplates(options = {}) {
         savedNameplateTemplates = (result.templates || []).map(normalizeSavedNameplateTemplate);
         renderSavedNameplateTemplateList();
 
-        if (options.applyFirst && !activeSavedNameplateTemplateId && savedNameplateTemplates.length) {
-            selectSavedNameplateTemplate(savedNameplateTemplates[0].templateId, { silent: options.silent });
+        if (options.applyFirst && !activeSavedNameplateTemplateId) {
+            const firstTemplateId = savedNameplateTemplates[0]?.templateId
+                || BUILTIN_NAMEPLATE_TEMPLATES[0]?.templateId;
+            if (firstTemplateId) {
+                selectSavedNameplateTemplate(firstTemplateId, { silent: options.silent });
+            }
         }
     } catch (error) {
         savedNameplateTemplates = [];
@@ -999,11 +1582,17 @@ function renderSavedNameplateTemplateList(errorMessage = '') {
         const config = template.templateConfig || {};
         const active = template.templateId === activeSavedNameplateTemplateId ? ' active' : '';
         const templateIdForHandler = escapeHtml(escapeJsString(template.templateId));
-        const meta = [
-            config.title || '无职务',
-            config.subtitle || '默认公司',
-            config.logoHidden ? '无 Logo' : config.logoDataUrl ? '自定义 Logo' : '默认 Logo',
-        ].join(' / ');
+        const meta = config.layoutMode === 'custom'
+            ? [
+                '自定义画布',
+                `${Array.isArray(config.elements) ? config.elements.length : 0} 个元素`,
+                config.backgroundImageDataUrl ? '图片背景' : '纯色背景',
+            ].join(' / ')
+            : [
+                config.title || '无职务',
+                config.subtitle || '默认公司',
+                config.logoHidden ? '无 Logo' : config.logoDataUrl ? '自定义 Logo' : '默认 Logo',
+            ].join(' / ');
         const badge = template.builtin ? '<em>内置</em>' : '<em>已保存</em>';
         const deleteButton = template.builtin
             ? ''
@@ -1035,6 +1624,9 @@ function selectSavedNameplateTemplate(templateId, options = {}) {
     const template = [...BUILTIN_NAMEPLATE_TEMPLATES, ...savedNameplateTemplates]
         .find(item => item.templateId === templateId);
     if (!template) return false;
+    if (templateId !== activeSavedNameplateTemplateId && !confirmDiscardCustomNameplateChanges()) {
+        return false;
+    }
 
     activeSavedNameplateTemplateId = template.templateId;
     const nameInput = document.getElementById('nameplateTemplateNameInput');
@@ -1052,6 +1644,7 @@ function isBuiltInNameplateTemplateId(templateId) {
 }
 
 function startNewNameplateTemplate() {
+    if (!confirmDiscardCustomNameplateChanges()) return;
     activeSavedNameplateTemplateId = '';
     const nameInput = document.getElementById('nameplateTemplateNameInput');
     const titleInput = document.getElementById('nameplateTitleInput');
@@ -1059,16 +1652,19 @@ function startNewNameplateTemplate() {
     const styleSelect = document.getElementById('nameplateStyleSelect');
     const wakeSelect = document.getElementById('nameplateWakeInterval');
 
-    if (nameInput) nameInput.value = '会议名牌模板';
+    if (nameInput) nameInput.value = '未命名自定义模板';
     if (titleInput) titleInput.value = '';
     if (subtitleInput) subtitleInput.value = '';
     if (styleSelect) styleSelect.value = 'formal_red';
     if (wakeSelect) wakeSelect.value = '86400';
-    setNameplateLogoState({}, { render: false });
-    setNameplateCompanyState({}, { render: false });
+    setCustomNameplateState(createBlankCustomNameplateState(), { render: false, dirty: true });
+    setNameplateLayoutMode('custom', { render: false });
+    customNameplateDirty = true;
+    updateCustomNameplateControls();
     renderNameplatePreview();
     renderSavedNameplateTemplateList();
-    log('已新建空白模板，保存后会加入模板列表', 'info');
+    renderTemplateGrid();
+    log('已新建空白自定义模板，可上传背景、添加文字和 Logo', 'info');
 }
 
 async function saveNameplateTemplate(options = {}) {
@@ -1096,6 +1692,7 @@ async function saveNameplateTemplate(options = {}) {
 
         const saved = normalizeSavedNameplateTemplate(result.template);
         activeSavedNameplateTemplateId = saved.templateId;
+        customNameplateDirty = false;
         const index = savedNameplateTemplates.findIndex(item => item.templateId === saved.templateId);
         if (index >= 0) {
             savedNameplateTemplates[index] = saved;
@@ -1104,6 +1701,7 @@ async function saveNameplateTemplate(options = {}) {
         }
         renderSavedNameplateTemplateList();
         renderNameplatePreview();
+        renderTemplateGrid();
         log(`模板已保存：${saved.name}`, 'success');
     } catch (error) {
         console.error('保存模板失败:', error);
@@ -1350,6 +1948,11 @@ function renderQRCodeTemplate(ctx, width, height) {
 
 function renderNameplatePreview() {
     renderCanvas();
+}
+
+function handleNameplatePreviewFieldInput(field) {
+    if (field !== 'name') markCustomNameplateDirty();
+    renderNameplatePreview();
 }
 
 function fitCanvasFontSize(ctx, text, maxWidth, startSize, minSize) {
@@ -1691,6 +2294,12 @@ function renderNameplateTemplate(ctx, width, height) {
     const title = document.getElementById('nameplateTitleInput')?.value?.trim() || '';
     const subtitle = document.getElementById('nameplateSubtitleInput')?.value?.trim() || '';
     const style = document.getElementById('nameplateStyleSelect')?.value || 'formal_red';
+
+    if (isCustomNameplateLayout()) {
+        renderCustomNameplateTemplate(ctx, width, height);
+        if (activeNameplateInlineEditor) updateNameplateInlineEditorLayout();
+        return;
+    }
 
     if (style === 'formal_blue') {
         drawPhenoProfileNameplate(ctx, width, height, name, title, subtitle || NAMEPLATE_COMPANY_EN);
@@ -3035,8 +3644,24 @@ var canvasDragState = {
     dragStartX: 0,
     dragStartY: 0,
     itemOffsetX: 0,
-    itemOffsetY: 0
+    itemOffsetY: 0,
+    didMove: false,
 };
+
+function getCustomNameplateElementAt(x, y) {
+    if (!isCustomNameplateLayout()) return null;
+    for (let index = customNameplateState.elements.length - 1; index >= 0; index -= 1) {
+        const element = customNameplateState.elements[index];
+        const bounds = currentCustomNameplateElementBounds.get(String(element.id));
+        const padding = element.kind === 'text' ? 10 : 4;
+        if (bounds
+            && x >= bounds.x - padding && x <= bounds.x + bounds.width + padding
+            && y >= bounds.y - padding && y <= bounds.y + bounds.height + padding) {
+            return element;
+        }
+    }
+    return null;
+}
 
 function isPointInsideNameplateLogo(x, y) {
     const bounds = currentNameplateLogoBounds;
@@ -3055,12 +3680,16 @@ function isPointInsideNameplateCompany(x, y) {
 
 function getNameplateDragTarget(x, y) {
     if (currentMode !== 'template' || currentTemplateId !== NAMEPLATE_TEMPLATE_ID) return null;
+    if (isCustomNameplateLayout()) {
+        return getCustomNameplateElementAt(x, y) ? 'custom-element' : null;
+    }
     if (isPointInsideNameplateCompany(x, y)) return 'nameplate-company';
     if (isPointInsideNameplateLogo(x, y)) return 'nameplate-logo';
     return null;
 }
 
 function getNameplateDragCursor(target) {
+    if (target === 'custom-element') return 'move';
     if (target === 'nameplate-company') return 'ew-resize';
     if (target === 'nameplate-logo') return 'move';
     return 'default';
@@ -3204,6 +3833,7 @@ function openNameplateInlineEditor(field) {
         if (state.closing) return;
         state.dirty = true;
         sourceInput.value = input.value;
+        if (field !== 'name') markCustomNameplateDirty();
         renderNameplatePreview();
     });
     input.addEventListener('keydown', event => {
@@ -3251,15 +3881,38 @@ function moveDraggedNameplateCompany(x, canvas) {
     return true;
 }
 
+function moveDraggedCustomNameplateElement(x, y, canvas) {
+    const element = getSelectedCustomNameplateElement();
+    if (!element || !canvas) return false;
+    const nextX = x - canvasDragState.itemOffsetX;
+    const nextY = y - canvasDragState.itemOffsetY;
+    if (element.kind === 'image') {
+        element.x = Math.max(0, Math.min(canvas.width - element.width, nextX));
+        element.y = Math.max(0, Math.min(canvas.height - element.height, nextY));
+    } else {
+        element.x = Math.max(0, Math.min(canvas.width, nextX));
+        element.y = Math.max(0, Math.min(canvas.height, nextY));
+    }
+    canvasDragState.didMove = true;
+    renderCanvas();
+    return true;
+}
+
 function finishCanvasDrag() {
     const finishedTarget = canvasDragState.dragTarget;
+    const didMove = canvasDragState.didMove;
     canvasDragState.isDragging = false;
     canvasDragState.dragTarget = null;
+    canvasDragState.didMove = false;
     if (finishedTarget === 'nameplate-logo') {
         updateNameplateLogoControls();
         renderCanvas();
     } else if (finishedTarget === 'nameplate-company') {
         updateNameplateCompanyControls();
+        renderCanvas();
+    } else if (finishedTarget === 'custom-element') {
+        if (didMove) markCustomNameplateDirty();
+        updateCustomNameplateControls();
         renderCanvas();
     }
 }
@@ -3286,7 +3939,17 @@ function initCanvasEvents() {
     canvas.ondblclick = function(e) {
         const coords = getCanvasCoords(e);
         const field = getNameplateInlineEditTarget(coords.x, coords.y);
-        if (!field) return;
+        if (!field) {
+            const element = getCustomNameplateElementAt(coords.x, coords.y);
+            if (!element) return;
+            selectCustomNameplateElement(element.id);
+            if (element.kind === 'text' && element.binding === 'static') {
+                const input = document.querySelector('#customElementInspector [data-custom-field="text"]');
+                input?.focus({ preventScroll: true });
+                input?.select();
+            }
+            return;
+        }
         e.preventDefault();
         e.stopPropagation();
         finishCanvasDrag();
@@ -3323,7 +3986,19 @@ function initCanvasEvents() {
         const y = coords.y;
 
         const nameplateTarget = getNameplateDragTarget(x, y);
-        if (nameplateTarget === 'nameplate-company') {
+        if (nameplateTarget === 'custom-element') {
+            const element = getCustomNameplateElementAt(x, y);
+            if (!element) return;
+            selectedCustomNameplateElementId = String(element.id);
+            canvasDragState.isDragging = true;
+            canvasDragState.dragTarget = 'custom-element';
+            canvasDragState.didMove = false;
+            canvasDragState.itemOffsetX = x - Number(element.x || 0);
+            canvasDragState.itemOffsetY = y - Number(element.y || 0);
+            canvas.style.cursor = 'grabbing';
+            updateCustomNameplateControls();
+            renderCanvas();
+        } else if (nameplateTarget === 'nameplate-company') {
             canvasDragState.isDragging = true;
             canvasDragState.dragTarget = 'nameplate-company';
             canvasDragState.itemOffsetX = x - currentNameplateCompanyBounds.x;
@@ -3418,6 +4093,8 @@ function initCanvasEvents() {
             moveDraggedNameplateLogo(x, y, canvas);
         } else if (canvasDragState.dragTarget === 'nameplate-company') {
             moveDraggedNameplateCompany(x, canvas);
+        } else if (canvasDragState.dragTarget === 'custom-element') {
+            moveDraggedCustomNameplateElement(x, y, canvas);
         } else if (currentMode === 'text' && selectedTextId) {
             const item = textItems.find(t => t.id === selectedTextId);
             if (item) {
@@ -3501,6 +4178,8 @@ function initCanvasEvents() {
             moveDraggedNameplateLogo(x, y, canvas);
         } else if (canvasDragState.dragTarget === 'nameplate-company') {
             moveDraggedNameplateCompany(x, canvas);
+        } else if (canvasDragState.dragTarget === 'custom-element') {
+            moveDraggedCustomNameplateElement(x, y, canvas);
         } else if (currentMode === 'text' && selectedTextId) {
             const item = textItems.find(t => t.id === selectedTextId);
             if (item) {
@@ -3631,6 +4310,7 @@ function renderCanvas() {
     } else if (currentMode === 'template') {
         renderTemplateCanvas(ctx, canvas.width, canvas.height);
     }
+    syncCurrentTemplatePreview();
 }
 
 function renderTemplateCanvas(ctx, width, height) {

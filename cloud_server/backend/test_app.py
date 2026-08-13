@@ -987,6 +987,39 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertIsNotNone(stored)
         self.assertEqual(stored['templateConfig']['backgroundStyle'], 'formal_red')
 
+    def test_saving_custom_nameplate_preserves_canvas_design(self):
+        image_data_url = make_test_logo_data_url()
+        response = self.client.post('/api/nameplate/templates', json={
+            'name': '会务自定义模板',
+            'templateConfig': {
+                'layoutMode': 'custom',
+                'backgroundColor': 'white',
+                'backgroundImageDataUrl': image_data_url,
+                'backgroundFit': 'contain',
+                'elements': [
+                    {
+                        'id': 'name', 'kind': 'text', 'binding': 'name',
+                        'x': 400, 'y': 160, 'fontSize': 80,
+                        'fontWeight': '700', 'color': 'black', 'align': 'center',
+                    },
+                    {
+                        'id': 'logo', 'kind': 'image', 'imageDataUrl': image_data_url,
+                        'x': 24, 'y': 390, 'width': 180, 'height': 60,
+                    },
+                ],
+            },
+        })
+
+        self.assertEqual(response.status_code, 200)
+        saved = response.get_json()['template']
+        self.assertEqual(saved['templateConfig']['layoutMode'], 'custom')
+        self.assertEqual(saved['templateConfig']['backgroundImageDataUrl'], image_data_url)
+        self.assertEqual(len(saved['templateConfig']['elements']), 2)
+        stored = backend.saved_nameplate_templates_collection.find_one({
+            'owner': 'bob', 'templateId': saved['templateId'],
+        })
+        self.assertEqual(stored['templateConfig']['elements'][1]['kind'], 'image')
+
     def test_legacy_page_without_device_scope_is_fail_closed(self):
         backend.pages_collection = FakeCollection([{
             'pageId': 'legacy-page', 'name': 'orphan', 'data': {},
@@ -1646,6 +1679,68 @@ class BackendSecurityTests(unittest.TestCase):
 
 
 class NameplateRenderContractTests(unittest.TestCase):
+    def test_custom_nameplate_config_preserves_bounded_background_and_elements(self):
+        image_data_url = make_test_logo_data_url()
+        config = backend.normalize_nameplate_template_config({
+            'layoutMode': 'custom',
+            'backgroundColor': 'black',
+            'backgroundImageDataUrl': image_data_url,
+            'backgroundImageFileName': ' event-bg.png ',
+            'backgroundFit': 'contain',
+            'elements': [
+                {
+                    'id': 'name-field', 'kind': 'text', 'binding': 'name',
+                    'x': 999, 'y': -5, 'fontSize': 999, 'fontWeight': '700',
+                    'color': 'white', 'align': 'center',
+                },
+                {
+                    'id': 'logo', 'kind': 'image', 'imageDataUrl': image_data_url,
+                    'fileName': 'logo.png', 'x': 790, 'y': 470,
+                    'width': 120, 'height': 80,
+                },
+                {'id': 'unsafe', 'kind': 'image', 'imageDataUrl': 'data:image/svg+xml;base64,PHN2Zz4='},
+            ],
+        })
+
+        self.assertEqual(config['layoutMode'], 'custom')
+        self.assertEqual(config['backgroundColor'], 'black')
+        self.assertEqual(config['backgroundImageDataUrl'], image_data_url)
+        self.assertEqual(config['backgroundImageFileName'], 'event-bg.png')
+        self.assertEqual(config['backgroundFit'], 'contain')
+        self.assertEqual(len(config['elements']), 2)
+        self.assertEqual(config['elements'][0]['x'], 800)
+        self.assertEqual(config['elements'][0]['y'], 0)
+        self.assertEqual(config['elements'][0]['fontSize'], 200)
+        self.assertEqual(config['elements'][1]['x'], 680)
+        self.assertEqual(config['elements'][1]['y'], 400)
+
+    def test_custom_nameplate_renderer_uses_dynamic_text_and_uploaded_image(self):
+        image_data_url = make_test_logo_data_url(color=(0, 0, 255, 255), size=(40, 20))
+        config = {
+            'layoutMode': 'custom',
+            'backgroundColor': 'white',
+            'name': '张三',
+            'title': '技术专家',
+            'subtitle': '现象光伏',
+            'elements': [
+                {
+                    'id': 'name', 'kind': 'text', 'binding': 'name',
+                    'x': 400, 'y': 100, 'fontSize': 64, 'fontWeight': '700',
+                    'color': 'black', 'align': 'center',
+                },
+                {
+                    'id': 'logo', 'kind': 'image', 'imageDataUrl': image_data_url,
+                    'x': 20, 'y': 400, 'width': 120, 'height': 60,
+                },
+            ],
+        }
+
+        image = template_renderer.render_template_image('nameplate', config)
+
+        self.assertEqual(image.size, (800, 480))
+        self.assertEqual(image.getpixel((80, 430)), (0, 0, 255))
+        self.assertIsNotNone(ImageChops.difference(image, Image.new('RGB', image.size, 'white')).getbbox())
+
     def test_nameplate_logo_config_validates_image_and_position(self):
         logo_data_url = make_test_logo_data_url()
         config = backend.normalize_nameplate_template_config({

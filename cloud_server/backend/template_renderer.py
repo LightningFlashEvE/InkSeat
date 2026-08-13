@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 import numpy as np
 
 from six_color_epd import process_e6_image, E6_IDX2RGB
@@ -44,6 +44,7 @@ NAMEPLATE_COMPANY_CN = '现象创新（深圳）科技有限公司'
 NAMEPLATE_COMPANY_EN = 'Pheno Innovations Technology Co., Ltd.'
 _NAMEPLATE_ASSET_CACHE: dict[str, Image.Image] = {}
 NAMEPLATE_LOGO_MAX_BYTES = 512 * 1024
+NAMEPLATE_CUSTOM_BACKGROUND_MAX_BYTES = 2 * 1024 * 1024
 NAMEPLATE_LOGO_MAX_DIMENSION = 4096
 NAMEPLATE_LOGO_MAX_PIXELS = 4096 * 4096
 NAMEPLATE_LOGO_SCALE_MIN = 0.5
@@ -246,8 +247,10 @@ def _paste_nameplate_asset(img: Image.Image, filename: str, x: int, y: int, widt
     img.paste(asset, (x, y), asset)
 
 
-@lru_cache(maxsize=16)
-def _load_custom_nameplate_logo(data_url: str) -> Optional[Image.Image]:
+@lru_cache(maxsize=24)
+def _load_custom_nameplate_raster(
+    data_url: str, max_bytes: int = NAMEPLATE_LOGO_MAX_BYTES
+) -> Optional[Image.Image]:
     if not isinstance(data_url, str) or not data_url.startswith('data:image/'):
         return None
 
@@ -261,7 +264,7 @@ def _load_custom_nameplate_logo(data_url: str) -> Optional[Image.Image]:
 
     try:
         raw = base64.b64decode(payload, validate=True)
-        if not raw or len(raw) > NAMEPLATE_LOGO_MAX_BYTES:
+        if not raw or len(raw) > max_bytes:
             return None
         with Image.open(io.BytesIO(raw)) as logo:
             if (logo.format or '').upper() != expected_format:
@@ -278,6 +281,10 @@ def _load_custom_nameplate_logo(data_url: str) -> Optional[Image.Image]:
             return logo.convert('RGBA')
     except Exception:
         return None
+
+
+def _load_custom_nameplate_logo(data_url: str) -> Optional[Image.Image]:
+    return _load_custom_nameplate_raster(data_url, NAMEPLATE_LOGO_MAX_BYTES)
 
 
 def _contain_nameplate_asset(asset: Image.Image, width: int, height: int) -> Image.Image:
@@ -844,6 +851,9 @@ def _render_nameplate_image(config: Dict[str, Any]) -> Image.Image:
     if not name:
         name = '姓名'
 
+    if str(config.get('layoutMode') or '').strip().lower() == 'custom':
+        return _render_custom_nameplate_image(config, name, title, subtitle)
+
     img, draw = _create_base_canvas((255, 255, 255))
     if style == 'formal_blue':
         _draw_pheno_profile_nameplate(
@@ -859,10 +869,103 @@ def _render_nameplate_image(config: Dict[str, Any]) -> Image.Image:
     return img
 
 
+def _render_custom_nameplate_image(
+    config: Dict[str, Any], name: str, title: str, subtitle: str
+) -> Image.Image:
+    """Render a bounded user-designed background plus text/image element stack."""
+    color_map = {
+        'black': (0, 0, 0),
+        'white': (255, 255, 255),
+        'red': (255, 0, 0),
+        'green': (0, 255, 0),
+        'blue': (0, 0, 255),
+        'yellow': (255, 255, 0),
+    }
+    background_color = color_map.get(
+        str(config.get('backgroundColor') or 'white').lower(), (255, 255, 255)
+    )
+    img, draw = _create_base_canvas(background_color)
+
+    background = _load_custom_nameplate_raster(
+        str(config.get('backgroundImageDataUrl') or ''),
+        NAMEPLATE_CUSTOM_BACKGROUND_MAX_BYTES,
+    )
+    if background is not None:
+        background = background.convert('RGB')
+        fit = str(config.get('backgroundFit') or 'cover').lower()
+        if fit == 'contain':
+            fitted = ImageOps.contain(background, (800, 480), Image.LANCZOS)
+            paste_x = (800 - fitted.width) // 2
+            paste_y = (480 - fitted.height) // 2
+            img.paste(fitted, (paste_x, paste_y))
+        elif fit == 'stretch':
+            img.paste(background.resize((800, 480), Image.LANCZOS), (0, 0))
+        else:
+            img.paste(ImageOps.fit(background, (800, 480), Image.LANCZOS), (0, 0))
+        draw = ImageDraw.Draw(img)
+
+    binding_values = {
+        'name': name,
+        'title': title,
+        'subtitle': subtitle,
+    }
+    for element in config.get('elements') or []:
+        if not isinstance(element, dict):
+            continue
+        kind = str(element.get('kind') or '').lower()
+        if kind == 'text':
+            binding = str(element.get('binding') or 'static').lower()
+            text = binding_values.get(binding, str(element.get('text') or ''))
+            if not text:
+                continue
+            font_size = int(element.get('fontSize') or 64)
+            bold = str(element.get('fontWeight') or '700') == '700'
+            font = _get_nameplate_font(text, font_size, bold)
+            align = str(element.get('align') or 'center').lower()
+            anchor = {'left': 'lm', 'right': 'rm'}.get(align, 'mm')
+            x = float(element.get('x') or 0)
+            y = float(element.get('y') or 0)
+            fill = color_map.get(str(element.get('color') or 'black').lower(), (0, 0, 0))
+            try:
+                draw.text((x, y), text, font=font, fill=fill, anchor=anchor)
+            except (TypeError, ValueError):
+                bbox = draw.textbbox((0, 0), text, font=font)
+                text_width = bbox[2] - bbox[0]
+                text_height = bbox[3] - bbox[1]
+                if align == 'center':
+                    x -= text_width / 2
+                elif align == 'right':
+                    x -= text_width
+                draw.text((x, y - text_height / 2), text, font=font, fill=fill)
+        elif kind == 'image':
+            asset = _load_custom_nameplate_logo(str(element.get('imageDataUrl') or ''))
+            if asset is None:
+                continue
+            width = max(1, int(element.get('width') or 160))
+            height = max(1, int(element.get('height') or 80))
+            x = max(0, min(800 - width, int(round(float(element.get('x') or 0)))))
+            y = max(0, min(480 - height, int(round(float(element.get('y') or 0)))))
+            contained = _contain_nameplate_asset(asset, width, height)
+            paste_x = x + (width - contained.width) // 2
+            paste_y = y + (height - contained.height) // 2
+            img.paste(contained, (paste_x, paste_y), contained)
+    return img
+
+
 def _safe_template_log_config(config: Dict[str, Any]) -> Dict[str, Any]:
     log_config = dict(config or {})
     if log_config.get('logoDataUrl'):
         log_config['logoDataUrl'] = f'<custom logo: {len(log_config["logoDataUrl"])} chars>'
+    if log_config.get('backgroundImageDataUrl'):
+        log_config['backgroundImageDataUrl'] = '<custom background>'
+    if isinstance(log_config.get('elements'), list):
+        log_config['elements'] = [
+            {
+                **element,
+                **({'imageDataUrl': '<custom image>'} if element.get('imageDataUrl') else {}),
+            }
+            for element in log_config['elements'] if isinstance(element, dict)
+        ]
     return log_config
 
 

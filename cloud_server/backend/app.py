@@ -179,6 +179,11 @@ PAGE_MAX_TYPE_CHARS = 32
 PAGE_MAX_DATA_BYTES = 4 * 1024 * 1024
 PAGE_MAX_THUMBNAIL_BYTES = 256 * 1024
 NAMEPLATE_LOGO_MAX_BYTES = 512 * 1024
+NAMEPLATE_CUSTOM_BACKGROUND_MAX_BYTES = 2 * 1024 * 1024
+NAMEPLATE_CUSTOM_MAX_ELEMENTS = 24
+NAMEPLATE_CUSTOM_MAX_IMAGE_ELEMENTS = 8
+NAMEPLATE_CUSTOM_TEXT_MAX_CHARS = 160
+NAMEPLATE_TEMPLATE_MAX_BODY_BYTES = 10 * 1024 * 1024
 NAMEPLATE_LOGO_MAX_DIMENSION = 4096
 NAMEPLATE_LOGO_MAX_PIXELS = 4096 * 4096
 NAMEPLATE_LOGO_SCALE_MIN = 0.5
@@ -191,6 +196,8 @@ NAMEPLATE_LOGO_MIME_FORMATS = {
 NAMEPLATE_DESIGN_CONFIG_KEYS = (
     'logoDataUrl', 'logoFileName', 'logoX', 'logoY', 'logoHidden', 'logoScale',
     'companyX', 'companyPositionMode',
+    'layoutMode', 'backgroundColor', 'backgroundImageDataUrl',
+    'backgroundImageFileName', 'backgroundFit', 'elements',
 )
 TEMPLATE_DAY_TIMEZONE = os.environ.get('TEMPLATE_DAY_TIMEZONE', 'Asia/Shanghai')
 try:
@@ -718,8 +725,8 @@ def resolve_nameplate_target_devices(owner: str, requested_device_ids) -> tuple[
     ), []
 
 
-def normalize_nameplate_logo_data_url(value) -> str:
-    """Validate and canonicalize a user-supplied raster logo data URL."""
+def normalize_nameplate_raster_data_url(value, max_bytes=NAMEPLATE_LOGO_MAX_BYTES) -> str:
+    """Validate and canonicalize a user-supplied raster image data URL."""
     if not isinstance(value, str) or not value.startswith('data:image/'):
         return ''
 
@@ -735,7 +742,7 @@ def normalize_nameplate_logo_data_url(value) -> str:
         raw = base64.b64decode(payload, validate=True)
     except Exception:
         return ''
-    if not raw or len(raw) > NAMEPLATE_LOGO_MAX_BYTES:
+    if not raw or len(raw) > max_bytes:
         return ''
 
     try:
@@ -756,6 +763,83 @@ def normalize_nameplate_logo_data_url(value) -> str:
 
     encoded = base64.b64encode(raw).decode('ascii')
     return f'data:{mime_type};base64,{encoded}'
+
+
+def normalize_nameplate_logo_data_url(value) -> str:
+    """Validate and canonicalize a user-supplied raster logo data URL."""
+    return normalize_nameplate_raster_data_url(value, NAMEPLATE_LOGO_MAX_BYTES)
+
+
+def _finite_number(value, default=0.0) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        return float(value)
+    return float(default)
+
+
+def normalize_nameplate_custom_elements(raw_elements) -> list:
+    """Normalize bounded custom-canvas text and image elements."""
+    if not isinstance(raw_elements, list):
+        return []
+
+    elements = []
+    image_count = 0
+    allowed_bindings = {'static', 'name', 'title', 'subtitle'}
+    allowed_colors = {'black', 'white', 'red', 'green', 'blue', 'yellow'}
+    allowed_alignments = {'left', 'center', 'right'}
+    for index, raw in enumerate(raw_elements[:NAMEPLATE_CUSTOM_MAX_ELEMENTS]):
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get('kind') or '').strip().lower()
+        element_id = str(raw.get('id') or f'element-{index + 1}').strip()[:48]
+        x = min(max(round(_finite_number(raw.get('x'), EPD_WIDTH / 2), 2), 0), EPD_WIDTH)
+        y = min(max(round(_finite_number(raw.get('y'), EPD_HEIGHT / 2), 2), 0), EPD_HEIGHT)
+
+        if kind == 'text':
+            binding = str(raw.get('binding') or 'static').strip().lower()
+            if binding not in allowed_bindings:
+                binding = 'static'
+            text = str(raw.get('text') or '').replace('\x00', '').strip()
+            text = text[:NAMEPLATE_CUSTOM_TEXT_MAX_CHARS]
+            if binding == 'static' and not text:
+                continue
+            color = str(raw.get('color') or 'black').strip().lower()
+            if color not in allowed_colors:
+                color = 'black'
+            align = str(raw.get('align') or 'center').strip().lower()
+            if align not in allowed_alignments:
+                align = 'center'
+            elements.append({
+                'id': element_id,
+                'kind': 'text',
+                'binding': binding,
+                'text': text,
+                'x': x,
+                'y': y,
+                'fontSize': min(max(int(round(_finite_number(raw.get('fontSize'), 64))), 16), 200),
+                'fontWeight': '700' if str(raw.get('fontWeight') or '700') == '700' else '400',
+                'color': color,
+                'align': align,
+            })
+        elif kind == 'image' and image_count < NAMEPLATE_CUSTOM_MAX_IMAGE_ELEMENTS:
+            data_url = normalize_nameplate_raster_data_url(
+                raw.get('imageDataUrl'), NAMEPLATE_LOGO_MAX_BYTES
+            )
+            if not data_url:
+                continue
+            width = min(max(int(round(_finite_number(raw.get('width'), 160))), 16), EPD_WIDTH)
+            height = min(max(int(round(_finite_number(raw.get('height'), 80))), 16), EPD_HEIGHT)
+            elements.append({
+                'id': element_id,
+                'kind': 'image',
+                'imageDataUrl': data_url,
+                'fileName': str(raw.get('fileName') or '').strip()[:100],
+                'x': min(x, EPD_WIDTH - width),
+                'y': min(y, EPD_HEIGHT - height),
+                'width': width,
+                'height': height,
+            })
+            image_count += 1
+    return elements
 
 
 def merge_nameplate_design_config(config: dict, source_config: dict) -> dict:
@@ -793,6 +877,22 @@ def normalize_nameplate_template_config(raw_config) -> dict:
         'title': str(raw_config.get('title') or '').strip()[:40],
         'subtitle': str(raw_config.get('subtitle') or '').strip()[:40],
     }
+
+    if str(raw_config.get('layoutMode') or '').strip().lower() == 'custom':
+        config['layoutMode'] = 'custom'
+        background_color = str(raw_config.get('backgroundColor') or 'white').strip().lower()
+        config['backgroundColor'] = background_color if background_color in ('white', 'black') else 'white'
+        background_data_url = normalize_nameplate_raster_data_url(
+            raw_config.get('backgroundImageDataUrl'), NAMEPLATE_CUSTOM_BACKGROUND_MAX_BYTES
+        )
+        if background_data_url:
+            config['backgroundImageDataUrl'] = background_data_url
+            background_file_name = str(raw_config.get('backgroundImageFileName') or '').strip()
+            if background_file_name:
+                config['backgroundImageFileName'] = background_file_name[:100]
+        background_fit = str(raw_config.get('backgroundFit') or 'cover').strip().lower()
+        config['backgroundFit'] = background_fit if background_fit in ('cover', 'contain', 'stretch') else 'cover'
+        config['elements'] = normalize_nameplate_custom_elements(raw_config.get('elements'))
 
     logo_data_url = normalize_nameplate_logo_data_url(raw_config.get('logoDataUrl'))
     if logo_data_url:
@@ -3491,6 +3591,8 @@ def get_saved_nameplate_template(template_id):
 def save_saved_nameplate_template():
     """新建或更新当前账号保存的会议名牌模板。"""
     try:
+        if request.content_length is not None and request.content_length > NAMEPLATE_TEMPLATE_MAX_BODY_BYTES:
+            return jsonify({'success': False, 'error': '模板内容不能超过 10MB'}), 413
         if saved_nameplate_templates_collection is None:
             return jsonify({'success': False, 'error': 'Database not connected'}), 500
 
@@ -3999,6 +4101,8 @@ def device_set_template():
 def preview_nameplate():
     """生成一张不落库、不下发的实际墨水屏铭牌预览。"""
     try:
+        if request.content_length is not None and request.content_length > NAMEPLATE_TEMPLATE_MAX_BODY_BYTES:
+            return jsonify({'success': False, 'error': '模板内容不能超过 10MB'}), 413
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
             return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400
@@ -4040,6 +4144,8 @@ def dispatch_nameplates():
     支持逐人姓名、职位和公司；逐人字段缺失时回退到统一模板配置。
     """
     try:
+        if request.content_length is not None and request.content_length > NAMEPLATE_TEMPLATE_MAX_BODY_BYTES:
+            return jsonify({'success': False, 'error': '模板内容不能超过 10MB'}), 413
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
             return jsonify({'success': False, 'error': 'Invalid JSON payload'}), 400

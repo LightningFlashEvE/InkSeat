@@ -6481,6 +6481,240 @@ body.control-page .panel-tab {
     outline-offset: 2px;
 }
 
+/* 自定义名牌模板：右侧状态卡与直接操作控件 */
+.control-page .current-template-card {
+    display: grid;
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 12px;
+    align-items: center;
+    width: 100%;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--bg-secondary);
+}
+
+.control-page .current-template-card.is-unsaved {
+    border-color: color-mix(in srgb, var(--primary) 58%, var(--border));
+    box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.control-page .current-template-card canvas {
+    display: block;
+    width: 96px;
+    height: 58px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+    object-fit: contain;
+}
+
+.control-page .current-template-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.control-page .current-template-copy strong,
+.control-page .current-template-copy span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.control-page .current-template-copy strong {
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+
+.control-page .current-template-copy > span:last-child {
+    color: var(--text-light);
+    font-size: 0.76rem;
+}
+
+.control-page .current-template-badge {
+    align-self: flex-start;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--primary) 16%, transparent);
+    color: var(--primary) !important;
+    font-size: 0.7rem !important;
+    font-weight: 700;
+}
+
+.control-page .custom-template-section {
+    margin-top: 12px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--bg-secondary) 90%, transparent);
+}
+
+.control-page .custom-template-section-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.control-page .custom-template-section-heading > div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.control-page .custom-template-section-heading strong {
+    color: var(--text-primary);
+    font-size: 0.88rem;
+}
+
+.control-page .custom-template-section-heading span {
+    color: var(--text-light);
+    font-size: 0.74rem;
+    line-height: 1.4;
+}
+
+.control-page .custom-upload-button {
+    display: flex;
+    width: 100%;
+    min-height: 52px;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 10px;
+    border: 1px dashed color-mix(in srgb, var(--primary) 48%, var(--border));
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--primary) 7%, var(--bg-secondary));
+    color: var(--primary);
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+}
+
+.control-page .custom-upload-button.compact {
+    min-height: 44px;
+}
+
+.control-page .custom-upload-button:hover {
+    background: color-mix(in srgb, var(--primary) 12%, var(--bg-secondary));
+}
+
+.control-page .custom-inline-field {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 10px;
+    align-items: center;
+    margin-top: 10px;
+    color: var(--text-light);
+    font-size: 0.8rem;
+}
+
+.control-page .custom-control-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.control-page .custom-control-grid label,
+.control-page .custom-element-inspector label {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 5px;
+    color: var(--text-light);
+    font-size: 0.74rem;
+}
+
+.control-page .custom-element-list {
+    display: flex;
+    max-height: 188px;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+}
+
+.control-page .custom-element-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px;
+    align-items: center;
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    cursor: pointer;
+    text-align: left;
+}
+
+.control-page .custom-element-row.active {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 12%, var(--bg-secondary));
+}
+
+.control-page .custom-element-row span {
+    color: var(--text-light);
+    font-size: 0.7rem;
+}
+
+.control-page .custom-element-row strong {
+    overflow: hidden;
+    font-size: 0.8rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.control-page .custom-element-empty {
+    padding: 12px;
+    color: var(--text-light);
+    font-size: 0.78rem;
+    text-align: center;
+}
+
+.control-page .custom-element-inspector {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+
+.control-page .custom-element-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.control-page .custom-image-inspector {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    color: var(--text-light);
+    font-size: 0.75rem;
+}
+
+.control-page .custom-image-inspector strong {
+    overflow: hidden;
+    color: var(--text-primary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .control-page .custom-upload-button,
+    .control-page .custom-element-row,
+    .control-page .current-template-card {
+        transition: none !important;
+    }
+}
+
 .meeting-table-scroll-hint {
     display: none;
     margin: 0;
