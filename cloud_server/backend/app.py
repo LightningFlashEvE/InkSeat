@@ -874,6 +874,7 @@ def normalize_nameplate_template_config(raw_config) -> dict:
 
     config = {
         'backgroundStyle': style,
+        'name': str(raw_config.get('name') or raw_config.get('personName') or '').strip()[:NAMEPLATE_MAX_NAME_LEN],
         'title': str(raw_config.get('title') or '').strip()[:40],
         'subtitle': str(raw_config.get('subtitle') or '').strip()[:40],
     }

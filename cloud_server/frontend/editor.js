@@ -46,7 +46,7 @@ var customNameplateAssetCache = new Map();
 var customNameplateDirty = false;
 var applyingNameplateTemplateConfig = false;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260813customtemplate1';
+const CONTROL_LAZY_ASSET_VERSION = '20260813templateisolation1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -98,25 +98,25 @@ const BUILTIN_NAMEPLATE_TEMPLATES = [
         templateId: '__builtin_pheno_red',
         name: 'Pheno 红色底栏',
         builtin: true,
-        templateConfig: { backgroundStyle: 'formal_red', title: NAMEPLATE_TITLE_SAMPLE_CN, subtitle: '', sleepIntervalSeconds: 86400 },
+        templateConfig: { backgroundStyle: 'formal_red', name: '', title: NAMEPLATE_TITLE_SAMPLE_CN, subtitle: '', sleepIntervalSeconds: 86400 },
     },
     {
         templateId: '__builtin_pheno_green',
         name: 'Pheno 绿色底栏',
         builtin: true,
-        templateConfig: { backgroundStyle: 'formal_green', title: NAMEPLATE_TITLE_SAMPLE_CN, subtitle: '', sleepIntervalSeconds: 86400 },
+        templateConfig: { backgroundStyle: 'formal_green', name: '', title: NAMEPLATE_TITLE_SAMPLE_CN, subtitle: '', sleepIntervalSeconds: 86400 },
     },
     {
         templateId: '__builtin_pheno_band',
         name: 'Pheno 绿色横幅',
         builtin: true,
-        templateConfig: { backgroundStyle: 'plain', title: NAMEPLATE_TITLE_SAMPLE_CN, subtitle: '', sleepIntervalSeconds: 86400 },
+        templateConfig: { backgroundStyle: 'plain', name: '', title: NAMEPLATE_TITLE_SAMPLE_CN, subtitle: '', sleepIntervalSeconds: 86400 },
     },
     {
         templateId: '__builtin_pheno_profile',
         name: 'Pheno 职务名片',
         builtin: true,
-        templateConfig: { backgroundStyle: 'formal_blue', title: 'Technical Expert', subtitle: '', sleepIntervalSeconds: 86400 },
+        templateConfig: { backgroundStyle: 'formal_blue', name: '', title: 'Technical Expert', subtitle: '', sleepIntervalSeconds: 86400 },
     },
 ];
 
@@ -1475,6 +1475,7 @@ function getSavableNameplateTemplateConfig() {
     const config = getCurrentTemplateConfig();
     return {
         backgroundStyle: config.backgroundStyle || 'formal_red',
+        name: config.name || '',
         title: config.title || '',
         subtitle: config.subtitle || '',
         sleepIntervalSeconds: parseInt(config.sleepIntervalSeconds || '86400', 10) || 86400,
@@ -1499,10 +1500,11 @@ function applyNameplateTemplateConfig(config, options = {}) {
     const subtitleInput = document.getElementById('nameplateSubtitleInput');
     const wakeSelect = document.getElementById('nameplateWakeInterval');
 
-    if (nameInput && config.name !== undefined) nameInput.value = config.name || '';
+    // 预览文字属于当前模板。旧模板缺少字段时必须清空，不能沿用上一个模板的值。
+    if (nameInput) nameInput.value = config.name || '';
     if (styleSelect && config.backgroundStyle) styleSelect.value = config.backgroundStyle;
-    if (titleInput && config.title !== undefined) titleInput.value = config.title || '';
-    if (subtitleInput && config.subtitle !== undefined) subtitleInput.value = config.subtitle || '';
+    if (titleInput) titleInput.value = config.title || '';
+    if (subtitleInput) subtitleInput.value = config.subtitle || '';
     if (wakeSelect && config.sleepIntervalSeconds) wakeSelect.value = String(config.sleepIntervalSeconds);
     if (config.layoutMode === 'custom') {
         setCustomNameplateState(config, { render: false, dirty: false });
@@ -1647,12 +1649,14 @@ function startNewNameplateTemplate() {
     if (!confirmDiscardCustomNameplateChanges()) return;
     activeSavedNameplateTemplateId = '';
     const nameInput = document.getElementById('nameplateTemplateNameInput');
+    const previewNameInput = document.getElementById('nameplateNameInput');
     const titleInput = document.getElementById('nameplateTitleInput');
     const subtitleInput = document.getElementById('nameplateSubtitleInput');
     const styleSelect = document.getElementById('nameplateStyleSelect');
     const wakeSelect = document.getElementById('nameplateWakeInterval');
 
     if (nameInput) nameInput.value = '未命名自定义模板';
+    if (previewNameInput) previewNameInput.value = '';
     if (titleInput) titleInput.value = '';
     if (subtitleInput) subtitleInput.value = '';
     if (styleSelect) styleSelect.value = 'formal_red';
@@ -1667,12 +1671,19 @@ function startNewNameplateTemplate() {
     log('已新建空白自定义模板，可上传背景、添加文字和 Logo', 'info');
 }
 
-async function saveNameplateTemplate(options = {}) {
+async function saveNameplateTemplate() {
     const config = getSavableNameplateTemplateConfig();
+    const saveButton = document.getElementById('saveTemplateButton');
+    if (saveButton?.disabled) return;
+    if (saveButton) {
+        saveButton.disabled = true;
+        saveButton.textContent = '保存中…';
+    }
     try {
-        const templateId = (
-            options.asNew || isBuiltInNameplateTemplateId(activeSavedNameplateTemplateId)
-        ) ? '' : activeSavedNameplateTemplateId;
+        // 新建/内置模板首次保存时创建用户模板；已保存模板再次保存时更新原模板。
+        const templateId = isBuiltInNameplateTemplateId(activeSavedNameplateTemplateId)
+            ? ''
+            : activeSavedNameplateTemplateId;
         const response = await authFetch(`${API_BASE}/api/nameplate/templates`, {
             method: 'POST',
             headers: {
@@ -1706,12 +1717,12 @@ async function saveNameplateTemplate(options = {}) {
     } catch (error) {
         console.error('保存模板失败:', error);
         log('保存模板失败: ' + error.message, 'error');
+    } finally {
+        if (saveButton) {
+            saveButton.disabled = false;
+            saveButton.textContent = '保存模板';
+        }
     }
-}
-
-async function saveNameplateTemplateAsNew() {
-    activeSavedNameplateTemplateId = '';
-    await saveNameplateTemplate({ asNew: true });
 }
 
 async function deleteSavedNameplateTemplate(templateId) {
@@ -1951,7 +1962,7 @@ function renderNameplatePreview() {
 }
 
 function handleNameplatePreviewFieldInput(field) {
-    if (field !== 'name') markCustomNameplateDirty();
+    markCustomNameplateDirty();
     renderNameplatePreview();
 }
 

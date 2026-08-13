@@ -993,6 +993,7 @@ class BackendSecurityTests(unittest.TestCase):
             'name': '会务自定义模板',
             'templateConfig': {
                 'layoutMode': 'custom',
+                'name': '示例姓名',
                 'backgroundColor': 'white',
                 'backgroundImageDataUrl': image_data_url,
                 'backgroundFit': 'contain',
@@ -1013,11 +1014,13 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         saved = response.get_json()['template']
         self.assertEqual(saved['templateConfig']['layoutMode'], 'custom')
+        self.assertEqual(saved['templateConfig']['name'], '示例姓名')
         self.assertEqual(saved['templateConfig']['backgroundImageDataUrl'], image_data_url)
         self.assertEqual(len(saved['templateConfig']['elements']), 2)
         stored = backend.saved_nameplate_templates_collection.find_one({
             'owner': 'bob', 'templateId': saved['templateId'],
         })
+        self.assertEqual(stored['templateConfig']['name'], '示例姓名')
         self.assertEqual(stored['templateConfig']['elements'][1]['kind'], 'image')
 
     def test_legacy_page_without_device_scope_is_fail_closed(self):
