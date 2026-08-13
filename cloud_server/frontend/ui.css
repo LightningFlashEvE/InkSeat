@@ -1808,6 +1808,39 @@ body.control-page {
     height: auto !important;
 }
 
+.control-page .nameplate-inline-editor {
+    position: absolute;
+    z-index: 30;
+    box-sizing: border-box;
+    min-width: 96px;
+    margin: 0;
+    padding: 4px 12px;
+    border: 2px solid #60adff !important;
+    border-radius: 10px;
+    outline: none;
+    line-height: 1.08;
+    caret-color: #60adff;
+    box-shadow: 0 0 0 4px rgba(47, 128, 255, 0.20), 0 12px 34px rgba(0, 0, 0, 0.24);
+    transform-origin: center;
+}
+
+.control-page .nameplate-inline-editor[data-surface="dark"] {
+    color: #fff !important;
+    background: rgba(17, 24, 39, 0.94) !important;
+}
+
+.control-page .nameplate-inline-editor[data-surface="light"] {
+    color: #111827 !important;
+    background: rgba(255, 255, 255, 0.96) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .control-page .nameplate-inline-editor {
+        scroll-behavior: auto;
+        transition: none;
+    }
+}
+
 .control-page .canvas-status-badge {
     flex: 0 0 auto;
     width: fit-content;

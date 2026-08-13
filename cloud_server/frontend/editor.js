@@ -30,8 +30,10 @@ var currentNameplateLogoScale = 1;
 var currentNameplateCompanyX = null;
 var currentNameplateCompanyPositionMode = 'auto';
 var currentNameplateCompanyBounds = null;
+var currentNameplateTextBounds = { name: null, title: null, subtitle: null };
+var activeNameplateInlineEditor = null;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260807canvasbadge1';
+const CONTROL_LAZY_ASSET_VERSION = '20260813inlineedit1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -561,8 +563,8 @@ function configureEditorPageMode() {
     const companyHelp = document.getElementById('nameplateCompanyHelp');
     if (companyHelp) {
         companyHelp.textContent = isDeviceEditor
-            ? '可直接左右拖动画布中的公司名称；发布后仅更新当前设备。'
-            : '可直接左右拖动画布中的公司名称；位置会随模板保存。';
+            ? '双击画布中的姓名、职位或公司名称可直接编辑；公司名称还可左右拖动。'
+            : '双击画布中的姓名、职位或公司名称可直接编辑；公司位置会随模板保存。';
     }
     const logoHelp = document.getElementById('nameplateLogoHelp');
     if (logoHelp) {
@@ -1470,6 +1472,38 @@ function setNameplateCompanyBounds(ctx, x, y, width, height) {
     }
 }
 
+function setNameplateTextBounds(field, ctx, text, anchorX, anchorY, fontSize, options = {}) {
+    if (!Object.prototype.hasOwnProperty.call(currentNameplateTextBounds, field)) return;
+    const metrics = ctx.measureText(text);
+    const width = Math.max(1, metrics.width);
+    const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.78;
+    const descent = metrics.actualBoundingBoxDescent || fontSize * 0.22;
+    const height = Math.max(fontSize, ascent + descent);
+    const align = options.align || ctx.textAlign || 'left';
+    const baseline = options.baseline || ctx.textBaseline || 'alphabetic';
+    let x = anchorX;
+    let y = anchorY - ascent;
+
+    if (align === 'center') x -= width / 2;
+    else if (align === 'right' || align === 'end') x -= width;
+
+    if (baseline === 'middle') y = anchorY - height / 2;
+    else if (baseline === 'top' || baseline === 'hanging') y = anchorY;
+    else if (baseline === 'bottom' || baseline === 'ideographic') y = anchorY - height;
+
+    currentNameplateTextBounds[field] = {
+        x,
+        y,
+        width,
+        height,
+        fontSize,
+        fontWeight: options.fontWeight || '400',
+        color: options.color || ctx.fillStyle || 'black',
+        align,
+        text,
+    };
+}
+
 function drawPhenoFooterNameplate(ctx, width, height, name, style, roleText, companyText) {
     const accent = style === 'formal_green' ? '#00ff00' : '#ff0000';
     const footerTop = 385;
@@ -1488,12 +1522,19 @@ function drawPhenoFooterNameplate(ctx, width, height, name, style, roleText, com
     );
     ctx.font = nameplateCanvasFont(nameSize, '700', name);
     ctx.fillStyle = 'white';
-    ctx.fillText(name, width / 2, hasRole ? 155 : 184);
+    const nameY = hasRole ? 155 : 184;
+    ctx.fillText(name, width / 2, nameY);
+    setNameplateTextBounds('name', ctx, name, width / 2, nameY, nameSize, {
+        align: 'center', baseline: 'middle', fontWeight: '700', color: 'white'
+    });
 
     if (hasRole) {
         const roleSize = fitCanvasFontSizeWithWeight(ctx, roleText, 590, 48, 28, '400');
         ctx.font = nameplateCanvasFont(roleSize, '400', roleText);
         ctx.fillText(roleText, width / 2, NAMEPLATE_ROLE_CENTER_Y);
+        setNameplateTextBounds('title', ctx, roleText, width / 2, NAMEPLATE_ROLE_CENTER_Y, roleSize, {
+            align: 'center', baseline: 'middle', fontWeight: '400', color: 'white'
+        });
     }
 
     drawConfiguredNameplateLogo(
@@ -1522,6 +1563,9 @@ function drawPhenoFooterNameplate(ctx, width, height, name, style, roleText, com
     const companyX = resolveNameplateCompanyX(companyWidth, width);
     ctx.fillStyle = 'black';
     ctx.fillText(companyText, companyX, 430);
+    setNameplateTextBounds('subtitle', ctx, companyText, companyX, 430, companySize, {
+        align: 'left', baseline: 'middle', fontWeight: '700', color: 'black'
+    });
     setNameplateCompanyBounds(
         ctx, companyX, 430 - companySize / 2, companyWidth, companySize
     );
@@ -1543,12 +1587,19 @@ function drawPhenoGreenBandNameplate(ctx, width, height, name, roleText) {
     );
     ctx.font = nameplateCanvasFont(nameSize, '700', name);
     ctx.fillStyle = 'black';
-    ctx.fillText(name, width / 2, hasRole ? 155 : 184);
+    const nameY = hasRole ? 155 : 184;
+    ctx.fillText(name, width / 2, nameY);
+    setNameplateTextBounds('name', ctx, name, width / 2, nameY, nameSize, {
+        align: 'center', baseline: 'middle', fontWeight: '700', color: 'black'
+    });
 
     if (hasRole) {
         const roleSize = fitCanvasFontSizeWithWeight(ctx, roleText, 590, 48, 28, '400');
         ctx.font = nameplateCanvasFont(roleSize, '400', roleText);
         ctx.fillText(roleText, width / 2, NAMEPLATE_ROLE_CENTER_Y);
+        setNameplateTextBounds('title', ctx, roleText, width / 2, NAMEPLATE_ROLE_CENTER_Y, roleSize, {
+            align: 'center', baseline: 'middle', fontWeight: '400', color: 'black'
+        });
     }
 
     drawConfiguredNameplateLogo(ctx, 'whiteLogo', 276, 390, 248, 54, width, height);
@@ -1591,10 +1642,16 @@ function drawPhenoProfileNameplate(ctx, width, height, name, roleText, companyTe
     ctx.font = nameplateCanvasFont(nameSize, '700', name);
     ctx.fillStyle = 'black';
     ctx.fillText(name, textLeft, 151);
+    setNameplateTextBounds('name', ctx, name, textLeft, 151, nameSize, {
+        align: 'left', baseline: 'top', fontWeight: '700', color: 'black'
+    });
 
     if (roleText) {
         ctx.font = nameplateCanvasFont(roleSize, '400', roleText);
         ctx.fillText(roleText, textLeft, NAMEPLATE_PROFILE_ROLE_TOP);
+        setNameplateTextBounds('title', ctx, roleText, textLeft, NAMEPLATE_PROFILE_ROLE_TOP, roleSize, {
+            align: 'left', baseline: 'top', fontWeight: '400', color: 'black'
+        });
     }
 
     const companySize = fitCanvasFontSizeWithWeight(
@@ -1620,12 +1677,16 @@ function drawPhenoProfileNameplate(ctx, width, height, name, roleText, companyTe
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillText(companyText, textX, 402);
+    setNameplateTextBounds('subtitle', ctx, companyText, textX, 402, companySize, {
+        align: 'left', baseline: 'top', fontWeight: '400', color: 'black'
+    });
     setNameplateCompanyBounds(ctx, textX, 402, companyWidth, companySize);
 }
 
 function renderNameplateTemplate(ctx, width, height) {
     currentNameplateLogoBounds = null;
     currentNameplateCompanyBounds = null;
+    currentNameplateTextBounds = { name: null, title: null, subtitle: null };
     const name = document.getElementById('nameplateNameInput')?.value?.trim() || '姓名';
     const title = document.getElementById('nameplateTitleInput')?.value?.trim() || '';
     const subtitle = document.getElementById('nameplateSubtitleInput')?.value?.trim() || '';
@@ -1638,6 +1699,7 @@ function renderNameplateTemplate(ctx, width, height) {
     } else {
         drawPhenoFooterNameplate(ctx, width, height, name, style, title, subtitle || NAMEPLATE_COMPANY_CN);
     }
+    if (activeNameplateInlineEditor) updateNameplateInlineEditorLayout();
 }
 
 function renderWeatherTemplate(ctx, width, height) {
@@ -3004,6 +3066,166 @@ function getNameplateDragCursor(target) {
     return 'default';
 }
 
+function getNameplateInlineFieldConfig(field) {
+    const configs = {
+        name: { inputId: 'nameplateNameInput', label: '姓名', minWidth: 260 },
+        title: { inputId: 'nameplateTitleInput', label: '职位 / 副标题', minWidth: 220 },
+        subtitle: { inputId: 'nameplateSubtitleInput', label: '公司名称', minWidth: 240 },
+    };
+    return configs[field] || null;
+}
+
+function getNameplateInlineEditTarget(x, y) {
+    if (currentMode !== 'template' || currentTemplateId !== NAMEPLATE_TEMPLATE_ID) return null;
+    const padding = 12;
+    for (const field of ['name', 'title', 'subtitle']) {
+        const bounds = currentNameplateTextBounds[field];
+        if (bounds
+            && x >= bounds.x - padding && x <= bounds.x + bounds.width + padding
+            && y >= bounds.y - padding && y <= bounds.y + bounds.height + padding) {
+            return field;
+        }
+    }
+    return null;
+}
+
+function getNameplateCanvasCursor(x, y) {
+    const dragCursor = getNameplateDragCursor(getNameplateDragTarget(x, y));
+    if (dragCursor !== 'default') return dragCursor;
+    return getNameplateInlineEditTarget(x, y) ? 'text' : 'default';
+}
+
+function updateNameplateInlineEditorLayout() {
+    const state = activeNameplateInlineEditor;
+    if (!state || state.closing || !state.input?.isConnected) return;
+    const canvas = document.getElementById('mainCanvas');
+    const container = document.getElementById('canvasContainer');
+    if (!canvas || !container) return;
+
+    const latestBounds = currentNameplateTextBounds[state.field] || state.lastBounds;
+    if (!latestBounds) return;
+    state.lastBounds = latestBounds;
+
+    const canvasRect = canvas.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    if (!canvasRect.width || !canvasRect.height) return;
+    const scaleX = canvasRect.width / canvas.width;
+    const scaleY = canvasRect.height / canvas.height;
+    const config = getNameplateInlineFieldConfig(state.field);
+    const widthInCanvas = Math.min(
+        canvas.width - 24,
+        Math.max(config?.minWidth || 220, latestBounds.width + 32)
+    );
+    const heightInCanvas = Math.min(
+        166,
+        Math.max(state.field === 'name' ? 64 : 46, latestBounds.height + 18)
+    );
+    const centerAligned = latestBounds.align === 'center' || state.field === 'subtitle';
+    const preferredLeft = centerAligned
+        ? latestBounds.x + latestBounds.width / 2 - widthInCanvas / 2
+        : latestBounds.x - 16;
+    const preferredTop = latestBounds.y + latestBounds.height / 2 - heightInCanvas / 2;
+    const leftInCanvas = Math.max(12, Math.min(canvas.width - widthInCanvas - 12, preferredLeft));
+    const topInCanvas = Math.max(10, Math.min(canvas.height - heightInCanvas - 10, preferredTop));
+    const left = canvasRect.left - containerRect.left + leftInCanvas * scaleX;
+    const top = canvasRect.top - containerRect.top + topInCanvas * scaleY;
+    const height = Math.max(38, heightInCanvas * scaleY);
+
+    state.input.style.left = `${left}px`;
+    state.input.style.top = `${top}px`;
+    state.input.style.width = `${widthInCanvas * scaleX}px`;
+    state.input.style.height = `${height}px`;
+    state.input.style.fontSize = `${Math.max(16, Math.min(latestBounds.fontSize * scaleY, height - 12))}px`;
+    state.input.style.fontWeight = latestBounds.fontWeight;
+    state.input.style.textAlign = latestBounds.align === 'center' ? 'center' : 'left';
+    state.input.style.fontFamily = /[\u4e00-\u9fff]/.test(state.input.value || latestBounds.text)
+        ? EPD_CANVAS_FONT_FAMILY
+        : 'Arial, "Helvetica Neue", "Segoe UI", sans-serif';
+    state.input.dataset.surface = String(latestBounds.color).toLowerCase() === 'white'
+        ? 'dark'
+        : 'light';
+}
+
+function finishNameplateInlineEdit(options = {}) {
+    const state = activeNameplateInlineEditor;
+    if (!state || state.closing) return;
+    state.closing = true;
+
+    if (options.cancel) {
+        state.sourceInput.value = state.originalValue;
+    } else if (state.dirty) {
+        state.sourceInput.value = state.input.value;
+    }
+
+    state.input.remove();
+    state.container?.classList.remove('is-inline-editing');
+    activeNameplateInlineEditor = null;
+    renderNameplatePreview();
+}
+
+function openNameplateInlineEditor(field) {
+    const config = getNameplateInlineFieldConfig(field);
+    const bounds = currentNameplateTextBounds[field];
+    const container = document.getElementById('canvasContainer');
+    const sourceInput = config ? document.getElementById(config.inputId) : null;
+    if (!config || !bounds || !container || !sourceInput) return false;
+
+    if (activeNameplateInlineEditor) finishNameplateInlineEdit();
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = `nameplateInlineEditor-${field}`;
+    input.className = 'nameplate-inline-editor';
+    input.setAttribute('aria-label', `直接编辑${config.label}`);
+    input.setAttribute('autocomplete', 'off');
+    input.spellcheck = false;
+    input.maxLength = sourceInput.maxLength > 0 ? sourceInput.maxLength : 240;
+    input.value = sourceInput.value || bounds.text || '';
+
+    const state = {
+        field,
+        input,
+        sourceInput,
+        container,
+        originalValue: sourceInput.value,
+        lastBounds: bounds,
+        dirty: false,
+        closing: false,
+    };
+    activeNameplateInlineEditor = state;
+    container.classList.add('is-inline-editing');
+    container.appendChild(input);
+    updateNameplateInlineEditorLayout();
+
+    const stopCanvasEvent = event => event.stopPropagation();
+    input.addEventListener('mousedown', stopCanvasEvent);
+    input.addEventListener('dblclick', stopCanvasEvent);
+    input.addEventListener('input', () => {
+        if (state.closing) return;
+        state.dirty = true;
+        sourceInput.value = input.value;
+        renderNameplatePreview();
+    });
+    input.addEventListener('keydown', event => {
+        event.stopPropagation();
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            finishNameplateInlineEdit();
+        } else if (event.key === 'Escape') {
+            event.preventDefault();
+            finishNameplateInlineEdit({ cancel: true });
+        }
+    });
+    input.addEventListener('blur', () => finishNameplateInlineEdit());
+
+    requestAnimationFrame(() => {
+        if (activeNameplateInlineEditor !== state) return;
+        input.focus({ preventScroll: true });
+        input.select();
+    });
+    return true;
+}
+
 function moveDraggedNameplateLogo(x, y, canvas) {
     const bounds = currentNameplateLogoBounds;
     if (!bounds || !canvas) return false;
@@ -3060,6 +3282,17 @@ function initCanvasEvents() {
         };
     }
 
+    canvas.title = '双击姓名、职位或公司名称可直接编辑';
+    canvas.ondblclick = function(e) {
+        const coords = getCanvasCoords(e);
+        const field = getNameplateInlineEditTarget(coords.x, coords.y);
+        if (!field) return;
+        e.preventDefault();
+        e.stopPropagation();
+        finishCanvasDrag();
+        openNameplateInlineEditor(field);
+    };
+
     // 检测点击的文字项
     function findClickedTextItem(x, y, items, selectedIdVar) {
         const ctx = canvas.getContext('2d');
@@ -3094,10 +3327,7 @@ function initCanvasEvents() {
             canvasDragState.isDragging = true;
             canvasDragState.dragTarget = 'nameplate-company';
             canvasDragState.itemOffsetX = x - currentNameplateCompanyBounds.x;
-            currentNameplateCompanyX = currentNameplateCompanyBounds.x;
-            currentNameplateCompanyPositionMode = 'custom';
             canvas.style.cursor = 'ew-resize';
-            updateNameplateCompanyControls();
             renderCanvas();
         } else if (nameplateTarget === 'nameplate-logo') {
             canvasDragState.isDragging = true;
@@ -3176,9 +3406,7 @@ function initCanvasEvents() {
     canvas.onmousemove = function(e) {
         const coords = getCanvasCoords(e);
         if (!canvasDragState.isDragging) {
-            canvas.style.cursor = getNameplateDragCursor(
-                getNameplateDragTarget(coords.x, coords.y)
-            );
+            canvas.style.cursor = getNameplateCanvasCursor(coords.x, coords.y);
             return;
         }
         e.preventDefault();
@@ -3246,9 +3474,7 @@ function initCanvasEvents() {
         e.preventDefault();
         finishCanvasDrag();
         const coords = getCanvasCoords(e);
-        canvas.style.cursor = getNameplateDragCursor(
-            getNameplateDragTarget(coords.x, coords.y)
-        );
+        canvas.style.cursor = getNameplateCanvasCursor(coords.x, coords.y);
     };
 
     canvas.onmouseleave = function(e) {
@@ -3321,6 +3547,9 @@ function initCanvasEvents() {
     document.addEventListener('mouseup', function(e) {
         finishCanvasDrag();
     });
+
+    window.addEventListener('resize', updateNameplateInlineEditorLayout);
+    document.addEventListener('scroll', updateNameplateInlineEditorLayout, true);
 
     // 设置鼠标样式
     canvas.style.cursor = 'default';
