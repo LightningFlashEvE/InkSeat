@@ -46,7 +46,7 @@ var customNameplateAssetCache = new Map();
 var customNameplateDirty = false;
 var applyingNameplateTemplateConfig = false;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260813templateisolation1';
+const CONTROL_LAZY_ASSET_VERSION = '20260817templateuifix1';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -884,7 +884,11 @@ function deleteSelectedCustomElement() {
 
 function updateCustomNameplateControls(options = {}) {
     const uploadLabel = document.getElementById('customBackgroundUploadLabel');
-    if (uploadLabel) uploadLabel.textContent = customNameplateState.backgroundImageFileName || '上传背景图片';
+    if (uploadLabel) {
+        const fileName = customNameplateState.backgroundImageFileName || '';
+        uploadLabel.textContent = fileName || '上传背景图片';
+        uploadLabel.title = fileName;
+    }
     const removeButton = document.getElementById('removeCustomBackgroundButton');
     if (removeButton) removeButton.disabled = !customNameplateState.backgroundImageDataUrl;
     const fitSelect = document.getElementById('customBackgroundFitSelect');
@@ -1359,8 +1363,10 @@ function renderTemplateGrid() {
         <div class="current-template-card${unsaved ? ' is-unsaved' : ''}" aria-live="polite">
             <canvas id="currentTemplatePreviewCanvas" width="160" height="96" aria-label="当前模板缩略图"></canvas>
             <div class="current-template-copy">
-                <span class="current-template-badge">${badge}</span>
-                <strong>${escapeHtml(displayName)}</strong>
+                <div class="current-template-heading">
+                    <strong>${escapeHtml(displayName)}</strong>
+                    <span class="current-template-badge">${badge}</span>
+                </div>
                 <span>${escapeHtml(description)}</span>
             </div>
         </div>

@@ -6482,6 +6482,10 @@ body.control-page .panel-tab {
 }
 
 /* 自定义名牌模板：右侧状态卡与直接操作控件 */
+.control-page #templateGrid {
+    grid-template-columns: minmax(0, 1fr);
+}
+
 .control-page .current-template-card {
     display: grid;
     grid-template-columns: 96px minmax(0, 1fr);
@@ -6516,14 +6520,23 @@ body.control-page .panel-tab {
     gap: 3px;
 }
 
-.control-page .current-template-copy strong,
-.control-page .current-template-copy span {
+.control-page .current-template-heading {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 7px;
+}
+
+.control-page .current-template-heading strong,
+.control-page .current-template-copy > span:last-child {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.control-page .current-template-copy strong {
+.control-page .current-template-heading strong {
+    min-width: 0;
+    flex: 1 1 auto;
     color: var(--text-primary);
     font-size: 0.9rem;
 }
@@ -6534,7 +6547,7 @@ body.control-page .panel-tab {
 }
 
 .control-page .current-template-badge {
-    align-self: flex-start;
+    flex: 0 0 auto;
     padding: 2px 7px;
     border-radius: 999px;
     background: color-mix(in srgb, var(--primary) 16%, transparent);
@@ -6600,6 +6613,19 @@ body.control-page .panel-tab {
 
 .control-page .custom-upload-button:hover {
     background: color-mix(in srgb, var(--primary) 12%, var(--bg-secondary));
+}
+
+.control-page .custom-upload-button > span[aria-hidden="true"] {
+    flex: 0 0 auto;
+}
+
+.control-page .custom-upload-button > span:last-child {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .control-page .custom-inline-field {
