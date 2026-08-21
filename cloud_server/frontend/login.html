@@ -134,8 +134,8 @@
             color: #38a169;
         }
     </style>
-    <script src="theme.js?v=20260817templateuifix1"></script>
-    <link rel="stylesheet" href="ui.css?v=20260817templateuifix1">
+    <script src="theme.js?v=20260821devicesort7"></script>
+    <link rel="stylesheet" href="ui.css?v=20260821devicesort7">
 </head>
 <body class="login-page">
     <div class="card">
@@ -153,12 +153,6 @@
                 <label for="password">密码</label>
                 <input id="password" type="password" placeholder="输入密码" autocomplete="current-password">
             </div>
-            <div class="field">
-                <label for="bootstrapToken">首次管理员引导令牌</label>
-                <input id="bootstrapToken" type="password" placeholder="仅首次注册管理员时填写" autocomplete="off">
-                <small>取自服务器 <code>ADMIN_BOOTSTRAP_TOKEN</code>；普通登录请留空。</small>
-            </div>
-
             <div class="actions">
                 <button class="btn btn-secondary" type="button" onclick="onRegister()">注册</button>
                 <button class="btn btn-primary" type="submit">登录</button>
@@ -166,9 +160,10 @@
         </form>
 
         <div id="status" class="status">首次使用请先注册账号</div>
+        <p class="login-help">忘记密码？<a href="tel:13227951412">联系系统维护者：13227951412</a></p>
     </div>
 
-    <script src="auth.js?v=20260817templateuifix1"></script>
+    <script src="auth.js?v=20260821devicesort7"></script>
     <script>
         function setStatus(msg, type) {
             const el = document.getElementById('status');
@@ -179,7 +174,6 @@
         async function onRegister() {
             const username = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value.trim();
-            const bootstrapToken = document.getElementById('bootstrapToken').value.trim();
 
             if (!username || !password) {
                 setStatus('用户名和密码不能为空', 'error');
@@ -190,11 +184,10 @@
                 const res = await fetch('/api/auth/register', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ username, password, bootstrapToken })
+                    body: JSON.stringify({ username, password })
                 });
                 const data = await res.json().catch(() => ({}));
                 if (res.ok && data.success) {
-                    document.getElementById('bootstrapToken').value = '';
                     setStatus('注册成功，请点击登录', 'success');
                 } else if (res.status === 429) {
                     setStatus('操作过于频繁，请稍后再试', 'error');
@@ -227,7 +220,9 @@
                     setAuth(data.token, data.user);
                     setStatus('登录成功，正在跳转...', 'success');
                     setTimeout(() => {
-                        window.location.href = 'index.html?v=20260817templateuifix1';
+                        window.location.href = data.user && data.user.mustChangePassword
+                            ? 'change-password.html?v=20260821devicesort7'
+                            : 'index.html?v=20260821devicesort7';
                     }, 600);
                 } else if (res.status === 429) {
                     setStatus('登录尝试过于频繁，请稍后再试', 'error');

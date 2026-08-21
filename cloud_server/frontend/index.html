@@ -32,32 +32,32 @@
             background: #eef5f7 !important;
         }
     </style>
-    <script src="theme.js?v=20260817templateuifix1"></script>
-    <link rel="stylesheet" href="ui.css?v=20260817templateuifix1">
+    <script src="theme.js?v=20260821devicesort7"></script>
+    <link rel="stylesheet" href="ui.css?v=20260821devicesort7">
 </head>
 <body class="meeting-device-page">
     <div class="meeting-page">
         <section class="meeting-shell">
             <aside class="meeting-sidebar" aria-label="主导航">
-                <a class="meeting-brand" href="index.html?v=20260817templateuifix1" aria-label="会议牌管理">
+                <a class="meeting-brand" href="index.html?v=20260821devicesort7" aria-label="会议牌管理">
                     <span class="meeting-brand-mark" aria-hidden="true"></span>
                     <span>会议牌管理</span>
                 </a>
 
                 <nav class="meeting-nav">
-                    <a class="meeting-nav-item active" href="index.html?v=20260817templateuifix1" aria-current="page">
+                    <a class="meeting-nav-item active" href="index.html?v=20260821devicesort7" aria-current="page">
                         <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
                         <span>设备</span>
                     </a>
-                    <a class="meeting-nav-item" href="nameplates.html?v=20260817templateuifix1">
+                    <a class="meeting-nav-item" href="nameplates.html?v=20260821devicesort7">
                         <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
                         <span>名单下发</span>
                     </a>
-                    <a class="meeting-nav-item" href="control.html?v=20260817templateuifix1">
+                    <a class="meeting-nav-item" href="control.html?v=20260821devicesort7">
                         <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
                         <span>模板设计</span>
                     </a>
-                    <a class="meeting-nav-item" href="settings.html?v=20260817templateuifix1">
+                    <a class="meeting-nav-item" href="settings.html?v=20260821devicesort7">
                         <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
                         <span>设置</span>
                     </a>
@@ -122,7 +122,7 @@
                                     </button>
                                 </div>
                             </div>
-                            <p class="meeting-table-scroll-hint" role="note">表格可左右滑动，查看状态和操作</p>
+                            <p class="meeting-table-scroll-hint" role="note">按住设备列表条可拖动排序；表格可左右滑动查看状态和操作</p>
                             <div class="meeting-table-wrap">
                                 <table class="meeting-table">
                                     <thead>
@@ -196,11 +196,17 @@
                                     <div class="meeting-info-row"><span>错误原因</span><span id="selectedDeviceUpdateError">无</span></div>
                                     <div class="meeting-info-row"><span>诊断时间</span><span id="selectedDeviceUpdateAt">未上报</span></div>
                                 </div>
-                                <div class="meeting-device-preview" aria-hidden="true">
-                                    <div class="meeting-screen">
-                                        <h3 id="selectedPreviewName">会议牌</h3>
-                                        <p id="selectedPreviewContent">会议名牌</p>
+                                <div class="meeting-device-preview-wrap" aria-live="polite">
+                                    <div class="meeting-device-preview" id="selectedDevicePreview">
+                                        <div class="meeting-screen is-placeholder" id="selectedPreviewScreen">
+                                            <img id="selectedPreviewImage" alt="所选设备的云端屏幕画面" hidden>
+                                            <div class="meeting-screen-placeholder" id="selectedPreviewPlaceholder">
+                                                <h3 id="selectedPreviewName">会议牌</h3>
+                                                <p id="selectedPreviewContent">会议名牌</p>
+                                            </div>
+                                        </div>
                                     </div>
+                                    <span class="meeting-preview-state" id="selectedPreviewState">云端画面</span>
                                 </div>
                             </div>
                         </section>
@@ -237,7 +243,7 @@
         </section>
     </div>
 
-    <script src="auth.js?v=20260817templateuifix1"></script>
-    <script src="devices.js?v=20260817templateuifix1"></script>
+    <script src="auth.js?v=20260821devicesort7"></script>
+    <script src="devices.js?v=20260821devicesort7"></script>
 </body>
 </html>

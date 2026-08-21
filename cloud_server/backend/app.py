@@ -57,7 +57,6 @@ if Config.CORS_ORIGINS:
         resources={r'/api/*': {'origins': Config.CORS_ORIGINS}},
         allow_headers=[
             'Authorization', 'Content-Type', 'X-Device-Key',
-            'X-Admin-Bootstrap-Token',
         ],
     )
 
@@ -66,16 +65,26 @@ EPD_WIDTH = 800
 EPD_HEIGHT = 480
 EPD_EXPECTED_CHARS = EPD_WIDTH * EPD_HEIGHT  # 384000
 EPD_ALLOWED_CHARS = set('abcdefghijklmnop')
+# a~p 编码的半字节值对应墨水屏驱动颜色。未定义的 4/7~15 不会由
+# 正常的六色渲染生成；预览中按白色处理，以免把保留值误显示成有效颜色。
+EPD_PREVIEW_RGB = np.array([
+    (0, 0, 0), (255, 255, 255), (255, 255, 0), (255, 0, 0),
+    (255, 255, 255), (0, 0, 255), (0, 255, 0), (255, 255, 255),
+    (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255),
+    (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255),
+], dtype=np.uint8)
 DEVICE_ID_PATTERN = re.compile(r'^(?:[0-9A-F]{6}|[0-9A-F]{12})$')
 DEFAULT_SLEEP_INTERVAL_SECONDS = 12 * 60 * 60
 MIN_SLEEP_INTERVAL_SECONDS = 5 * 60
 MAX_SLEEP_INTERVAL_SECONDS = 30 * 24 * 60 * 60
 DEVICE_ONLINE_WINDOW_SECONDS = 5 * 60
-DEVICE_WAKE_REPORT_GRACE_SECONDS = 5 * 60
+# Deep-sleep 的 RTC 定时器、WiFi 关联和短暂的云端波动都会带来上报偏差。
+# 不能仅因预计唤醒后几分钟尚未收到状态包就将设备判为离线。
+DEVICE_WAKE_REPORT_GRACE_SECONDS = 2 * 60 * 60
 ALLOW_REGISTRATION = os.environ.get('ALLOW_REGISTRATION', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
 AUTH_TOKEN_TTL_SECONDS = max(300, int(os.environ.get('AUTH_TOKEN_TTL_SECONDS', 7 * 24 * 60 * 60)))
+SERVICE_ADMIN_TOKEN_TTL_SECONDS = Config.SERVICE_ADMIN_TOKEN_TTL_SECONDS
 DEVICE_AUTH_REQUIRED = Config.DEVICE_AUTH_REQUIRED
-ADMIN_BOOTSTRAP_TOKEN = Config.ADMIN_BOOTSTRAP_TOKEN
 PAIRING_MAX_FAILED_ATTEMPTS = Config.PAIRING_MAX_FAILED_ATTEMPTS
 PAIRING_LOCK_SECONDS = Config.PAIRING_LOCK_SECONDS
 DEVICE_STATUS_MAX_BODY_BYTES = Config.DEVICE_STATUS_MAX_BODY_BYTES
@@ -1615,10 +1624,30 @@ def validate_epd_text_payload(image_data: str):
         return False, f'Invalid chars: {bad}'
     return True, None
 
+
+def render_epd_preview_png(image_data: str) -> bytes:
+    """Convert the device's packed a~p frame into its visible 800x480 PNG."""
+    valid, error = validate_epd_text_payload(image_data)
+    if not valid:
+        raise ValueError(error)
+
+    packed_nibbles = np.frombuffer(image_data.encode('ascii'), dtype=np.uint8) - ord('a')
+    packed_nibbles = packed_nibbles.reshape(EPD_HEIGHT, EPD_WIDTH // 2, 2)
+    pixel_indices = np.empty((EPD_HEIGHT, EPD_WIDTH), dtype=np.uint8)
+    # Firmware stores the low nibble first, then the high nibble, per byte.
+    pixel_indices[:, 0::2] = packed_nibbles[:, :, 0]
+    pixel_indices[:, 1::2] = packed_nibbles[:, :, 1]
+    image = Image.fromarray(EPD_PREVIEW_RGB[pixel_indices])
+    output = io.BytesIO()
+    image.save(output, format='PNG', optimize=True)
+    return output.getvalue()
+
 # ==================== MongoDB 连接 ====================
 mongo_client = None
 db = None
 users_collection = None
+service_admins_collection = None
+service_admin_audit_collection = None
 devices_collection = None
 device_status_collection = None
 pages_collection = None
@@ -1896,6 +1925,7 @@ def connect_mongodb(max_retries: int = 10, retry_delay_seconds: int = 2):
     """连接 MongoDB"""
     global mongo_client, db, users_collection, devices_collection, device_status_collection
     global pages_collection, pairing_codes_collection, saved_nameplate_templates_collection
+    global service_admins_collection, service_admin_audit_collection
     for attempt in range(1, max_retries + 1):
         try:
             mongo_client = MongoClient(Config.MONGODB_URI, serverSelectionTimeoutMS=5000)
@@ -1903,6 +1933,8 @@ def connect_mongodb(max_retries: int = 10, retry_delay_seconds: int = 2):
             mongo_client.server_info()
             db = mongo_client[Config.MONGODB_DB]
             users_collection = db['users']
+            service_admins_collection = db['service_admins']
+            service_admin_audit_collection = db['service_admin_audit']
             devices_collection = db['devices']
             device_status_collection = db['device_status']
             pages_collection = db['pages']
@@ -1912,6 +1944,10 @@ def connect_mongodb(max_retries: int = 10, retry_delay_seconds: int = 2):
             ensure_all_indexes(db)
             # 旧版明文 token 不再被接受，启动时主动失效。
             users_collection.update_many(
+                {'token': {'$exists': True}},
+                {'$unset': {'token': ''}},
+            )
+            service_admins_collection.update_many(
                 {'token': {'$exists': True}},
                 {'$unset': {'token': ''}},
             )
@@ -1928,6 +1964,8 @@ def connect_mongodb(max_retries: int = 10, retry_delay_seconds: int = 2):
             mongo_client = None
             db = None
             users_collection = None
+            service_admins_collection = None
+            service_admin_audit_collection = None
             devices_collection = None
             device_status_collection = None
             pages_collection = None
@@ -1996,9 +2034,90 @@ def login_required(f):
         user = get_current_user()
         if not user:
             return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+        if user.get('mustChangePassword') and request.endpoint not in {
+            'me', 'logout', 'change_password',
+        }:
+            return jsonify({
+                'success': False,
+                'error': 'Password change required',
+                'code': 'password_change_required',
+            }), 403
         request.user = user
         return f(*args, **kwargs)
     return wrapper
+
+
+def get_current_service_admin():
+    """Resolve a service administrator from its independent bearer token."""
+    if service_admins_collection is None:
+        return None
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return None
+    token = auth_header[7:].strip()
+    if not token:
+        return None
+    return service_admins_collection.find_one({
+        'tokenHash': hash_token(token),
+        'tokenExpiresAt': {'$gt': utcnow()},
+        'disabled': {'$ne': True},
+    })
+
+
+def service_admin_required(f):
+    """Require a token issued from the isolated service-admin collection."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        admin = get_current_service_admin()
+        if not admin:
+            return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+        request.service_admin = admin
+        return f(*args, **kwargs)
+    return wrapper
+
+
+def get_request_ip() -> str:
+    forwarded_for = request.headers.get('X-Forwarded-For', '')
+    raw_ip = forwarded_for.split(',')[0].strip() if forwarded_for else (request.remote_addr or '')
+    return re.sub(r'[^0-9A-Fa-f:.]', '', raw_ip)[:64]
+
+
+def write_service_admin_audit(action: str, admin_username: str, target_type='', target_id='', details=None):
+    if service_admin_audit_collection is None:
+        return
+    document = {
+        'action': str(action)[:64],
+        'adminUsername': str(admin_username)[:64],
+        'targetType': str(target_type)[:32],
+        'targetId': str(target_id)[:128],
+        'remoteIp': get_request_ip(),
+        'createdAt': utcnow(),
+    }
+    if isinstance(details, dict) and details:
+        document['details'] = {
+            str(key)[:64]: value
+            for key, value in details.items()
+            if key not in {'password', 'temporaryPassword', 'token', 'deviceKey'}
+        }
+    try:
+        service_admin_audit_collection.insert_one(document)
+    except Exception as exc:
+        print(f'⚠️ 服务管理员审计记录失败: {exc}')
+
+
+def parse_admin_pagination():
+    try:
+        page = max(1, int(request.args.get('page', 1)))
+        page_size = min(100, max(1, int(request.args.get('pageSize', 20))))
+    except (TypeError, ValueError):
+        return None, None
+    return page, page_size
+
+
+def serialize_api_datetime(value):
+    if hasattr(value, 'isoformat'):
+        return value.isoformat() + ('Z' if getattr(value, 'tzinfo', None) is None else '')
+    return value
 
 def normalize_device_id(device_id: str) -> str:
     """统一规范化 deviceId：去掉分隔符并转大写。
@@ -2290,6 +2409,10 @@ def _claim_device_for_owner_locked(clean_id: str, owner: str, device_name: str, 
                     'activeContentMode': 'image',
                     'activeContentLabel': CONTENT_MODE_LABELS['image'],
                     'sleepIntervalSeconds': DEFAULT_SLEEP_INTERVAL_SECONDS,
+                    # New devices are appended after any order a user has saved.
+                    # Existing devices receive this field when the user first
+                    # reorders the list.
+                    'sortOrder': devices_collection.count_documents({'owner': owner}),
                     'addedAt': now,
                     'createdAt': now,
                 },
@@ -2339,17 +2462,7 @@ def register():
 
     first_account_only = not ALLOW_REGISTRATION
     if first_account_only and users_collection.find_one({}) is not None:
-        return jsonify({'success': False, 'error': '注册已关闭，请联系管理员'}), 403
-    if first_account_only:
-        if len(ADMIN_BOOTSTRAP_TOKEN) < 32:
-            return jsonify({'success': False, 'error': '管理员引导未配置'}), 503
-        provided_bootstrap_token = str(
-            request.headers.get('X-Admin-Bootstrap-Token')
-            or data.get('bootstrapToken')
-            or ''
-        ).strip()
-        if not secrets.compare_digest(provided_bootstrap_token, ADMIN_BOOTSTRAP_TOKEN):
-            return jsonify({'success': False, 'error': '管理员引导凭据无效'}), 403
+        return jsonify({'success': False, 'error': '注册已关闭，请联系系统维护者'}), 403
 
     try:
         user_doc = {
@@ -2416,7 +2529,10 @@ def login():
         'success': True,
         'token': token,
         'expiresAt': token_expires_at.isoformat() + 'Z',
-        'user': {'username': username}
+        'user': {
+            'username': username,
+            'mustChangePassword': bool(user.get('mustChangePassword')),
+        }
     })
 
 @app.route('/api/auth/logout', methods=['POST'])
@@ -2442,8 +2558,270 @@ def me():
     return jsonify({
         'success': True,
         'user': {
-            'username': user.get('username')
+            'username': user.get('username'),
+            'mustChangePassword': bool(user.get('mustChangePassword')),
         }
+    })
+
+
+@app.route('/api/auth/change-password', methods=['POST'])
+@login_required
+def change_password():
+    """Change the current user's password and revoke the current session."""
+    user = getattr(request, 'user', None)
+    if not user or users_collection is None:
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+
+    data = request.get_json(silent=True) or {}
+    current_password = str(data.get('currentPassword') or '')
+    new_password = str(data.get('newPassword') or '')
+    if not current_password or not new_password:
+        return jsonify({'success': False, 'error': '当前密码和新密码不能为空'}), 400
+    if not 8 <= len(new_password) <= 256:
+        return jsonify({'success': False, 'error': '新密码长度需为 8–256 位'}), 400
+    if secrets.compare_digest(current_password, new_password):
+        return jsonify({'success': False, 'error': '新密码不能与当前密码相同'}), 400
+
+    valid_password, _ = verify_password(user.get('passwordHash', ''), current_password)
+    if not valid_password:
+        return jsonify({'success': False, 'error': '当前密码错误'}), 400
+
+    users_collection.update_one(
+        {'_id': user['_id']},
+        {
+            '$set': {
+                'passwordHash': hash_password(new_password),
+                'mustChangePassword': False,
+                'passwordChangedAt': utcnow(),
+            },
+            '$unset': {
+                'token': '', 'tokenHash': '', 'tokenExpiresAt': '',
+                'passwordResetAt': '', 'passwordResetBy': '',
+            },
+        },
+    )
+    return jsonify({
+        'success': True,
+        'message': '密码已更新，请使用新密码重新登录',
+        'reauthenticate': True,
+    })
+
+
+# ==================== API: 服务管理控制台 ====================
+
+@app.route('/api/service-admin/auth/login', methods=['POST'])
+def service_admin_login():
+    if service_admins_collection is None:
+        return jsonify({'success': False, 'error': 'Database not connected'}), 500
+
+    data = request.get_json(silent=True) or {}
+    username = str(data.get('username') or '').strip()
+    password = str(data.get('password') or '')
+    if not username or not password or len(username) > 64 or len(password) > 256:
+        return jsonify({'success': False, 'error': '用户名或密码错误'}), 400
+
+    admin = service_admins_collection.find_one({'username': username})
+    stored_hash = admin.get('passwordHash', '') if admin else DUMMY_PASSWORD_HASH
+    valid_password, needs_migration = verify_password(stored_hash, password)
+    if not stored_hash.startswith('scrypt:'):
+        check_password_hash(DUMMY_PASSWORD_HASH, password)
+    if not admin or admin.get('disabled') is True or not valid_password:
+        write_service_admin_audit('login_failed', username)
+        return jsonify({'success': False, 'error': '用户名或密码错误'}), 400
+
+    token = generate_token()
+    now = utcnow()
+    expires_at = now + timedelta(seconds=SERVICE_ADMIN_TOKEN_TTL_SECONDS)
+    update_fields = {
+        'tokenHash': hash_token(token),
+        'tokenExpiresAt': expires_at,
+        'lastLoginAt': now,
+    }
+    if needs_migration:
+        update_fields['passwordHash'] = hash_password(password)
+    service_admins_collection.update_one(
+        {'_id': admin['_id']},
+        {'$set': update_fields, '$unset': {'token': ''}},
+    )
+    write_service_admin_audit('login', username)
+    return jsonify({
+        'success': True,
+        'token': token,
+        'expiresAt': serialize_api_datetime(expires_at),
+        'admin': {'username': username},
+    })
+
+
+@app.route('/api/service-admin/auth/me', methods=['GET'])
+@service_admin_required
+def service_admin_me():
+    admin = request.service_admin
+    return jsonify({
+        'success': True,
+        'admin': {'username': admin.get('username')},
+        'expiresAt': serialize_api_datetime(admin.get('tokenExpiresAt')),
+    })
+
+
+@app.route('/api/service-admin/auth/logout', methods=['POST'])
+@service_admin_required
+def service_admin_logout():
+    admin = request.service_admin
+    service_admins_collection.update_one(
+        {'_id': admin['_id']},
+        {'$unset': {'token': '', 'tokenHash': '', 'tokenExpiresAt': ''}},
+    )
+    write_service_admin_audit('logout', admin.get('username', ''))
+    return jsonify({'success': True, 'message': 'Logged out'})
+
+
+def get_all_operational_devices(query=None):
+    """Load safe operational data for fleet-level views."""
+    if devices_collection is None:
+        return []
+    now_ms = int(time.time() * 1000)
+    rows = []
+    for device in devices_collection.find(query or {}, {'_id': 0}):
+        device_id = normalize_device_id(device.get('deviceId'))
+        status = (
+            device_status_collection.find_one({'deviceId': device_id}, {'_id': 0})
+            if device_status_collection is not None else None
+        )
+        rows.append(serialize_device_operational_info(device, status, now_ms))
+    return rows
+
+
+@app.route('/api/service-admin/overview', methods=['GET'])
+@service_admin_required
+def service_admin_overview():
+    if users_collection is None or devices_collection is None:
+        return jsonify({'success': False, 'error': 'Database not connected'}), 500
+    devices = get_all_operational_devices()
+    counts = {'online': 0, 'sleeping': 0, 'offline': 0}
+    for device in devices:
+        counts[device['status']] += 1
+    return jsonify({
+        'success': True,
+        'overview': {
+            'users': users_collection.count_documents({}),
+            'devices': len(devices),
+            **counts,
+        },
+    })
+
+
+@app.route('/api/service-admin/users', methods=['GET'])
+@service_admin_required
+def service_admin_users():
+    if users_collection is None or devices_collection is None:
+        return jsonify({'success': False, 'error': 'Database not connected'}), 500
+    page, page_size = parse_admin_pagination()
+    if page is None:
+        return jsonify({'success': False, 'error': 'Invalid pagination'}), 400
+    query_text = str(request.args.get('q') or '').strip()[:100]
+    query = {}
+    if query_text:
+        query['username'] = re.compile(re.escape(query_text), re.IGNORECASE)
+    total = users_collection.count_documents(query)
+    cursor = (
+        users_collection.find(query, {
+            '_id': 0, 'username': 1, 'createdAt': 1,
+            'lastLoginAt': 1, 'mustChangePassword': 1,
+        })
+        .sort('createdAt', -1)
+        .skip((page - 1) * page_size)
+        .limit(page_size)
+    )
+    users = []
+    for user in cursor:
+        username = user.get('username', '')
+        users.append({
+            'username': username,
+            'createdAt': serialize_api_datetime(user.get('createdAt')),
+            'lastLoginAt': serialize_api_datetime(user.get('lastLoginAt')),
+            'deviceCount': devices_collection.count_documents({'owner': username}),
+            'mustChangePassword': bool(user.get('mustChangePassword')),
+        })
+    return jsonify({
+        'success': True,
+        'users': users,
+        'pagination': {
+            'page': page, 'pageSize': page_size, 'total': total,
+            'pages': max(1, math.ceil(total / page_size)),
+        },
+    })
+
+
+@app.route('/api/service-admin/devices', methods=['GET'])
+@service_admin_required
+def service_admin_devices():
+    if devices_collection is None:
+        return jsonify({'success': False, 'error': 'Database not connected'}), 500
+    page, page_size = parse_admin_pagination()
+    if page is None:
+        return jsonify({'success': False, 'error': 'Invalid pagination'}), 400
+
+    query_text = str(request.args.get('q') or '').strip()[:100]
+    owner = str(request.args.get('owner') or '').strip()[:64]
+    requested_status = str(request.args.get('status') or '').strip().lower()
+    if requested_status and requested_status not in {'online', 'sleeping', 'offline'}:
+        return jsonify({'success': False, 'error': 'Invalid status'}), 400
+
+    query = {'owner': owner} if owner else {}
+    if query_text:
+        pattern = re.compile(re.escape(query_text), re.IGNORECASE)
+        query['$or'] = [
+            {'deviceId': pattern}, {'deviceName': pattern}, {'owner': pattern},
+        ]
+    rows = get_all_operational_devices(query)
+    if requested_status:
+        rows = [row for row in rows if row['status'] == requested_status]
+    rows.sort(key=lambda row: (row.get('lastSeen') or 0, row.get('deviceId') or ''), reverse=True)
+    total = len(rows)
+    start = (page - 1) * page_size
+    return jsonify({
+        'success': True,
+        'devices': rows[start:start + page_size],
+        'pagination': {
+            'page': page, 'pageSize': page_size, 'total': total,
+            'pages': max(1, math.ceil(total / page_size)),
+        },
+    })
+
+
+@app.route('/api/service-admin/users/<username>/reset-password', methods=['POST'])
+@service_admin_required
+def service_admin_reset_user_password(username):
+    if users_collection is None:
+        return jsonify({'success': False, 'error': 'Database not connected'}), 500
+    user = users_collection.find_one({'username': username})
+    if user is None:
+        return jsonify({'success': False, 'error': 'User not found'}), 404
+
+    temporary_password = secrets.token_urlsafe(15)
+    admin_username = request.service_admin.get('username', '')
+    now = utcnow()
+    users_collection.update_one(
+        {'_id': user['_id']},
+        {
+            '$set': {
+                'passwordHash': hash_password(temporary_password),
+                'mustChangePassword': True,
+                'passwordResetAt': now,
+                'passwordResetBy': admin_username,
+            },
+            '$unset': {'token': '', 'tokenHash': '', 'tokenExpiresAt': ''},
+        },
+    )
+    write_service_admin_audit(
+        'user_password_reset', admin_username, 'user', username,
+        {'sessionsRevoked': True},
+    )
+    return jsonify({
+        'success': True,
+        'username': username,
+        'temporaryPassword': temporary_password,
+        'message': '临时密码仅显示一次，用户登录后必须立即改密',
     })
 
 # ==================== API: 设备管理 ====================
@@ -2529,12 +2907,56 @@ def get_devices_list():
         owner = user.get('username')
         devices = list(
             devices_collection.find({'owner': owner}, {'_id': 0})
-            .sort('addedAt', -1)
+            .sort([('sortOrder', 1), ('addedAt', -1)])
         )
         return jsonify({'success': True, 'devices': devices})
     except Exception as e:
         print(f'❌ Error fetching devices: {e}')
         return jsonify({'success': False, 'error': 'Failed to fetch devices'}), 500
+
+
+@app.route('/api/devices/reorder', methods=['POST'])
+@login_required
+def reorder_devices():
+    """Persist the current user's complete device-list order."""
+    try:
+        user = getattr(request, 'user', None)
+        owner = user.get('username') if user else None
+        data = request.get_json(silent=True) or {}
+        device_ids = data.get('deviceIds')
+
+        if devices_collection is None or not owner:
+            return jsonify({'success': False, 'error': 'Database not connected'}), 500
+        if not isinstance(device_ids, list) or len(device_ids) > 500:
+            return jsonify({'success': False, 'error': 'Invalid device order'}), 400
+
+        normalized_ids = [normalize_device_id(device_id) for device_id in device_ids]
+        if (
+            any(not is_valid_device_id(device_id) for device_id in normalized_ids)
+            or len(set(normalized_ids)) != len(normalized_ids)
+        ):
+            return jsonify({'success': False, 'error': 'Invalid device order'}), 400
+
+        owned_ids = {
+            device.get('deviceId')
+            for device in devices_collection.find({'owner': owner}, {'deviceId': 1})
+        }
+        if set(normalized_ids) != owned_ids:
+            return jsonify({
+                'success': False,
+                'error': 'Device list changed; reload and try again',
+            }), 409
+
+        for sort_order, device_id in enumerate(normalized_ids):
+            devices_collection.update_one(
+                {'deviceId': device_id, 'owner': owner},
+                {'$set': {'sortOrder': sort_order}},
+            )
+
+        return jsonify({'success': True, 'deviceIds': normalized_ids})
+    except Exception as e:
+        print(f'❌ Error reordering devices: {e}')
+        return jsonify({'success': False, 'error': 'Failed to reorder devices'}), 500
 
 @app.route('/api/devices/add', methods=['POST'])
 @login_required
@@ -2598,6 +3020,100 @@ def serialize_device_editor_state(device: dict) -> dict:
         updated_at.isoformat() if hasattr(updated_at, 'isoformat') else updated_at
     )
     return result
+
+
+def serialize_device_operational_info(device: dict, status=None, current_time_ms=None) -> dict:
+    """Serialize safe fleet metadata shared by tenant and service-admin views."""
+    device_id = normalize_device_id(device.get('deviceId'))
+    content_meta = get_device_content_metadata(device)
+    result = {
+        'deviceId': device_id,
+        'deviceName': device.get('deviceName') or device_id,
+        'owner': device.get('owner') or '',
+        'addedAt': serialize_api_datetime(device.get('addedAt')),
+        'online': False,
+        'sleeping': False,
+        'status': 'offline',
+        'claimed': bool(device.get('claimed')),
+        'imageVersion': int(device.get('imageVersion') or 0),
+        'activeContentMode': content_meta['activeContentMode'],
+        'activeTemplateId': content_meta['activeTemplateId'],
+        'activeContentLabel': content_meta['activeContentLabel'],
+        'sleepIntervalSeconds': content_meta['sleepIntervalSeconds'],
+        'estimatedNextAutoWakeAt': None,
+        'wakePolicyPending': False,
+    }
+    if not status:
+        return result
+
+    last_seen = status.get('lastSeen', 0)
+    now_ms = int(current_time_ms if current_time_ms is not None else time.time() * 1000)
+    result['online'] = bool(last_seen) and now_ms - last_seen < DEVICE_ONLINE_WINDOW_SECONDS * 1000
+
+    current_sleep_seconds = status.get('currentSleepSeconds')
+    interval_for_estimate = content_meta['sleepIntervalSeconds']
+    content_updated_ms = to_epoch_ms(device.get('activeContentUpdatedAt') or device.get('updatedAt'))
+    if content_updated_ms and last_seen and content_updated_ms > last_seen:
+        if isinstance(current_sleep_seconds, (int, float)) and current_sleep_seconds > 0:
+            interval_for_estimate = int(current_sleep_seconds)
+            result['wakePolicyPending'] = True
+
+    interval_for_estimate = normalize_sleep_interval(
+        interval_for_estimate, DEFAULT_SLEEP_INTERVAL_SECONDS,
+    )
+    if last_seen:
+        first_wake_at = int(last_seen + interval_for_estimate * 1000)
+        offline_after_at = first_wake_at + DEVICE_WAKE_REPORT_GRACE_SECONDS * 1000
+        result['sleeping'] = not result['online'] and now_ms < offline_after_at
+        result['estimatedNextAutoWakeAt'] = first_wake_at
+
+    result['status'] = 'online' if result['online'] else ('sleeping' if result['sleeping'] else 'offline')
+    for field in (
+        'lastSeen', 'lastWakeType', 'lastWakeCause', 'lastManualWake', 'lastAutoWake',
+        'ip', 'remoteIp', 'rssi', 'uptime_ms', 'freeHeap', 'currentSleepSeconds',
+        'firmwareVersion', 'firmwareBuild', 'resetReason', 'localImageVersion',
+        'gpio0StuckLow', 'targetImageVersion', 'updateAttemptId', 'lastUpdateResult',
+        'lastUpdateStage', 'lastUpdateError', 'lastUpdateDurationMs', 'lastUpdateAt',
+    ):
+        result[field] = status.get(field)
+    return result
+
+
+@app.route('/api/devices/<device_id>/screen-preview', methods=['GET'])
+@login_required
+def get_device_screen_preview(device_id):
+    """Return an owner-authorized PNG of the image currently stored for a device."""
+    user = getattr(request, 'user', None)
+    owner = user.get('username') if user else None
+    clean_id = normalize_device_id(device_id)
+    if not is_valid_device_id(clean_id):
+        return jsonify({'success': False, 'error': 'Invalid deviceId format'}), 400
+    if devices_collection is None or not owner:
+        return jsonify({'success': False, 'error': 'Database not connected'}), 500
+
+    device = devices_collection.find_one({'deviceId': clean_id, 'owner': owner}, {'_id': 0})
+    if device is None:
+        return jsonify({'success': False, 'error': 'Device not found'}), 404
+
+    image_path = get_ready_device_image_path(clean_id, device)
+    if image_path is None:
+        return jsonify({'success': False, 'error': 'Device screen image is unavailable'}), 404
+
+    try:
+        image_data = image_path.read_text(encoding='utf-8')
+        preview_png = render_epd_preview_png(image_data)
+    except (OSError, UnicodeError, ValueError) as error:
+        print(f'⚠️ 设备屏幕预览生成失败: {clean_id} -> {error}')
+        return jsonify({'success': False, 'error': 'Device screen image is unavailable'}), 503
+
+    response = send_file(
+        io.BytesIO(preview_png),
+        mimetype='image/png',
+        download_name=f'{clean_id}-screen.png',
+        max_age=300,
+    )
+    response.headers['Cache-Control'] = 'private, max-age=300'
+    return response
 
 
 @app.route('/api/devices/<device_id>', methods=['GET', 'PATCH', 'DELETE'])
@@ -2677,86 +3193,16 @@ def get_devices_status():
             )
 
         devices = []
+        current_time = int(time.time() * 1000)
         for device in registered_devices:
-            device_id = device['deviceId']
-            content_meta = get_device_content_metadata(device)
-
-            device_info = {
-                'deviceId': device_id,
-                'deviceName': device.get('deviceName', device_id),
-                'addedAt': device.get('addedAt').isoformat() if hasattr(device.get('addedAt'), 'isoformat') else device.get('addedAt'),
-                'online': False,  # Deep-sleep架构下设备通常离线
-                'sleeping': False,  # Deep-sleep 架构：离线并不一定异常，后端给出“睡眠态”提示
-                'claimed': device.get('claimed', False),
-                'imageVersion': device.get('imageVersion', 0),
-                'activeContentMode': content_meta['activeContentMode'],
-                'activeTemplateId': content_meta['activeTemplateId'],
-                'activeContentLabel': content_meta['activeContentLabel'],
-                'sleepIntervalSeconds': content_meta['sleepIntervalSeconds'],
-                'estimatedNextAutoWakeAt': None,
-                'wakePolicyPending': False
-            }
-
-            # 检查设备最后活动时间
-            if device_status_collection is not None:
-                status = device_status_collection.find_one({'deviceId': device_id})
-                if status:
-                    last_seen = status.get('lastSeen', 0)
-                    current_time = int(time.time() * 1000)
-                    # Deep-sleep 架构没有常驻连接：“在线”表示最近一次唤醒仍处于活动窗口。
-                    device_info['online'] = (
-                        bool(last_seen)
-                        and current_time - last_seen < DEVICE_ONLINE_WINDOW_SECONDS * 1000
-                    )
-
-                    # 使用设备已经执行过的唤醒周期；若模板在设备上次上报后才修改，设备尚未
-                    # 收到新周期，继续按旧周期估算并标记待同步。
-                    current_sleep_seconds = status.get('currentSleepSeconds')
-                    interval_for_estimate = content_meta['sleepIntervalSeconds']
-                    content_updated_ms = to_epoch_ms(device.get('activeContentUpdatedAt') or device.get('updatedAt'))
-                    if content_updated_ms and last_seen and content_updated_ms > last_seen:
-                        if isinstance(current_sleep_seconds, (int, float)) and current_sleep_seconds > 0:
-                            interval_for_estimate = int(current_sleep_seconds)
-                            device_info['wakePolicyPending'] = True
-
-                    interval_for_estimate = normalize_sleep_interval(
-                        interval_for_estimate, DEFAULT_SLEEP_INTERVAL_SECONDS,
-                    )
-                    if last_seen:
-                        wake_interval_ms = interval_for_estimate * 1000
-                        wake_grace_ms = DEVICE_WAKE_REPORT_GRACE_SECONDS * 1000
-                        first_wake_at = int(last_seen + wake_interval_ms)
-                        offline_after_at = first_wake_at + wake_grace_ms
-
-                        # 第一次预计自动唤醒加短宽限后仍无上报，即视为离线。
-                        device_info['sleeping'] = (
-                            not device_info['online'] and current_time < offline_after_at
-                        )
-                        device_info['estimatedNextAutoWakeAt'] = first_wake_at
-                    device_info['lastSeen'] = last_seen
-                    device_info['lastWakeType'] = status.get('lastWakeType')
-                    device_info['lastWakeCause'] = status.get('lastWakeCause')
-                    device_info['lastManualWake'] = status.get('lastManualWake')
-                    device_info['lastAutoWake'] = status.get('lastAutoWake')
-                    device_info['ip'] = status.get('ip')
-                    device_info['remoteIp'] = status.get('remoteIp')
-                    device_info['rssi'] = status.get('rssi')
-                    device_info['uptime_ms'] = status.get('uptime_ms')
-                    device_info['freeHeap'] = status.get('freeHeap')
-                    device_info['currentSleepSeconds'] = status.get('currentSleepSeconds')
-                    device_info['firmwareVersion'] = status.get('firmwareVersion')
-                    device_info['firmwareBuild'] = status.get('firmwareBuild')
-                    device_info['resetReason'] = status.get('resetReason')
-                    device_info['localImageVersion'] = status.get('localImageVersion')
-                    device_info['gpio0StuckLow'] = status.get('gpio0StuckLow')
-                    device_info['targetImageVersion'] = status.get('targetImageVersion')
-                    device_info['updateAttemptId'] = status.get('updateAttemptId')
-                    device_info['lastUpdateResult'] = status.get('lastUpdateResult')
-                    device_info['lastUpdateStage'] = status.get('lastUpdateStage')
-                    device_info['lastUpdateError'] = status.get('lastUpdateError')
-                    device_info['lastUpdateDurationMs'] = status.get('lastUpdateDurationMs')
-                    device_info['lastUpdateAt'] = status.get('lastUpdateAt')
-
+            device_id = normalize_device_id(device.get('deviceId'))
+            status = (
+                device_status_collection.find_one({'deviceId': device_id}, {'_id': 0})
+                if device_status_collection is not None else None
+            )
+            device_info = serialize_device_operational_info(device, status, current_time)
+            device_info.pop('owner', None)
+            device_info.pop('status', None)
             devices.append(device_info)
 
         return jsonify({'success': True, 'devices': devices})

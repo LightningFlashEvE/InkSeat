@@ -9,9 +9,19 @@ INDEX_DEFINITIONS = {
         ('tokenHash', 'tokenHash_unique', {'unique': True, 'sparse': True}),
         ('registrationSlot', 'registrationSlot_unique', {'unique': True, 'sparse': True}),
     ],
+    'service_admins': [
+        ('username', 'username_unique', {'unique': True}),
+        ('tokenHash', 'tokenHash_unique', {'unique': True, 'sparse': True}),
+    ],
+    'service_admin_audit': [
+        ('createdAt', 'createdAt_idx', {}),
+        ([('adminUsername', 1), ('createdAt', -1)], 'admin_createdAt_idx', {}),
+        ([('targetType', 1), ('targetId', 1), ('createdAt', -1)], 'target_createdAt_idx', {}),
+    ],
     'devices': [
         ('deviceId', 'deviceId_unique', {'unique': True}),
         ('owner', 'owner_idx', {}),
+        ([('owner', 1), ('sortOrder', 1), ('addedAt', -1)], 'owner_sortOrder_addedAt_idx', {}),
         ('claimed', 'claimed_idx', {}),
     ],
     'device_status': [

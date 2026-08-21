@@ -101,7 +101,7 @@ docker compose up -d --force-recreate
 docker compose logs -f backend   # 查看后端日志
 ```
 
-注意：使用 `docker compose`（无连字符），新版 Docker 标准命令。生产模板服务端口由 `.env` 的 `FRONTEND_BIND` / `FRONTEND_PORT` 控制，后端仅 Docker 内网 `5000`，MongoDB 仅 Docker 内网 `27017`。生产环境必须提供 `PUBLIC_BASE_URL`、`SECRET_KEY`、`ADMIN_BOOTSTRAP_TOKEN` 等必填项；升级顺序和设备认证兼容期见 `cloud_server/README.md`。
+注意：使用 `docker compose`（无连字符），新版 Docker 标准命令。生产模板服务端口由 `.env` 的 `FRONTEND_BIND` / `FRONTEND_PORT` 控制，后端仅 Docker 内网 `5000`，MongoDB 仅 Docker 内网 `27017`。生产环境必须提供 `PUBLIC_BASE_URL`、`SECRET_KEY` 等必填项；升级顺序和设备认证兼容期见 `cloud_server/README.md`。
 `cloud_server/mongodb/` 和 `cloud_server/backend/data/` 是服务器运行数据目录，首次部署会自动生成，不提交 Git；更新代码时不得删除或覆盖。
 
 ## 5. 代码规范

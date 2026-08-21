@@ -2,6 +2,13 @@ let devices = [];
 let deviceStatus = {};
 let selectedDeviceId = null;
 let deviceSearchTerm = '';
+let draggedDeviceId = null;
+let devicePointerDrag = null;
+let isSavingDeviceOrder = false;
+let suppressRowSelectionUntil = 0;
+let selectedPreviewKey = '';
+let selectedPreviewObjectUrl = '';
+let selectedPreviewLoadKey = '';
 
 const API_BASE = '';
 const DEVICE_POLL_INTERVAL_MS = 8000;
@@ -79,9 +86,187 @@ function setupDevicePage() {
         });
     }
 
+    setupDeviceListSorting();
+
     document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') hideAddDeviceModal();
     });
+}
+
+function setupDeviceListSorting() {
+    const tableBody = document.getElementById('deviceTableBody');
+    if (!tableBody) return;
+
+    tableBody.addEventListener('pointerdown', (event) => {
+        if (event.pointerType !== 'mouse' || event.button !== 0) return;
+        const row = event.target.closest('tr[data-device-id]');
+        if (!row || deviceSearchTerm || event.target.closest('button, input, a')) {
+            return;
+        }
+
+        const bounds = row.getBoundingClientRect();
+        devicePointerDrag = {
+            pointerId: event.pointerId,
+            row,
+            deviceId: row.dataset.deviceId,
+            startX: event.clientX,
+            startY: event.clientY,
+            offsetX: Math.max(0, event.clientX - bounds.left),
+            offsetY: Math.max(0, event.clientY - bounds.top),
+            active: false,
+            dragImage: null,
+        };
+        row.setPointerCapture(event.pointerId);
+    });
+
+    tableBody.addEventListener('pointermove', (event) => {
+        const drag = devicePointerDrag;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        if (!drag.active && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 6) {
+            return;
+        }
+        event.preventDefault();
+        if (!drag.active) startDevicePointerDrag(drag);
+        updateDevicePointerDrag(drag, event.clientX, event.clientY, tableBody);
+    });
+
+    tableBody.addEventListener('pointerup', async (event) => {
+        await finishDevicePointerDrag(event, tableBody, false);
+    });
+
+    tableBody.addEventListener('pointercancel', async (event) => {
+        await finishDevicePointerDrag(event, tableBody, true);
+    });
+}
+
+function startDevicePointerDrag(drag) {
+    drag.active = true;
+    draggedDeviceId = drag.deviceId;
+    drag.row.classList.add('is-dragging');
+    drag.dragImage = createDeviceDragImage(drag.row);
+    drag.dropIndicator = createDeviceDropIndicator();
+}
+
+function updateDevicePointerDrag(drag, clientX, clientY, tableBody) {
+    drag.dragImage.style.transform = `translate3d(${clientX - drag.offsetX}px, ${clientY - drag.offsetY}px, 0)`;
+    clearDeviceDragTarget(tableBody);
+    const target = getDeviceDragTarget(clientX, clientY, tableBody, drag.deviceId);
+    if (target) {
+        positionDeviceDropIndicator(drag.dropIndicator, target);
+    } else {
+        drag.dropIndicator.hidden = true;
+    }
+}
+
+async function finishDevicePointerDrag(event, tableBody, cancelled) {
+    const drag = devicePointerDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    devicePointerDrag = null;
+    if (drag.row.hasPointerCapture(event.pointerId)) drag.row.releasePointerCapture(event.pointerId);
+    if (!drag.active) return;
+
+    const target = cancelled
+        ? null
+        : getDeviceDragTarget(event.clientX, event.clientY, tableBody, drag.deviceId);
+    drag.dragImage.remove();
+    drag.dropIndicator.remove();
+    drag.row.classList.remove('is-dragging');
+    draggedDeviceId = null;
+    clearDeviceDragTarget(tableBody);
+
+    if (!target) return;
+    moveDeviceBeforeOrAfter(drag.deviceId, target.row.dataset.deviceId, target.isAbove);
+    suppressRowSelectionUntil = Date.now() + 250;
+    renderDevices();
+    await saveDeviceOrder();
+}
+
+function getDeviceDragTarget(clientX, clientY, tableBody, draggedId) {
+    const row = document.elementFromPoint(clientX, clientY)?.closest('tr[data-device-id]');
+    if (!row || !tableBody.contains(row) || row.dataset.deviceId === draggedId) return null;
+    return {
+        row,
+        isAbove: clientY < row.getBoundingClientRect().top + row.offsetHeight / 2,
+    };
+}
+
+function createDeviceDragImage(row) {
+    const dragImage = document.createElement('table');
+    const body = document.createElement('tbody');
+    const copiedRow = row.cloneNode(true);
+    const bounds = row.getBoundingClientRect();
+
+    copiedRow.classList.remove('is-dragging', 'drag-over-above', 'drag-over-below');
+    copiedRow.removeAttribute('draggable');
+    copiedRow.removeAttribute('onclick');
+    dragImage.className = 'meeting-table meeting-device-drag-image';
+    dragImage.style.width = `${bounds.width}px`;
+    body.appendChild(copiedRow);
+    dragImage.appendChild(body);
+    document.body.appendChild(dragImage);
+    return dragImage;
+}
+
+function createDeviceDropIndicator() {
+    const indicator = document.createElement('div');
+    indicator.className = 'meeting-device-drop-indicator';
+    indicator.hidden = true;
+    document.body.appendChild(indicator);
+    return indicator;
+}
+
+function positionDeviceDropIndicator(indicator, target) {
+    const bounds = target.row.getBoundingClientRect();
+    const insertionY = target.isAbove ? bounds.top : bounds.bottom;
+    indicator.style.width = `${Math.max(0, bounds.width - 34)}px`;
+    indicator.style.transform = `translate3d(${bounds.left + 17}px, ${insertionY - 2}px, 0)`;
+    indicator.hidden = false;
+}
+
+function clearDeviceDragTarget(tableBody) {
+    tableBody.querySelectorAll('.drag-over-above, .drag-over-below').forEach((row) => {
+        row.classList.remove('drag-over-above', 'drag-over-below');
+    });
+}
+
+function moveDeviceBeforeOrAfter(draggedId, targetId, placeBefore) {
+    const sourceIndex = devices.findIndex((device) => device.id === draggedId);
+    if (sourceIndex < 0) return;
+
+    const [draggedDevice] = devices.splice(sourceIndex, 1);
+    let targetIndex = devices.findIndex((device) => device.id === targetId);
+    if (targetIndex < 0) {
+        devices.splice(sourceIndex, 0, draggedDevice);
+        return;
+    }
+    if (!placeBefore) targetIndex += 1;
+    devices.splice(targetIndex, 0, draggedDevice);
+}
+
+async function saveDeviceOrder() {
+    if (isSavingDeviceOrder) return;
+    isSavingDeviceOrder = true;
+    try {
+        const response = await authFetch(`${API_BASE}/api/devices/reorder`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                ...authHeaders()
+            },
+            body: JSON.stringify({ deviceIds: devices.map((device) => device.id) })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.success) {
+            throw new Error(result.error || `保存排序失败（HTTP ${response.status}）`);
+        }
+        log('设备排序已保存', 'success');
+    } catch (error) {
+        console.error('保存设备排序失败:', error);
+        log(`设备排序未保存：${error.message}`, 'error');
+        await loadDevices();
+    } finally {
+        isSavingDeviceOrder = false;
+    }
 }
 
 function log(message, type = 'info') {
@@ -124,6 +309,7 @@ function normalizeDevice(device) {
         id: device.deviceId,
         name: device.deviceName || device.deviceId,
         addedAt: Number.isNaN(addedAt) ? Date.now() : addedAt,
+        sortOrder: Number(device.sortOrder),
         imageVersion: Number(device.imageVersion || 0),
         activeContentMode: device.activeContentMode || 'template',
         activeContentLabel: device.activeContentLabel || '会议名牌',
@@ -284,9 +470,13 @@ function renderDevices() {
         const view = getDeviceView(device);
         const selectedClass = device.id === selectedDeviceId ? ' selected' : '';
         const safeId = escapeJsString(device.id);
+        const sortingDisabled = Boolean(deviceSearchTerm);
+        const dragTitle = sortingDisabled
+            ? '搜索时不可排序，请先清除搜索条件'
+            : '按住并拖动此条设备记录排序';
 
         return `
-            <tr class="${selectedClass}" onclick="selectDevice('${safeId}')">
+            <tr class="meeting-sortable-row${sortingDisabled ? ' sorting-disabled' : ''}${selectedClass}" data-device-id="${escapeHtml(device.id)}" draggable="false" title="${dragTitle}" onclick="selectDevice('${safeId}')">
                 <td>
                     <div class="meeting-dev-cell">
                         <span class="meeting-dev-thumb ${view.statusClass === 'offline' ? 'dark' : ''}" aria-hidden="true"></span>
@@ -340,6 +530,7 @@ function ensureSelectedDevice() {
 }
 
 function selectDevice(deviceId) {
+    if (Date.now() < suppressRowSelectionUntil) return;
     selectedDeviceId = deviceId;
     renderDevices();
 }
@@ -485,6 +676,8 @@ function renderSelectedDevice() {
         setText('selectedPreviewName', '会议牌');
         setText('selectedPreviewContent', '会议名牌');
         setText('selectedPreviewWake', '等待上报');
+        setText('selectedPreviewState', '未选择设备');
+        clearSelectedScreenPreview();
         return;
     }
 
@@ -506,6 +699,91 @@ function renderSelectedDevice() {
     setText('selectedPreviewName', device.name);
     setText('selectedPreviewContent', view.content);
     setText('selectedPreviewWake', view.estimatedWakeText);
+    const cloudImageVersion = Number(view.status.imageVersion ?? device.imageVersion);
+    const localImageVersion = Number(view.status.localImageVersion);
+    const deviceConfirmed = (
+        Number.isFinite(cloudImageVersion) && cloudImageVersion > 0 &&
+        Number.isFinite(localImageVersion) && localImageVersion === cloudImageVersion
+    );
+    setText(
+        'selectedPreviewState',
+        deviceConfirmed ? '设备已确认显示' : '云端画面，等待设备刷新',
+    );
+    loadSelectedScreenPreview(device, view);
+}
+
+function clearSelectedScreenPreview() {
+    const image = document.getElementById('selectedPreviewImage');
+    const placeholder = document.getElementById('selectedPreviewPlaceholder');
+    const screen = document.getElementById('selectedPreviewScreen');
+    if (selectedPreviewObjectUrl) {
+        URL.revokeObjectURL(selectedPreviewObjectUrl);
+        selectedPreviewObjectUrl = '';
+    }
+    selectedPreviewKey = '';
+    selectedPreviewLoadKey = '';
+    if (image) {
+        image.removeAttribute('src');
+        image.hidden = true;
+    }
+    if (placeholder) placeholder.hidden = false;
+    if (screen) screen.classList.add('is-placeholder');
+}
+
+function showScreenPreviewPlaceholder(title, content) {
+    const image = document.getElementById('selectedPreviewImage');
+    const placeholder = document.getElementById('selectedPreviewPlaceholder');
+    const screen = document.getElementById('selectedPreviewScreen');
+    if (image) image.hidden = true;
+    if (placeholder) placeholder.hidden = false;
+    if (screen) screen.classList.add('is-placeholder');
+    setText('selectedPreviewName', title);
+    setText('selectedPreviewContent', content);
+}
+
+async function loadSelectedScreenPreview(device, view) {
+    const imageVersion = Number(view.status.imageVersion ?? device.imageVersion);
+    if (!Number.isFinite(imageVersion) || imageVersion <= 0) {
+        clearSelectedScreenPreview();
+        showScreenPreviewPlaceholder(device.name, '暂无已发布画面');
+        setText('selectedPreviewState', '暂无云端画面');
+        return;
+    }
+
+    const previewKey = `${device.id}:${imageVersion}`;
+    if (selectedPreviewKey === previewKey || selectedPreviewLoadKey === previewKey) return;
+    clearSelectedScreenPreview();
+    selectedPreviewLoadKey = previewKey;
+    showScreenPreviewPlaceholder(device.name, '正在加载真实屏幕画面…');
+
+    try {
+        const response = await authFetch(
+            `${API_BASE}/api/devices/${encodeURIComponent(device.id)}/screen-preview?v=${imageVersion}`,
+            { headers: { ...authHeaders() }, cache: 'no-store' },
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const previewBlob = await response.blob();
+        if (selectedDeviceId !== device.id || selectedPreviewLoadKey !== previewKey) return;
+
+        const image = document.getElementById('selectedPreviewImage');
+        const placeholder = document.getElementById('selectedPreviewPlaceholder');
+        const screen = document.getElementById('selectedPreviewScreen');
+        if (!image || !placeholder || !screen) return;
+
+        selectedPreviewObjectUrl = URL.createObjectURL(previewBlob);
+        image.src = selectedPreviewObjectUrl;
+        image.hidden = false;
+        placeholder.hidden = true;
+        screen.classList.remove('is-placeholder');
+        selectedPreviewKey = previewKey;
+    } catch (error) {
+        if (selectedDeviceId === device.id && selectedPreviewLoadKey === previewKey) {
+            selectedPreviewKey = previewKey;
+            showScreenPreviewPlaceholder(device.name, '云端画面暂不可用');
+        }
+    } finally {
+        if (selectedPreviewLoadKey === previewKey) selectedPreviewLoadKey = '';
+    }
 }
 
 function setText(id, value) {
@@ -533,7 +811,7 @@ function setSignalIndicator(id, rssi) {
 }
 
 function openDevice(deviceId) {
-    window.location.href = `control.html?v=20260817templateuifix1&view=device-editor&deviceId=${encodeURIComponent(deviceId)}`;
+    window.location.href = `control.html?v=20260821devicesort7&view=device-editor&deviceId=${encodeURIComponent(deviceId)}`;
 }
 
 let pollingInterval = null;

@@ -22,7 +22,7 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
 
-COPY app.py config.py db_indexes.py six_color_epd.py template_renderer.py ./
+COPY app.py config.py db_indexes.py service_admin_cli.py six_color_epd.py template_renderer.py ./
 COPY assets ./assets
 
 EXPOSE 5000

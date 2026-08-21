@@ -82,6 +82,7 @@
 │   │   ├── six_color_epd.py  # 六色图像处理算法（支持三种算法）
 │   │   └── requirements.txt  # Python依赖
 │   ├── frontend/             # Web前端
+│   ├── service_admin_frontend/ # SSH 隧道访问的独立服务管理网页
 │   │   ├── index.html        # 主页面
 │   │   ├── control.html      # 设备控制页
 │   │   ├── app.js            # 前端逻辑
@@ -143,7 +144,7 @@ cd /opt/esp32-cloud/cloud_server
 # 首次部署或更新代码后：
 cd /opt/esp32-cloud/cloud_server  # 或 <your-project>/cloud_server
 git pull  # 拉取最新代码
-# 首次部署复制并编辑环境变量；PUBLIC_BASE_URL、管理员引导令牌和随机密钥为必填项
+# 首次部署复制并编辑环境变量；PUBLIC_BASE_URL 和随机密钥为必填项
 cp .env.example .env
 # 后端镜像会安装中文/符号字体；模板或字体相关更新后必须无缓存重建
 docker compose build --no-cache  # 重新构建镜像
@@ -170,8 +171,7 @@ export FLASK_HOST="epd.example.com"
 export FLASK_PORT="8080"
 export PUBLIC_BASE_URL="https://epd.example.com"
 export SECRET_KEY="<random-secret>"
-export ADMIN_BOOTSTRAP_TOKEN="<at-least-32-random-characters>"
-export ALLOW_REGISTRATION="false"
+export ALLOW_REGISTRATION="true"
 export DEVICE_AUTH_REQUIRED="true"
 
 # 4. 初始化数据库索引
@@ -322,7 +322,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 
 2. **访问Web界面**：
    - 生产环境打开：`https://你的域名/`
-   - `http://服务器IP:8080` 仅作为受信内网或迁移期诊断入口；完整 TLS、首次管理员和设备凭据恢复步骤见 `cloud_server/README.md`
+   - `http://服务器IP:8080` 仅作为受信内网或迁移期诊断入口；完整 TLS、首个账号初始化和设备凭据恢复步骤见 `cloud_server/README.md`
    - 首次访问需要注册/登录
 
 3. **添加设备**：

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+    <title>服务管理控制台</title>
+    <link rel="icon" href="data:;base64,=">
+    <script>
+        (function () {
+            try {
+                if (localStorage.getItem('meetingThemeMode') !== 'dark') {
+                    document.documentElement.classList.add('theme-light');
+                    document.documentElement.dataset.theme = 'light';
+                    document.documentElement.style.colorScheme = 'light';
+                }
+            } catch (e) {}
+        }());
+    </script>
+    <link rel="stylesheet" href="service-admin.css?v=20260820serviceadmin1">
+    <script src="theme.js?v=20260820serviceadmin1"></script>
+</head>
+<body>
+    <section class="login-shell" id="loginView">
+        <div class="login-card glass-panel">
+            <div class="brand-mark">S</div>
+            <p class="eyebrow">SSH PRIVATE ACCESS</p>
+            <h1>服务管理控制台</h1>
+            <p class="subtle">查看全平台用户与设备运行状态</p>
+            <form id="loginForm">
+                <label>管理员账号<input id="adminUsername" autocomplete="username" required></label>
+                <label>密码<input id="adminPassword" type="password" autocomplete="current-password" required></label>
+                <button class="button primary full" type="submit">登录控制台</button>
+            </form>
+            <p class="form-status" id="loginStatus" role="status">会话有效期 4 小时，关闭浏览器后清除</p>
+        </div>
+    </section>
+
+    <div class="app-shell hidden" id="appView">
+        <aside class="sidebar glass-panel">
+            <div class="brand-row"><span class="brand-mark small">S</span><div><strong>服务管理</strong><small>最高权限控制台</small></div></div>
+            <nav aria-label="管理导航">
+                <button class="nav-item active" data-section="overview">概览</button>
+                <button class="nav-item" data-section="users">用户</button>
+                <button class="nav-item" data-section="devices">设备</button>
+            </nav>
+            <div class="sidebar-footer">
+                <span id="adminIdentity">—</span>
+                <button class="text-button" id="logoutButton">退出</button>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="topbar">
+                <div><p class="eyebrow">PLATFORM OPERATIONS</p><h1 id="pageTitle">运行概览</h1></div>
+                <button class="icon-button" data-theme-toggle aria-label="切换主题" title="切换主题">◐</button>
+            </header>
+
+            <section class="section active" id="overviewSection">
+                <div class="stat-grid" id="statGrid">
+                    <article class="stat-card glass-panel"><span>用户总数</span><strong id="statUsers">—</strong></article>
+                    <article class="stat-card glass-panel"><span>设备总数</span><strong id="statDevices">—</strong></article>
+                    <article class="stat-card glass-panel status-online"><span>在线</span><strong id="statOnline">—</strong></article>
+                    <article class="stat-card glass-panel status-sleeping"><span>睡眠</span><strong id="statSleeping">—</strong></article>
+                    <article class="stat-card glass-panel status-offline"><span>离线</span><strong id="statOffline">—</strong></article>
+                </div>
+                <div class="glass-panel intro-panel">
+                    <p class="eyebrow">READ-ONLY BY DEFAULT</p>
+                    <h2>平台全局视图</h2>
+                    <p>跨用户检索设备状态与更新诊断。第一版唯一可变更操作是重置普通用户密码，设备归属和数据不会在这里被修改。</p>
+                </div>
+            </section>
+
+            <section class="section" id="usersSection">
+                <div class="toolbar glass-panel">
+                    <label class="search-field"><span>搜索用户</span><input id="userSearch" type="search" placeholder="用户名"></label>
+                </div>
+                <div class="table-panel glass-panel">
+                    <div class="table-wrap"><table><thead><tr><th>用户名</th><th>注册时间</th><th>最近登录</th><th>设备</th><th>账号状态</th><th></th></tr></thead><tbody id="usersBody"></tbody></table></div>
+                    <div class="pagination"><span id="usersCount">—</span><div><button id="usersPrev">上一页</button><span id="usersPage">1 / 1</span><button id="usersNext">下一页</button></div></div>
+                </div>
+            </section>
+
+            <section class="section" id="devicesSection">
+                <div class="toolbar glass-panel device-toolbar">
+                    <label class="search-field"><span>搜索设备</span><input id="deviceSearch" type="search" placeholder="设备编号、名称或用户"></label>
+                    <label><span>状态</span><select id="deviceStatus"><option value="">全部状态</option><option value="online">在线</option><option value="sleeping">睡眠</option><option value="offline">离线</option></select></label>
+                    <div class="owner-filter hidden" id="ownerFilter"><span>所属用户：<strong id="ownerName"></strong></span><button id="clearOwner">清除</button></div>
+                </div>
+                <div class="device-layout">
+                    <div class="table-panel glass-panel">
+                        <div class="table-wrap"><table><thead><tr><th>设备</th><th>所属用户</th><th>状态</th><th>最后上报</th><th>内容</th><th>版本</th></tr></thead><tbody id="devicesBody"></tbody></table></div>
+                        <div class="pagination"><span id="devicesCount">—</span><div><button id="devicesPrev">上一页</button><span id="devicesPage">1 / 1</span><button id="devicesNext">下一页</button></div></div>
+                    </div>
+                    <aside class="detail-panel glass-panel" id="deviceDetail"><div class="empty-state"><strong>选择一台设备</strong><span>查看固件、图片版本和刷新诊断</span></div></aside>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <div class="modal-backdrop hidden" id="resetModal" role="dialog" aria-modal="true" aria-labelledby="resetTitle">
+        <div class="modal glass-panel">
+            <div id="resetConfirmView">
+                <p class="eyebrow">PASSWORD RESET</p><h2 id="resetTitle">重置用户密码？</h2>
+                <p>将撤销 <strong id="resetUsername"></strong> 的全部现有会话，并生成只显示一次的临时密码。</p>
+                <div class="modal-actions"><button class="button secondary" data-close-modal>取消</button><button class="button danger" id="confirmReset">确认重置</button></div>
+            </div>
+            <div class="hidden" id="resetResultView">
+                <p class="eyebrow">SHOW ONCE</p><h2>临时密码已生成</h2>
+                <p>请通过可信方式交给用户。关闭此窗口后无法再次查看。</p>
+                <div class="secret-row"><code id="temporaryPassword"></code><button class="button secondary" id="copyPassword">复制</button></div>
+                <div class="modal-actions"><button class="button primary" data-close-modal>我已保存</button></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast hidden" id="toast" role="status"></div>
+    <script src="service-admin.js?v=20260820serviceadmin1"></script>
+</body>
+</html>

@@ -8,6 +8,7 @@ COPY index.html ./
 COPY nameplates.html ./
 COPY settings.html ./
 COPY login.html ./
+COPY change-password.html ./
 COPY control.html ./
 COPY app.js ./
 COPY devices.js ./

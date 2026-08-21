@@ -4,6 +4,7 @@
 
 - `backend/`：Flask API
 - `frontend/`：Nginx 静态页面与 `/api/` 反向代理
+- `service_admin_frontend/`：仅绑定服务器回环地址的最高权限服务管理网页
 - `mongodb/`：MongoDB 容器运行数据目录（首次部署自动生成，不提交 Git）
 - `docker-compose.yml`：容器编排
 - `docker-compose.dev.yml`：仅本地开发使用的前端源码挂载覆盖
@@ -56,9 +57,10 @@ FLASK_HOST=epd.example.com
 FLASK_PORT=8080
 PUBLIC_BASE_URL=https://epd.example.com
 SECRET_KEY=<random-secret>
-ADMIN_BOOTSTRAP_TOKEN=<at-least-32-random-characters>
-ALLOW_REGISTRATION=false
+ALLOW_REGISTRATION=true
 AUTH_TOKEN_TTL_SECONDS=604800
+SERVICE_ADMIN_TOKEN_TTL_SECONDS=14400
+SERVICE_ADMIN_PORT=18081
 CORS_ORIGINS=
 DEVICE_AUTH_REQUIRED=true
 PAIRING_MAX_FAILED_ATTEMPTS=8
@@ -74,15 +76,14 @@ UNCLAIMED_DEVICE_TTL_SECONDS=172800
 - `PUBLIC_BASE_URL`、固件的云端 host/port/HTTPS 开关、外部 TLS 反向代理必须指向同一个公开 origin
 - `FLASK_HOST/FLASK_PORT` 仅作为旧配置回退保留
 - `SECRET_KEY` 不要使用示例值，改成随机长字符串
-- `ADMIN_BOOTSTRAP_TOKEN` 至少 32 个随机字符，只在创建首个管理员时输入登录页；可用 `openssl rand -hex 32` 生成
-- `ALLOW_REGISTRATION=false` 表示只有首个管理员可通过引导令牌注册；不要为方便而长期开放公网注册
+- `ALLOW_REGISTRATION=true` 支持多用户注册；设为 `false` 时仅允许在没有任何账号时创建首个账号，之后会关闭公网注册
 - 同源部署保持 `CORS_ORIGINS` 为空；跨域时仅列出精确的 HTTPS origin
 - 生产环境保持 `DEVICE_AUTH_REQUIRED=true`
 - `UNCLAIMED_DEVICE_TTL_SECONDS` 只清理从未绑定过且长期不再唤醒的 TOFU 身份；每次上报会续期，曾绑定设备的密钥哈希不受影响
 - `MONGO_INITDB_ROOT_PASSWORD` 会用于初始化本机 MongoDB 容器；建议只使用字母、数字、下划线，避免 URL 编码问题
 - `.env` 已加入 `.gitignore`，不要提交真实凭据
 
-升级已有部署时不要用 `.env.example` 覆盖现有 `.env`，尤其不能改变已初始化 MongoDB 的账号密码。请在原 `.env` 中补入 `FRONTEND_BIND`、`PUBLIC_BASE_URL`、`ADMIN_BOOTSTRAP_TOKEN`、认证/配对限制和设备凭据重置窗口等新字段，再执行重建。已有管理员的部署仍需设置一个随机且至少 32 字符的 `ADMIN_BOOTSTRAP_TOKEN` 以通过启动配置检查，但它不会绕过“只允许首个账号注册”的规则。
+升级已有部署时不要用 `.env.example` 覆盖现有 `.env`，尤其不能改变已初始化 MongoDB 的账号密码。请在原 `.env` 中补入 `FRONTEND_BIND`、`PUBLIC_BASE_URL`、认证/配对限制和设备凭据重置窗口等新字段，再执行重建。
 
 ### 已有设备的认证迁移顺序
 
@@ -133,6 +134,37 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 docker compose logs -f backend
 docker compose logs -f frontend
 ```
+
+## 服务管理控制台（仅 SSH 隧道）
+
+服务管理网页运行在独立的 `service-admin-frontend` 容器中，只绑定服务器
+`127.0.0.1:${SERVICE_ADMIN_PORT:-18081}`。公网用户前端明确拒绝
+`/api/service-admin/*`，普通用户令牌与服务管理员令牌不能互换。
+
+首次部署后，在服务器 SSH 终端交互式创建管理员（密码不会进入命令历史或日志）：
+
+```bash
+cd /opt/cloud_server
+docker compose exec backend python service_admin_cli.py create
+```
+
+账号维护命令：
+
+```bash
+docker compose exec backend python service_admin_cli.py list
+docker compose exec backend python service_admin_cli.py reset-password
+docker compose exec backend python service_admin_cli.py disable
+docker compose exec backend python service_admin_cli.py enable
+```
+
+在管理电脑建立隧道后访问控制台：
+
+```bash
+ssh -L 18080:127.0.0.1:18081 root@8.135.238.216
+```
+
+浏览器打开 `http://127.0.0.1:18080/service-admin.html`。管理员会话保存在
+`sessionStorage`，固定有效 4 小时，退出或关闭浏览器后本地会话清除。
 
 停止服务：
 
@@ -214,9 +246,9 @@ server {
 
 固件需同步设置 `CLOUD_API_USE_HTTPS=1`、公开域名、端口 `443`，并把签发服务器证书的根 CA PEM 配到 `CLOUD_API_ROOT_CA_PEM`。启用 HTTPS 但 CA 为空时固件会拒绝连接，不会自动降级。
 
-## 7. 首次管理员与设备凭据恢复
+## 7. 首个账号与设备凭据恢复
 
-首次部署时，只通过已验证证书的 HTTPS 登录页填写 `.env` 中的 `ADMIN_BOOTSTRAP_TOKEN` 创建首个管理员，切勿在 HTTP 页面提交。注册成功后页面会立即清空该输入。创建后普通登录不再填写该令牌；`ALLOW_REGISTRATION=false` 会关闭后续公网注册。
+首次部署时，通过已验证证书的 HTTPS 登录页创建账号，切勿在 HTTP 页面提交。面向多用户平台保持 `ALLOW_REGISTRATION=true`；只有需要单账号内测时才设为 `false`。
 
 设备会把随机 `deviceKey` 保存在 NVS，服务端只保存其哈希。若设备擦除了 NVS，旧哈希会让新密钥持续收到 401。安全恢复步骤是：
 

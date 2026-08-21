@@ -17,6 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = ROOT / "cloud_server" / "frontend"
+SERVICE_ADMIN_FRONTEND_DIR = ROOT / "cloud_server" / "service_admin_frontend"
 BACKEND_DIR = ROOT / "cloud_server" / "backend"
 
 
@@ -47,7 +48,7 @@ def verify_javascript_syntax() -> int:
     node = shutil.which("node")
     if not node:
         raise VerificationError("node is required for JavaScript syntax checks")
-    files = sorted(FRONTEND_DIR.glob("*.js"))
+    files = sorted(FRONTEND_DIR.glob("*.js")) + sorted(SERVICE_ADMIN_FRONTEND_DIR.glob("*.js"))
     for path in files:
         result = run([node, "--check", str(path)], check=False)
         if result.returncode:
@@ -371,6 +372,8 @@ def verify_deployment_contract() -> str:
     backend_dockerfile = (BACKEND_DIR / "Dockerfile").read_text(encoding="utf-8-sig")
     nginx_config = (FRONTEND_DIR / "nginx.conf").read_text(encoding="utf-8-sig")
     security_headers = (FRONTEND_DIR / "security_headers.conf").read_text(encoding="utf-8-sig")
+    service_admin_dockerfile = (SERVICE_ADMIN_FRONTEND_DIR / "Dockerfile").read_text(encoding="utf-8-sig")
+    service_admin_nginx = (SERVICE_ADMIN_FRONTEND_DIR / "nginx.conf").read_text(encoding="utf-8-sig")
     production_compose = (ROOT / "cloud_server" / "docker-compose.yml").read_text(
         encoding="utf-8-sig"
     )
@@ -390,6 +393,16 @@ def verify_deployment_contract() -> str:
         raise VerificationError("Backend container must run through Gunicorn")
     if "include /etc/nginx/snippets/security_headers.conf" not in nginx_config:
         raise VerificationError("Nginx does not include the shared security headers")
+    if "location ^~ /api/service-admin/" not in nginx_config:
+        raise VerificationError("Public frontend must explicitly deny service-admin APIs")
+    if "location = /service-admin.html" not in nginx_config:
+        raise VerificationError("Public frontend must explicitly deny the service-admin page")
+    if "COPY service_admin_frontend/service-admin.html ./" not in service_admin_dockerfile:
+        raise VerificationError("Service-admin image omits its private HTML entry point")
+    if "location ^~ /api/service-admin/" not in service_admin_nginx:
+        raise VerificationError("Service-admin frontend does not proxy its isolated API")
+    if "location ^~ /api/" not in service_admin_nginx:
+        raise VerificationError("Service-admin frontend must deny ordinary APIs")
 
     required_nginx_controls = (
         "real_ip_header X-Real-IP;",
@@ -474,7 +487,9 @@ def verify_deployment_contract() -> str:
         raise VerificationError("Development compose is missing the frontend bind mount")
     if "${FRONTEND_BIND:-127.0.0.1}" not in production_compose:
         raise VerificationError("Production frontend bind must fail safe to loopback")
-    if production_compose.count("logging: *default-logging") != 3:
+    if '"127.0.0.1:${SERVICE_ADMIN_PORT:-18081}:80"' not in production_compose:
+        raise VerificationError("Service-admin frontend must bind explicitly to loopback")
+    if production_compose.count("logging: *default-logging") != 4:
         raise VerificationError("All production containers must use bounded log rotation")
 
     env_example = (ROOT / "cloud_server" / ".env.example").read_text(encoding="utf-8-sig")
@@ -486,11 +501,12 @@ def verify_deployment_contract() -> str:
         "MONGO_INITDB_ROOT_USERNAME",
         "MONGO_INITDB_ROOT_PASSWORD",
         "SECRET_KEY",
-        "ADMIN_BOOTSTRAP_TOKEN",
         "PUBLIC_BASE_URL",
         "DEVICE_AUTH_REQUIRED",
         "UNCLAIMED_DEVICE_TTL_SECONDS",
         "AUTH_TOKEN_TTL_SECONDS",
+        "SERVICE_ADMIN_TOKEN_TTL_SECONDS",
+        "SERVICE_ADMIN_PORT",
         "CORS_ORIGINS",
     }
     missing_keys = sorted(required_keys - configured_keys)
@@ -508,7 +524,6 @@ def verify_security_contract() -> str:
     identity_source = (ROOT / "device_identity.h").read_text(encoding="utf-8-sig")
     required_backend_markers = (
         "X-Device-Key",
-        "ADMIN_BOOTSTRAP_TOKEN",
         "PUBLIC_BASE_URL",
         "generate_password_hash",
         "tokenHash",

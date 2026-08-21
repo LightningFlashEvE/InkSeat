@@ -1,6 +1,7 @@
 // 简单用户认证工具
 const AUTH_API_BASE = '';
-const AUTH_LOGIN_URL = 'login.html?v=20260817templateuifix1';
+const AUTH_LOGIN_URL = 'login.html?v=20260821devicesort7';
+const AUTH_CHANGE_PASSWORD_URL = 'change-password.html?v=20260821devicesort7';
 let authRedirectInProgress = false;
 
 function getAuthToken() {
@@ -64,6 +65,14 @@ async function authFetch(input, init = {}) {
         headers
     });
 
+    if (response.status === 403) {
+        const data = await response.clone().json().catch(() => ({}));
+        if (data.code === 'password_change_required') {
+            window.location.replace(AUTH_CHANGE_PASSWORD_URL);
+            return response;
+        }
+    }
+
     if (response.status !== 401) {
         return response;
     }
@@ -91,6 +100,10 @@ async function requireAuth() {
             const data = await res.json();
             if (!data.user) {
                 throw new AuthCheckError('认证服务返回了无效响应，请稍后重试', 'auth_invalid_response', res.status);
+            }
+            if (data.user.mustChangePassword && !/(?:^|\/)change-password\.html$/i.test(window.location.pathname)) {
+                window.location.replace(AUTH_CHANGE_PASSWORD_URL);
+                return null;
             }
             return data.user;
         }

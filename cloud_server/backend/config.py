@@ -43,7 +43,10 @@ class Config:
         for origin in os.environ.get('CORS_ORIGINS', '').split(',')
         if origin.strip()
     ]
-    ADMIN_BOOTSTRAP_TOKEN = os.environ.get('ADMIN_BOOTSTRAP_TOKEN', '').strip()
+    SERVICE_ADMIN_TOKEN_TTL_SECONDS = min(
+        24 * 60 * 60,
+        max(15 * 60, int(os.environ.get('SERVICE_ADMIN_TOKEN_TTL_SECONDS', 4 * 60 * 60))),
+    )
     PAIRING_MAX_FAILED_ATTEMPTS = min(
         100, max(1, int(os.environ.get('PAIRING_MAX_FAILED_ATTEMPTS', 8)))
     )

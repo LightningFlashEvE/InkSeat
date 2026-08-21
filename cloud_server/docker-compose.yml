@@ -45,9 +45,9 @@ services:
       FLASK_PORT: ${FLASK_PORT:-8080}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL in .env}
       SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
-      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
       AUTH_TOKEN_TTL_SECONDS: ${AUTH_TOKEN_TTL_SECONDS:-604800}
-      ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:?set ADMIN_BOOTSTRAP_TOKEN in .env}
+      SERVICE_ADMIN_TOKEN_TTL_SECONDS: ${SERVICE_ADMIN_TOKEN_TTL_SECONDS:-14400}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       DEVICE_AUTH_REQUIRED: ${DEVICE_AUTH_REQUIRED:-true}
       PAIRING_MAX_FAILED_ATTEMPTS: ${PAIRING_MAX_FAILED_ATTEMPTS:-8}
@@ -81,6 +81,22 @@ services:
     ports:
       # 宿主机 FRONTEND_PORT -> 容器 80；ESP32 与浏览器统一访问该端口
       - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - esp32-network
+
+  # 最高权限服务管理网页：仅绑定宿主机回环地址，通过 SSH 隧道访问。
+  service-admin-frontend:
+    build:
+      context: .
+      dockerfile: service_admin_frontend/Dockerfile
+    container_name: esp32-service-admin-frontend
+    ports:
+      - "127.0.0.1:${SERVICE_ADMIN_PORT:-18081}:80"
     depends_on:
       backend:
         condition: service_healthy

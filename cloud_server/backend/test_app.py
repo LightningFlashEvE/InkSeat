@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import types
@@ -71,6 +72,10 @@ class FakeCursor:
         self.documents = copy.deepcopy(documents)
 
     def sort(self, key, direction=1):
+        if isinstance(key, list):
+            for sort_key, sort_direction in reversed(key):
+                self.sort(sort_key, sort_direction)
+            return self
         self.documents.sort(
             key=lambda document: (document.get(key) is not None, document.get(key)),
             reverse=direction < 0,
@@ -79,6 +84,10 @@ class FakeCursor:
 
     def limit(self, count):
         self.documents = self.documents[:count]
+        return self
+
+    def skip(self, count):
+        self.documents = self.documents[count:]
         return self
 
     def __iter__(self):
@@ -97,6 +106,10 @@ class FakeCollection:
                     return False
                 continue
             actual = document.get(key)
+            if isinstance(expected, re.Pattern):
+                if actual is None or expected.search(str(actual)) is None:
+                    return False
+                continue
             if isinstance(expected, dict):
                 if '$exists' in expected and (key in document) != bool(expected['$exists']):
                     return False
@@ -142,6 +155,9 @@ class FakeCollection:
             for document in self.documents
             if self._matches(document, query or {})
         ])
+
+    def count_documents(self, query):
+        return sum(1 for document in self.documents if self._matches(document, query or {}))
 
     def insert_one(self, document):
         stored = copy.deepcopy(document)
@@ -237,13 +253,16 @@ class BackendSecurityTests(unittest.TestCase):
             name: getattr(backend, name)
             for name in (
                 'users_collection', 'devices_collection', 'device_status_collection',
+                'service_admins_collection', 'service_admin_audit_collection',
                 'pages_collection', 'pairing_codes_collection',
                 'saved_nameplate_templates_collection', 'ALLOW_REGISTRATION',
-                'DEVICE_AUTH_REQUIRED', 'ADMIN_BOOTSTRAP_TOKEN', 'DATA_DIR',
+                'DEVICE_AUTH_REQUIRED', 'DATA_DIR',
             )
         }
         backend.app.config.update(TESTING=True)
         backend.users_collection = FakeCollection()
+        backend.service_admins_collection = FakeCollection()
+        backend.service_admin_audit_collection = FakeCollection()
         backend.devices_collection = FakeCollection()
         backend.device_status_collection = FakeCollection()
         backend.pages_collection = FakeCollection()
@@ -251,7 +270,6 @@ class BackendSecurityTests(unittest.TestCase):
         backend.saved_nameplate_templates_collection = FakeCollection()
         backend.ALLOW_REGISTRATION = False
         backend.DEVICE_AUTH_REQUIRED = True
-        backend.ADMIN_BOOTSTRAP_TOKEN = 'bootstrap-' + ('A' * 32)
         self.temp_directory = tempfile.TemporaryDirectory()
         backend.DATA_DIR = Path(self.temp_directory.name)
         self.client = backend.app.test_client()
@@ -260,11 +278,100 @@ class BackendSecurityTests(unittest.TestCase):
         )
         self.user_patch.start()
 
+    def seed_service_admin(self, username='ops', token='admin-token'):
+        backend.service_admins_collection = FakeCollection([{
+            '_id': 91,
+            'username': username,
+            'passwordHash': backend.hash_password('service-admin-password'),
+            'tokenHash': backend.hash_token(token),
+            'tokenExpiresAt': backend.utcnow() + timedelta(hours=1),
+            'disabled': False,
+        }])
+        return {'Authorization': f'Bearer {token}'}
+
     def tearDown(self):
         self.user_patch.stop()
         for name, value in self.saved_globals.items():
             setattr(backend, name, value)
         self.temp_directory.cleanup()
+
+    def test_ordinary_user_token_cannot_access_service_admin_api(self):
+        backend.users_collection = FakeCollection([{
+            '_id': 2, 'username': 'bob',
+            'tokenHash': backend.hash_token('user-token'),
+            'tokenExpiresAt': backend.utcnow() + timedelta(hours=1),
+        }])
+
+        response = self.client.get(
+            '/api/service-admin/overview',
+            headers={'Authorization': 'Bearer user-token'},
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_service_admin_device_list_is_global_but_does_not_leak_secrets(self):
+        headers = self.seed_service_admin()
+        backend.devices_collection = FakeCollection([{
+            'deviceId': 'A1B2C3', 'deviceName': '甲设备', 'owner': 'alice',
+            'claimed': True, 'deviceKeyHash': 'secret-key-hash',
+            'pairingCode': '123456', 'imageVersion': 8,
+        }, {
+            'deviceId': 'D4E5F6', 'deviceName': '乙设备', 'owner': 'bob',
+            'claimed': True, 'imageVersion': 3,
+        }])
+        backend.device_status_collection = FakeCollection([{
+            'deviceId': 'A1B2C3', 'lastSeen': int(datetime.now().timestamp() * 1000),
+            'firmwareVersion': '1.2.3', 'deviceKey': 'must-not-leak',
+        }])
+
+        response = self.client.get('/api/service-admin/devices?page=1&pageSize=20', headers=headers)
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(body['pagination']['total'], 2)
+        serialized = json.dumps(body)
+        for secret_field in ('deviceKeyHash', 'deviceKey', 'pairingCode', 'tokenHash', 'passwordHash'):
+            self.assertNotIn(secret_field, serialized)
+
+    def test_service_admin_reset_revokes_session_and_forces_password_change(self):
+        headers = self.seed_service_admin()
+        backend.users_collection = FakeCollection([{
+            '_id': 7, 'username': 'alice',
+            'passwordHash': backend.hash_password('old-password'),
+            'tokenHash': backend.hash_token('old-token'),
+            'tokenExpiresAt': backend.utcnow() + timedelta(hours=1),
+        }])
+
+        response = self.client.post('/api/service-admin/users/alice/reset-password', headers=headers)
+
+        self.assertEqual(response.status_code, 200)
+        temporary_password = response.get_json()['temporaryPassword']
+        user = backend.users_collection.find_one({'username': 'alice'})
+        self.assertTrue(user['mustChangePassword'])
+        self.assertNotIn('tokenHash', user)
+        self.assertTrue(backend.verify_password(user['passwordHash'], temporary_password)[0])
+        audit_dump = json.dumps(backend.service_admin_audit_collection.documents, default=str)
+        self.assertNotIn(temporary_password, audit_dump)
+
+    def test_forced_password_change_blocks_device_api_then_revokes_change_session(self):
+        user = {
+            '_id': 8, 'username': 'alice', 'mustChangePassword': True,
+            'passwordHash': backend.hash_password('temporary-password'),
+        }
+        backend.users_collection = FakeCollection([user])
+        with patch.object(backend, 'get_current_user', return_value=user):
+            blocked = self.client.get('/api/devices')
+            changed = self.client.post('/api/auth/change-password', json={
+                'currentPassword': 'temporary-password',
+                'newPassword': 'a-new-secure-password',
+            })
+
+        self.assertEqual(blocked.status_code, 403)
+        self.assertEqual(blocked.get_json()['code'], 'password_change_required')
+        self.assertEqual(changed.status_code, 200)
+        stored = backend.users_collection.find_one({'username': 'alice'})
+        self.assertFalse(stored['mustChangePassword'])
+        self.assertTrue(backend.verify_password(stored['passwordHash'], 'a-new-secure-password')[0])
 
     def test_existing_owner_cannot_be_overwritten(self):
         backend.devices_collection = FakeCollection([
@@ -359,6 +466,31 @@ class BackendSecurityTests(unittest.TestCase):
             '旧名称',
         )
 
+    def test_device_order_is_saved_and_limited_to_the_current_owner(self):
+        backend.devices_collection = FakeCollection([
+            {'deviceId': 'A1B2C3', 'owner': 'bob', 'claimed': True, 'addedAt': 1},
+            {'deviceId': 'D4E5F6', 'owner': 'bob', 'claimed': True, 'addedAt': 2},
+            {'deviceId': '112233', 'owner': 'alice', 'claimed': True, 'addedAt': 3},
+        ])
+
+        reordered = self.client.post('/api/devices/reorder', json={
+            'deviceIds': ['D4E5F6', 'A1B2C3'],
+        })
+        listed = self.client.get('/api/devices/list')
+        foreign = self.client.post('/api/devices/reorder', json={
+            'deviceIds': ['D4E5F6', 'A1B2C3', '112233'],
+        })
+
+        self.assertEqual(reordered.status_code, 200)
+        self.assertEqual(
+            [device['deviceId'] for device in listed.get_json()['devices']],
+            ['D4E5F6', 'A1B2C3'],
+        )
+        self.assertEqual(foreign.status_code, 409)
+        self.assertNotIn(
+            'sortOrder', backend.devices_collection.find_one({'deviceId': '112233'}),
+        )
+
     def test_nameplate_default_sleep_interval_is_24_hours(self):
         metadata = backend.build_content_metadata('template', 'nameplate')
 
@@ -431,25 +563,14 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(len(backend.users_collection.documents), 1)
 
-    def test_first_registration_requires_bootstrap_token(self):
+    def test_first_registration_is_allowed_without_bootstrap_token(self):
         response = self.client.post('/api/auth/register', json={
             'username': 'admin', 'password': 'strong-pass'
         })
 
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(backend.users_collection.documents, [])
-
-    def test_first_registration_accepts_configured_bootstrap_token(self):
-        response = self.client.post(
-            '/api/auth/register',
-            json={'username': 'admin', 'password': 'strong-pass'},
-            headers={'X-Admin-Bootstrap-Token': backend.ADMIN_BOOTSTRAP_TOKEN},
-        )
-
         self.assertEqual(response.status_code, 200)
         created = backend.users_collection.find_one({'username': 'admin'})
         self.assertTrue(created['passwordHash'].startswith('scrypt:'))
-        self.assertNotIn('bootstrapToken', created)
 
     def test_login_stores_only_hashed_token_and_logout_revokes_it(self):
         password = 'correct-horse-battery-staple'
@@ -667,6 +788,31 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(exposed['firmwareVersion'], '3.1.0')
         self.assertEqual(exposed['lastUpdateDurationMs'], 123456)
 
+    def test_owned_screen_preview_renders_the_saved_epd_frame(self):
+        image_data = 'ab' * (backend.EPD_EXPECTED_CHARS // 2)
+        backend.devices_collection = FakeCollection([{
+            'deviceId': 'A1B2C3', 'owner': 'bob', 'claimed': True, 'imageVersion': 8,
+        }])
+        self.assertTrue(backend.save_device_image('A1B2C3', image_data, image_version=8))
+
+        response = self.client.get('/api/devices/A1B2C3/screen-preview')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, 'image/png')
+        with Image.open(io.BytesIO(response.data)) as image:
+            self.assertEqual(image.size, (backend.EPD_WIDTH, backend.EPD_HEIGHT))
+            self.assertEqual(image.getpixel((0, 0)), (0, 0, 0))
+            self.assertEqual(image.getpixel((1, 0)), (255, 255, 255))
+
+    def test_screen_preview_is_not_available_to_another_owner(self):
+        backend.devices_collection = FakeCollection([{
+            'deviceId': 'A1B2C3', 'owner': 'alice', 'claimed': True, 'imageVersion': 8,
+        }])
+
+        response = self.client.get('/api/devices/A1B2C3/screen-preview')
+
+        self.assertEqual(response.status_code, 404)
+
     def test_presence_marks_device_offline_after_first_missed_automatic_wake(self):
         now_ms = 1_800_000_000_000
         sleep_interval_seconds = 60 * 60
@@ -683,8 +829,20 @@ class BackendSecurityTests(unittest.TestCase):
         cases = [
             ('active wake window', 60, True, False, 1),
             ('normal sleep', 10 * 60, False, True, 1),
-            ('first wake grace', 64 * 60, False, True, 1),
-            ('first wake missed', 66 * 60, False, False, 1),
+            (
+                'first wake grace',
+                sleep_interval_seconds + backend.DEVICE_WAKE_REPORT_GRACE_SECONDS - 60,
+                False,
+                True,
+                1,
+            ),
+            (
+                'first wake missed',
+                sleep_interval_seconds + backend.DEVICE_WAKE_REPORT_GRACE_SECONDS + 60,
+                False,
+                False,
+                1,
+            ),
         ]
 
         with patch.object(backend.time, 'time', return_value=now_ms / 1000):

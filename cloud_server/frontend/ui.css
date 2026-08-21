@@ -3005,6 +3005,64 @@ body.meeting-device-page button:disabled {
     transition: background 0.16s ease;
 }
 
+.meeting-sortable-row {
+    cursor: grab;
+    touch-action: auto;
+    user-select: none;
+}
+
+.meeting-sortable-row.is-dragging {
+    cursor: grabbing;
+}
+
+.meeting-device-drag-image {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 9999;
+    margin: 0;
+    pointer-events: none;
+    table-layout: fixed;
+    border-collapse: collapse;
+    background: #fff;
+    color: #17212b;
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.28);
+}
+
+.meeting-device-drag-image td {
+    height: 72px;
+    background: #fff !important;
+    color: #17212b !important;
+    border-bottom-color: rgba(21, 35, 48, 0.16);
+}
+
+.meeting-device-drag-image .meeting-dev-thumb {
+    border-color: rgba(21, 35, 48, 0.7);
+    background: #f2f5f7;
+}
+
+.meeting-device-drag-image .meeting-table-action {
+    border-color: rgba(21, 35, 48, 0.18);
+    background: #f1f4f6;
+    color: #17212b;
+}
+
+.meeting-sortable-row.sorting-disabled {
+    cursor: pointer;
+}
+
+.meeting-device-drop-indicator {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 9998;
+    height: 4px;
+    border-radius: 999px;
+    pointer-events: none;
+    background: #82c6ff;
+    box-shadow: 0 0 0 2px rgba(194, 232, 255, 0.42), 0 0 16px rgba(64, 161, 255, 0.92);
+}
+
 .meeting-table tbody tr:hover td,
 .meeting-table tbody tr.selected td {
     background: rgba(255, 255, 255, 0.045);
@@ -3363,15 +3421,20 @@ body.meeting-device-page button:disabled {
     color: #ffffff;
 }
 
-.meeting-device-preview {
+.meeting-device-preview-wrap {
     width: min(100%, 260px);
-    aspect-ratio: 5 / 3;
     justify-self: center;
+    display: grid;
+    gap: 6px;
+}
+
+.meeting-device-preview {
+    width: 100%;
     border-radius: 8px;
     border: 3px solid rgba(255, 255, 255, 0.72);
     background: #15191d;
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.52), 0 8px 20px rgba(0, 0, 0, 0.28);
-    padding: 9px;
+    padding: 4px;
     position: relative;
 }
 
@@ -3379,25 +3442,53 @@ body.meeting-device-page button:disabled {
     content: none;
 }
 
+.meeting-preview-state {
+    justify-self: center;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(21, 25, 29, 0.09);
+    color: rgba(41, 54, 65, 0.82);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
 .meeting-screen {
-    height: 100%;
+    width: 100%;
+    aspect-ratio: 5 / 3;
+    height: auto;
     border-radius: 4px;
-    background: #111820;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    padding: 12px 16px;
+    overflow: hidden;
+    background: #f7f7f5;
+}
+
+.meeting-screen.is-placeholder {
     display: grid;
-    align-content: center;
+    place-items: center;
+    background: #111820;
+    padding: 12px 16px;
+    color: #fff;
+    text-align: center;
+}
+
+.meeting-screen img {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: contain;
+}
+
+.meeting-screen-placeholder {
+    display: grid;
     justify-items: center;
     gap: 8px;
-    text-align: center;
-    color: #fff;
 }
 
-.meeting-screen small {
-    display: none;
-}
-
-.meeting-screen h3 {
+.meeting-screen-placeholder h3 {
     margin: 0;
     color: #fff;
     font-size: 17px;
@@ -3410,7 +3501,7 @@ body.meeting-device-page button:disabled {
     -webkit-box-orient: vertical;
 }
 
-.meeting-screen p {
+.meeting-screen-placeholder p {
     margin: 0;
     color: rgba(255, 255, 255, 0.86);
     font-size: 12px;
@@ -3660,7 +3751,7 @@ body.meeting-device-page button:disabled {
         grid-template-columns: 1fr;
     }
 
-    .meeting-device-preview {
+    .meeting-device-preview-wrap {
         display: none;
     }
 
@@ -3830,7 +3921,7 @@ body.meeting-device-page button:disabled {
         grid-template-columns: 62px minmax(0, 1fr);
     }
 
-    .meeting-device-preview {
+    .meeting-device-preview-wrap {
         display: none;
     }
 
@@ -6772,4 +6863,35 @@ html.theme-light .nameplates-page .nameplate-device-row.is-offline,
 html[data-theme="light"] .nameplates-page .nameplate-device-row.is-offline {
     background: #fff0f0 !important;
     border-color: rgba(201, 67, 67, 0.24) !important;
+}
+
+.login-page .login-help {
+    display: block;
+    width: 100%;
+    margin: 4px 0 0;
+    color: var(--ui-text-muted);
+    font-size: 0.76rem;
+    line-height: 1.5;
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+
+.login-page .card {
+    padding-bottom: 32px !important;
+}
+
+.login-page .status {
+    margin-top: 14px;
+    min-height: 0;
+    line-height: 1.5;
+}
+
+.login-page .login-help a {
+    color: var(--ui-accent);
+    text-decoration: none;
+}
+
+.login-page .login-help a:hover,
+.login-page .login-help a:focus-visible {
+    text-decoration: underline;
 }
