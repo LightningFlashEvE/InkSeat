@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 FONT = r"C:\Windows\Fonts\simsun.ttc"
 SIZE = 16
-FONT12CN = Path(__file__).resolve().parent.parent / "font12CN.c"
+FONT12CN = Path(__file__).resolve().parent.parent / "firmware" / "Loader_esp32wf" / "font12CN.c"
 
 
 def render_char(ch: str) -> Image.Image:

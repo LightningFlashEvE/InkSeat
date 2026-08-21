@@ -1,4 +1,4 @@
-# ESP32-C3 墨水屏云端控制系统（Deep-sleep + HTTP Pull，无 MQTT）
+# ESP32-C3 墨水屏云端控制系统
 
 本项目采用 **Deep-sleep + 按键/定时唤醒 + HTTP 拉取更新** 的低功耗架构：
 
@@ -8,7 +8,7 @@
 - **服务器端上传图片时不要求设备在线**；设备下次唤醒即可拉到最新内容
 - 已保存 WiFi 但本次连接失败时会保留原配置；普通按键/定时唤醒直接回睡，下次再试。需要重新配网时长按 GPIO0。
 
-## 系统架构（无 MQTT）
+## 系统架构
 
 ```
 用户浏览器 <--> 云服务器 (Nginx + Flask + MongoDB) <--> ESP32-C3 (HTTP 客户端/Deep-sleep) <--> 墨水屏
@@ -75,6 +75,16 @@
 
 ```
 .
+├── firmware/
+│   └── Loader_esp32wf/       # 可直接在 Arduino IDE 打开的完整固件 Sketch
+│       ├── Loader_esp32wf.ino # 主程序入口（Sketch 名与目录名保持一致）
+│       ├── http_update.h      # HTTP 拉取更新核心逻辑
+│       ├── wifi_config.h      # WiFi 配网
+│       ├── DEV_Config.h/cpp   # 硬件引脚与 SPI 初始化
+│       ├── epd*.h / EPD_7in3e.* / GUI_Paint.* # 墨水屏驱动与绘制库
+│       ├── font* / fonts.h / provisioning_fonts.h # 字库
+│       ├── qrcode.* / buff.h / device_identity.h / logo_phenosolar.h
+│       └── partitions.csv     # 固件专用分区表
 ├── cloud_server/              # 云端服务器（Python Flask + Nginx）
 │   ├── backend/              # Flask后端API
 │   │   ├── app.py            # 主应用
@@ -92,23 +102,7 @@
 │   │   └── service-admin.js   # 服务管理逻辑
 │   └── docker-compose.yml    # Docker部署配置
 │
-├── Loader_esp32wf.ino         # ESP32主程序
-├── http_update.h              # HTTP 拉取更新（Deep-sleep 架构核心）
-├── wifi_config.h              # WiFi配网功能
-├── DEV_Config.h/cpp           # 硬件配置（引脚定义）
-├── epd.h                      # 墨水屏驱动接口
-├── epd7in3.h                  # 7.3寸E6驱动适配层
-├── EPD_7in3e.h/cpp            # 墨水屏驱动
-├── GUI_Paint.h/cpp            # GUI绘制库
-├── qrcode.h / qrcode.c        # 内置二维码编码器（AP配网二维码）
-├── fonts.h                    # 基础字库声明
-├── provisioning_fonts.h       # AP 配网页字体角色映射
-├── font24.cpp                 # 24像素 ASCII 字体
-├── font16.cpp                 # 16像素 ASCII 字体（AP 页动态值）
-├── font12.cpp                 # 12像素字体数据
-├── font12CN.c                 # 中文提示字库（16x16）
-├── fontNum.c                  # 数字/英文混排字库（8x16）
-├── partitions.csv             # Flash分区表
+├── tools/                     # 固件构建、字库生成与项目校验工具
 └── README.md                  # 本文件
 ```
 
@@ -164,7 +158,7 @@ docker compose logs -f frontend  # 前端日志
 cd backend
 pip3 install -r requirements.txt
 
-# 3. 配置环境变量（无 MQTT）
+# 3. 配置环境变量
 # 复制 cloud_server/.env.example 为 .env，并至少修改 MongoDB 密码、SECRET_KEY、公网地址：
 export MONGO_INITDB_ROOT_USERNAME="esp32_epd_root"
 export MONGO_INITDB_ROOT_PASSWORD="change_this_mongo_password"
@@ -215,13 +209,13 @@ sudo ufw enable
    - **ArduinoJson 7.x** (by Benoit Blanchon，已验证主版本)
 
 4. **说明**：
-   - 设备端已改为 `http_update.h` 的 **HTTP 拉取**模式，不再依赖旧的 MQTT 长连接链路。
+   - 固件使用 `firmware/Loader_esp32wf/http_update.h` 中的 HTTP 拉取更新配置。
    - **必改项**：生产部署应把 `CLOUD_API_USE_HTTPS` 设为 `1`，同步配置 `CLOUD_API_HOST`、`CLOUD_API_PORT=443` 和正确的 `CLOUD_API_ROOT_CA_PEM`；它们必须与云端 `PUBLIC_BASE_URL=https://你的域名` 及外部 TLS 反向代理一致。
    - 未启用 HTTPS 时，登录令牌和设备 `X-Device-Key` 仍可能被链路窃取，只适合受信内网或迁移期。
 
 5. **分区表配置**：
 
-项目根目录的 `partitions.csv` 已配置好：
+固件目录 `firmware/Loader_esp32wf/partitions.csv` 已配置好：
 ```
 nvs,      data, nvs,     0x9000,  0x5000,
 phy_init, data, phy,     0xe000,  0x2000,
@@ -229,7 +223,7 @@ factory,  app,  factory, 0x10000, 0x240000,
 spiffs,   data, spiffs,  0x250000, 0x1B0000,
 ```
 
-**注意**：确保 Arduino IDE 中选择了 **Custom Partition Table**，这样会自动使用项目根目录的 `partitions.csv`。
+**注意**：请在 Arduino IDE 中打开 `firmware/Loader_esp32wf/Loader_esp32wf.ino`，并选择 **Custom Partition Table**；IDE 会自动使用同一 Sketch 目录下的 `partitions.csv`。
 
 当前分区是单 `factory` 应用的 **No OTA** 布局。`factory` 已扩展到 `0x240000`，正好使用到 `spiffs` 起始地址前，原有 SPIFFS 起始位置和容量不变。若要增加 OTA，仍必须重新设计整张分区表并重新评估两个应用槽与 SPIFFS 容量，不能只新增接口。
 

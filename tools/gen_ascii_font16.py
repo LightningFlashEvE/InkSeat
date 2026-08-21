@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-OUT_DIR = Path(__file__).resolve().parent.parent
+OUT_DIR = Path(__file__).resolve().parent.parent / "firmware" / "Loader_esp32wf"
 FONT_DIR = Path(os.environ.get("PHENO_FONT_DIR", r"C:\Windows\Fonts"))
 
 

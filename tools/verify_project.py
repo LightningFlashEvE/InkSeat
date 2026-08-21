@@ -16,6 +16,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FIRMWARE_DIR = ROOT / "firmware" / "Loader_esp32wf"
 FRONTEND_DIR = ROOT / "cloud_server" / "frontend"
 SERVICE_ADMIN_FRONTEND_DIR = ROOT / "cloud_server" / "service_admin_frontend"
 BACKEND_DIR = ROOT / "cloud_server" / "backend"
@@ -54,6 +55,32 @@ def verify_javascript_syntax() -> int:
         if result.returncode:
             raise VerificationError(f"JavaScript syntax failed: {path.name}\n{result.stderr}")
     return len(files)
+
+
+def verify_firmware_layout() -> str:
+    required_files = {
+        "Loader_esp32wf.ino",
+        "http_update.h",
+        "wifi_config.h",
+        "device_identity.h",
+        "partitions.csv",
+    }
+    missing = sorted(name for name in required_files if not (FIRMWARE_DIR / name).is_file())
+    if missing:
+        raise VerificationError(f"Firmware sketch layout is incomplete: missing={missing}")
+
+    root_firmware_files = sorted(
+        path.name
+        for path in ROOT.iterdir()
+        if path.is_file()
+        and (path.suffix in {".ino", ".h", ".c", ".cpp"} or path.name == "partitions.csv")
+    )
+    if root_firmware_files:
+        raise VerificationError(
+            "Firmware sources must live under firmware/Loader_esp32wf/: "
+            + ", ".join(root_firmware_files)
+        )
+    return "firmware/Loader_esp32wf"
 
 
 class LocalAssetParser(HTMLParser):
@@ -169,7 +196,7 @@ def parse_int(value: str) -> int:
 
 
 def verify_partition_table() -> str:
-    path = ROOT / "partitions.csv"
+    path = FIRMWARE_DIR / "partitions.csv"
     rows: list[tuple[str, str, str, int, int]] = []
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         for raw_row in csv.reader(line for line in handle if not line.lstrip().startswith("#")):
@@ -274,7 +301,7 @@ def extract_python_constants(path: Path, names: set[str]) -> dict[str, int]:
 
 
 def verify_epd_contract() -> str:
-    firmware_chars = extract_define(ROOT / "http_update.h", "EPD_EXPECTED_CHARS")
+    firmware_chars = extract_define(FIRMWARE_DIR / "http_update.h", "EPD_EXPECTED_CHARS")
     backend = extract_python_constants(
         BACKEND_DIR / "app.py", {"EPD_WIDTH", "EPD_HEIGHT", "EPD_EXPECTED_CHARS"}
     )
@@ -518,10 +545,10 @@ def verify_deployment_contract() -> str:
 
 def verify_security_contract() -> str:
     backend_source = (BACKEND_DIR / "app.py").read_text(encoding="utf-8-sig")
-    firmware_source = (ROOT / "http_update.h").read_text(encoding="utf-8-sig")
-    epd_dispatch_source = (ROOT / "epd.h").read_text(encoding="utf-8-sig")
-    qr_source = (ROOT / "qrcode.c").read_text(encoding="utf-8-sig")
-    identity_source = (ROOT / "device_identity.h").read_text(encoding="utf-8-sig")
+    firmware_source = (FIRMWARE_DIR / "http_update.h").read_text(encoding="utf-8-sig")
+    epd_dispatch_source = (FIRMWARE_DIR / "epd.h").read_text(encoding="utf-8-sig")
+    qr_source = (FIRMWARE_DIR / "qrcode.c").read_text(encoding="utf-8-sig")
+    identity_source = (FIRMWARE_DIR / "device_identity.h").read_text(encoding="utf-8-sig")
     required_backend_markers = (
         "X-Device-Key",
         "PUBLIC_BASE_URL",
@@ -595,8 +622,9 @@ def verify_tooling_contract() -> str:
         "non-empty unmarked directory",
         "Find-ReparsePoint",
         "Find-ReparseAncestor",
+        "$firmwareDir",
         "/MIR /XJ",
-        "/XD .git .github .build cloud_server tools output",
+        "/XD .build __pycache__",
     )
     missing_build_guards = [item for item in required_build_guards if item not in build_helper]
     if missing_build_guards or "legacyMirrorSignature" in build_helper:
@@ -654,6 +682,7 @@ def main() -> int:
     checks = [
         ("Python syntax", verify_python_syntax),
         ("JavaScript syntax", verify_javascript_syntax),
+        ("firmware layout", verify_firmware_layout),
         ("HTML local assets", verify_html_assets),
         ("HTML integrity", verify_html_integrity),
         ("partition table", verify_partition_table),

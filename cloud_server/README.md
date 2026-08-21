@@ -230,8 +230,7 @@ curl --fail https://epd.example.com/api/health
   "success": true,
   "status": "healthy",
   "mongodb": "connected",
-  "architecture": "deep-sleep-http-pull",
-  "mqtt": "removed"
+  "architecture": "deep-sleep-http-pull"
 }
 ```
 

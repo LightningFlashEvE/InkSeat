@@ -73,6 +73,10 @@ function Find-ReparseAncestor {
 }
 
 $repoRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$firmwareDir = Join-Path $repoRoot 'firmware\Loader_esp32wf'
+if (-not (Test-Path -LiteralPath (Join-Path $firmwareDir 'Loader_esp32wf.ino') -PathType Leaf)) {
+    throw "Firmware sketch is missing: $firmwareDir"
+}
 $mirrorFullPath = [System.IO.Path]::GetFullPath($MirrorPath)
 $mirrorDriveRoot = [System.IO.Path]::GetPathRoot($mirrorFullPath)
 $userHome = [System.IO.Path]::GetFullPath([Environment]::GetFolderPath('UserProfile'))
@@ -166,10 +170,9 @@ if (Test-Path -LiteralPath $mirrorFullPath) {
 
 New-Item -ItemType Directory -Force $mirrorFullPath | Out-Null
 Set-Content -LiteralPath $mirrorMarker -Value $MirrorMarkerContent -Encoding ASCII
-$null = & $robocopy.Source $repoRoot $mirrorFullPath /MIR /XJ /R:2 /W:1 `
-    /XD .git .github .build cloud_server tools output .playwright-cli .sisyphus `
-        .serena .codebuddy .cursor .codex .claude .continue __pycache__ `
-    /XF $MirrorMarkerName .env '*.pyc' 'loader_frontend_*.png'
+$null = & $robocopy.Source $firmwareDir $mirrorFullPath /MIR /XJ /R:2 /W:1 `
+    /XD .build __pycache__ `
+    /XF $MirrorMarkerName '*.pyc'
 if ($LASTEXITCODE -gt 7) {
     throw "robocopy failed with exit code $LASTEXITCODE"
 }

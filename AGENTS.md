@@ -26,22 +26,16 @@
 
 ```
 Loader_esp32wf/
-├── Loader_esp32wf.ino      # 主程序入口（setup/loop）
-├── http_update.h           # HTTP 拉取更新核心逻辑（Deep-sleep 架构）
-├── wifi_config.h           # WiFi 配网（AP 热点 + Captive Portal + Web 配网页面）
-├── DEV_Config.h/cpp        # 硬件引脚定义与 SPI 初始化
-├── epd.h                   # 墨水屏驱动接口（型号分发）
-├── epd7in3.h               # 7.3寸 E6 驱动适配层
-├── EPD_7in3e.h/cpp         # 墨水屏底层驱动（Waveshare 原版）
-├── GUI_Paint.h/cpp         # GUI 绘制库（文字/图形）
-├── qrcode.h / qrcode.c     # 内置二维码编码器（AP 配网二维码）
-├── buff.h                  # 图像缓冲区辅助
-├── fonts.h / provisioning_fonts.h                              # 基础字库声明 / AP 配网页字体角色
-├── font12.cpp / font16.cpp / font24.cpp / font12CN.c / fontNum.c  # 基础 ASCII/中文/数字字库
-├── font20CN.c / font24CN.c / font36CN.c / font38CN.c          # AP 配网页专用字库
-├── Debug.h                 # 调试宏
-├── partitions.csv          # 自定义 Flash 分区表（必须配套烧录）
+├── firmware/
+│   └── Loader_esp32wf/     # Arduino Sketch 根目录（在 IDE 中打开 Loader_esp32wf.ino）
+│       ├── Loader_esp32wf.ino      # 主程序入口（setup/loop）
+│       ├── http_update.h / wifi_config.h / device_identity.h
+│       ├── DEV_Config.h/cpp / epd.h / epd7in3.h / EPD_7in3e.h/cpp
+│       ├── GUI_Paint.h/cpp / qrcode.h/c / buff.h / Debug.h
+│       ├── fonts.h / provisioning_fonts.h / font*.c / font*.cpp
+│       └── partitions.csv          # 自定义 Flash 分区表（必须配套烧录）
 ├── README.md               # 用户文档
+├── tools/                  # 编译镜像、字库生成与项目校验工具
 │
 └── cloud_server/
     ├── docker-compose.yml  # Docker 部署配置（backend + frontend）
@@ -49,6 +43,9 @@ Loader_esp32wf/
     ├── backend/six_color_epd.py  # 六色图像处理算法
     └── frontend/           # Nginx + 静态页面
 ```
+
+除非另有完整路径，本文中的固件文件名均相对于
+`firmware/Loader_esp32wf/`；该目录名必须与 `Loader_esp32wf.ino` 保持一致，才能被 Arduino IDE 识别为 Sketch。
 
 **关键文件速查：**
 
@@ -79,7 +76,7 @@ Loader_esp32wf/
 
 Arduino IDE 必要配置：
 - 开发板：`ESP32C3 Dev Module`
-- Partition Scheme：`Custom Partition Table`（自动读取根目录 `partitions.csv`）
+- Partition Scheme：`Custom Partition Table`（自动读取 Sketch 目录内的 `partitions.csv`）
 - Flash Size：`4MB`，Flash Mode：`DIO`，Upload Speed：`921600`
 - 必装库：`ArduinoJson`（by Benoit Blanchon）
 
