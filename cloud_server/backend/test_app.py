@@ -133,7 +133,19 @@ class FakeCollection:
             return copy.deepcopy(document)
         included = [key for key, enabled in projection.items() if enabled and key != '_id']
         if included:
-            result = {key: copy.deepcopy(document[key]) for key in included if key in document}
+            result = {}
+            for key in included:
+                source = document
+                target = result
+                parts = key.split('.')
+                for part in parts[:-1]:
+                    if not isinstance(source, dict) or part not in source:
+                        break
+                    source = source[part]
+                    target = target.setdefault(part, {})
+                else:
+                    if isinstance(source, dict) and parts[-1] in source:
+                        target[parts[-1]] = copy.deepcopy(source[parts[-1]])
             if projection.get('_id', 1) and '_id' in document:
                 result['_id'] = copy.deepcopy(document['_id'])
             return result
@@ -1181,6 +1193,41 @@ class BackendSecurityTests(unittest.TestCase):
         self.assertEqual(stored['templateConfig']['name'], '示例姓名')
         self.assertEqual(stored['templateConfig']['elements'][1]['kind'], 'image')
 
+    def test_nameplate_template_list_omits_large_config_until_detail_is_requested(self):
+        image_data_url = make_test_logo_data_url(size=(800, 480))
+        backend.saved_nameplate_templates_collection = FakeCollection([{
+            'owner': 'bob',
+            'templateId': 'saved-large-template',
+            'name': '含图片的自定义模板',
+            'baseTemplateId': 'nameplate',
+            'createdAt': datetime(2026, 8, 1, tzinfo=timezone.utc),
+            'updatedAt': datetime(2026, 8, 2, tzinfo=timezone.utc),
+            'templateConfig': {
+                'layoutMode': 'custom',
+                'backgroundImageDataUrl': image_data_url,
+                'backgroundImageFileName': 'background.png',
+                'logoDataUrl': image_data_url,
+                'logoFileName': 'logo.png',
+                'elements': [{'id': 'logo', 'kind': 'image', 'imageDataUrl': image_data_url}],
+            },
+        }])
+
+        listing = self.client.get('/api/nameplate/templates')
+        self.assertEqual(listing.status_code, 200)
+        payload = listing.get_json()
+        self.assertNotIn('backgroundImageDataUrl', listing.get_data(as_text=True))
+        self.assertNotIn('templateConfig', payload['templates'][0])
+        self.assertEqual(payload['templates'][0]['templateSummary']['layoutMode'], 'custom')
+        self.assertTrue(payload['templates'][0]['templateSummary']['hasBackgroundImage'])
+        self.assertTrue(payload['templates'][0]['templateSummary']['hasCustomLogo'])
+
+        detail = self.client.get('/api/nameplate/templates/saved-large-template')
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(
+            detail.get_json()['template']['templateConfig']['backgroundImageDataUrl'],
+            image_data_url,
+        )
+
     def test_legacy_page_without_device_scope_is_fail_closed(self):
         backend.pages_collection = FakeCollection([{
             'pageId': 'legacy-page', 'name': 'orphan', 'data': {},
@@ -2194,6 +2241,7 @@ class IndexMigrationTests(unittest.TestCase):
         names = {index['name'] for index in collection.indexes}
         self.assertNotIn('templateId_1', names)
         self.assertIn('owner_template_base_unique', names)
+        self.assertIn('owner_baseTemplate_updatedAt_idx', names)
         status_index_names = {
             index['name'] for index in database['device_status'].indexes
         }

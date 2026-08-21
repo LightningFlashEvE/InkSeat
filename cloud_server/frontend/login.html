@@ -7,7 +7,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>用户登录</title>
-    <link rel="icon" href="data:;base64,=">
+    <link rel="icon" href="favicon.ico?v=20260821templatelazy2" sizes="any">
     <script>
         (function () {
             try {
@@ -134,8 +134,8 @@
             color: #38a169;
         }
     </style>
-    <script src="theme.js?v=20260821devicesort7"></script>
-    <link rel="stylesheet" href="ui.css?v=20260821devicesort7">
+    <script src="theme.js?v=20260821templatelazy2"></script>
+    <link rel="stylesheet" href="ui.css?v=20260821templatelazy2">
 </head>
 <body class="login-page">
     <div class="card">
@@ -163,7 +163,7 @@
         <p class="login-help">忘记密码？<a href="tel:13227951412">联系系统维护者：13227951412</a></p>
     </div>
 
-    <script src="auth.js?v=20260821devicesort7"></script>
+    <script src="auth.js?v=20260821templatelazy2"></script>
     <script>
         function setStatus(msg, type) {
             const el = document.getElementById('status');
@@ -221,8 +221,8 @@
                     setStatus('登录成功，正在跳转...', 'success');
                     setTimeout(() => {
                         window.location.href = data.user && data.user.mustChangePassword
-                            ? 'change-password.html?v=20260821devicesort7'
-                            : 'index.html?v=20260821devicesort7';
+                            ? 'change-password.html?v=20260821templatelazy2'
+                            : 'index.html?v=20260821templatelazy2';
                     }, 600);
                 } else if (res.status === 429) {
                     setStatus('登录尝试过于频繁，请稍后再试', 'error');

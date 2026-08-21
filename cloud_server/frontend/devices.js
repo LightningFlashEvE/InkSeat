@@ -811,7 +811,7 @@ function setSignalIndicator(id, rssi) {
 }
 
 function openDevice(deviceId) {
-    window.location.href = `control.html?v=20260821devicesort7&view=device-editor&deviceId=${encodeURIComponent(deviceId)}`;
+    window.location.href = `control.html?v=20260821templatelazy2&view=device-editor&deviceId=${encodeURIComponent(deviceId)}`;
 }
 
 let pollingInterval = null;

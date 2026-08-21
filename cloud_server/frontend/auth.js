@@ -1,7 +1,7 @@
 // 简单用户认证工具
 const AUTH_API_BASE = '';
-const AUTH_LOGIN_URL = 'login.html?v=20260821devicesort7';
-const AUTH_CHANGE_PASSWORD_URL = 'change-password.html?v=20260821devicesort7';
+const AUTH_LOGIN_URL = 'login.html?v=20260821templatelazy2';
+const AUTH_CHANGE_PASSWORD_URL = 'change-password.html?v=20260821templatelazy2';
 let authRedirectInProgress = false;
 
 function getAuthToken() {

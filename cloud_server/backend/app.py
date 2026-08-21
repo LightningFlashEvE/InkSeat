@@ -981,6 +981,41 @@ def serialize_saved_nameplate_template(doc):
     return result
 
 
+def serialize_saved_nameplate_template_summary(doc):
+    """Serialize the lightweight data required by the saved-template list.
+
+    Full template configurations may include base64 background, logo and image
+    element data.  The list never renders those assets, so returning them for
+    every saved template makes entering the editor needlessly slow.
+    """
+    if not doc:
+        return None
+
+    config = doc.get('templateConfig') or {}
+    summary = {
+        'layoutMode': 'custom' if config.get('layoutMode') == 'custom' else 'builtin',
+        'backgroundStyle': str(config.get('backgroundStyle') or ''),
+        'title': str(config.get('title') or ''),
+        'subtitle': str(config.get('subtitle') or ''),
+        'logoHidden': config.get('logoHidden') is True,
+        'hasBackgroundImage': bool(config.get('backgroundImageFileName')),
+        'hasCustomLogo': bool(config.get('logoFileName')),
+    }
+    result = {
+        'templateId': doc.get('templateId'),
+        'name': doc.get('name') or '会议名牌模板',
+        'baseTemplateId': doc.get('baseTemplateId') or 'nameplate',
+        'templateSummary': summary,
+    }
+    for key in ('createdAt', 'updatedAt'):
+        value = doc.get(key)
+        if hasattr(value, 'isoformat'):
+            result[key] = value.isoformat()
+        elif value:
+            result[key] = str(value)
+    return result
+
+
 def find_page_for_owner(page_id: str, owner: str, projection=None):
     """Prefer owner-scoped pages, then fall back to one legacy ownerless page."""
     if pages_collection is None or not owner:
@@ -3998,12 +4033,26 @@ def list_saved_nameplate_templates():
 
         docs = list(saved_nameplate_templates_collection.find(
             {'owner': owner, 'baseTemplateId': 'nameplate'},
-            {'_id': 0}
+            {
+                '_id': 0,
+                'templateId': 1,
+                'name': 1,
+                'baseTemplateId': 1,
+                'createdAt': 1,
+                'updatedAt': 1,
+                'templateConfig.layoutMode': 1,
+                'templateConfig.backgroundStyle': 1,
+                'templateConfig.title': 1,
+                'templateConfig.subtitle': 1,
+                'templateConfig.logoHidden': 1,
+                'templateConfig.backgroundImageFileName': 1,
+                'templateConfig.logoFileName': 1,
+            }
         ).sort('updatedAt', -1))
 
         return jsonify({
             'success': True,
-            'templates': [serialize_saved_nameplate_template(doc) for doc in docs]
+            'templates': [serialize_saved_nameplate_template_summary(doc) for doc in docs]
         })
     except Exception as e:
         print(f'❌ Error listing saved nameplate templates: {e}')

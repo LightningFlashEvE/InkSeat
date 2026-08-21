@@ -128,6 +128,20 @@ docker compose ps
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
+### 仅更新用户前端
+
+只改 `frontend/`（页面、样式、脚本或 `favicon.ico`）时，不必重启后端或 MongoDB：
+
+```bash
+cd cloud_server
+docker compose build frontend
+docker compose up -d --force-recreate --no-deps frontend
+docker compose ps frontend
+curl --fail http://127.0.0.1:${FRONTEND_PORT:-8080}/api/health
+```
+
+部署前请备份待替换的前端文件；不要同步或删除 `mongodb/`、`backend/data/`、`.env`。后端接口、数据库索引或依赖有变更时，仍需按完整部署流程重建相应服务。
+
 查看日志：
 
 ```bash
@@ -179,6 +193,25 @@ TLS 反向代理配置完成后：
 ```text
 https://epd.example.com/
 ```
+
+### 会议牌用户界面
+
+普通用户登录后只会看到自己名下的数据，左侧导航依次为：
+
+- **设备**：添加、查看和编辑设备。按住任意设备列表条可拖动排序；松开后前端会提交该账号完整的设备 ID 顺序。搜索状态下不可排序，清除搜索条件后再操作。
+- **模板设计**：编辑会议名牌模板。初次进入只读取模板摘要；点击已保存模板时才读取完整配置（包括图片背景、Logo 和画布元素），并显示加载进度，减少模板列表首次打开的传输量。
+- **名单下发**：导入或整理名单，选择模板和目标设备后下发会议名牌。
+- **设置**：切换主题、查看当前登录用户名，以及退出登录。
+
+单台设备屏幕编辑从“设备”页进入，只作用于该设备；模板设计页用于保存可复用模板；批量下发在“名单下发”页完成。浏览器标签图标由 `frontend/favicon.ico` 提供。
+
+### 设备排序与模板接口
+
+所有接口都要求普通用户登录，并以令牌对应的 `username` 作为数据隔离边界：
+
+- `POST /api/devices/reorder`：请求体为 `{"deviceIds": ["…"]}`。必须一次提交当前账号全部且不重复的设备 ID；若设备列表在操作期间发生变化，接口返回 `409`，前端应重新加载后再试。
+- `GET /api/nameplate/templates`：只返回模板列表所需的摘要信息，不返回背景、Logo 等大字段。
+- `GET /api/nameplate/templates/<templateId>`：读取当前账号的单个完整模板；`POST /api/nameplate/templates` 新建或更新模板，`DELETE /api/nameplate/templates/<templateId>` 删除模板。
 
 建议验证：
 

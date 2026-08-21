@@ -48,6 +48,11 @@ INDEX_DEFINITIONS = {
         ),
         ('owner', 'owner_idx', {}),
         ([('owner', 1), ('updatedAt', -1)], 'owner_updatedAt_idx', {}),
+        (
+            [('owner', 1), ('baseTemplateId', 1), ('updatedAt', -1)],
+            'owner_baseTemplate_updatedAt_idx',
+            {},
+        ),
     ],
 }
 

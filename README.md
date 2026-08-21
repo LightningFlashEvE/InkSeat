@@ -81,12 +81,15 @@
 │   │   ├── config.py         # 配置管理
 │   │   ├── six_color_epd.py  # 六色图像处理算法（支持三种算法）
 │   │   └── requirements.txt  # Python依赖
-│   ├── frontend/             # Web前端
+│   ├── frontend/             # 普通用户 Web 前端（设备、模板设计、名单下发、设置）
+│   │   ├── index.html        # 设备页
+│   │   ├── control.html      # 模板设计页
+│   │   ├── nameplates.html  # 名单下发页
+│   │   ├── settings.html    # 用户与主题设置页
+│   │   └── favicon.ico       # 浏览器标签图标
 │   ├── service_admin_frontend/ # SSH 隧道访问的独立服务管理网页
-│   │   ├── index.html        # 主页面
-│   │   ├── control.html      # 设备控制页
-│   │   ├── app.js            # 前端逻辑
-│   │   └── nginx.conf        # Nginx配置
+│   │   ├── service-admin.html # 服务管理页
+│   │   └── service-admin.js   # 服务管理逻辑
 │   └── docker-compose.yml    # Docker部署配置
 │
 ├── Loader_esp32wf.ino         # ESP32主程序
@@ -288,10 +291,8 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 
 如果设备已配置WiFi但需要更换WiFi网络，可以使用此方法：
 
-1. **从Deep-sleep唤醒**：短按GPIO0按键唤醒设备（或等待定时唤醒）
-2. **长按进入配网**：
-   - 如果设备当前处于 Deep-sleep：按下 GPIO0 唤醒后，**继续按住约 1.2 秒**，设备会立刻清除 WiFi 配置并进入二维码配网
-   - 如果设备是上电/复位启动：从启动开始保持 GPIO0 低电平 **3 秒**
+1. **保持按住 GPIO0**：从按键唤醒、上电或复位的检测入口开始，持续保持 GPIO0 低电平 **3 秒**；中途松开不会清除已有 WiFi 配置。
+2. **进入配网**：达到 3 秒后设备会清除 WiFi 配置，并进入二维码配网。
 3. **自动进入AP模式**：设备检测到长按后会：
    - 清除已保存的WiFi配置
    - 自动进入AP配网模式
@@ -301,8 +302,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 
 **注意**：
 - 长按检测在设备启动时立即进行，建议在设备唤醒后不要松手，直接持续按住直到屏幕切到二维码配网页
-- 如果设备从 Deep-sleep 被按键唤醒，当前固件会把“唤醒按下”也算进重新配网动作，因此不需要再从开机后重新数满 3 秒
-- 如果设备是定时唤醒或复位唤醒，需要在上电后立即按住 GPIO0 按键 3 秒
+- 按键唤醒、定时唤醒和复位启动都使用相同的连续 3 秒判定；需要重新配网时请从检测开始就持续按住。
 - iOS / Android 的 Captive Portal 自动弹出受系统策略影响，不能保证 100% 弹出，因此屏幕会始终保留 `192.168.4.1` 作为备用入口
 
 ### 6. 测试系统
@@ -332,7 +332,7 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
    - 配对码校验通过后设备才会绑定；设备码本身不再作为凭据
 
 4. **上传图片**：
-   - 在设备控制页面选择已添加的设备
+   - 在“设备”页选择已添加的设备并进入设备屏幕编辑
    - 选择墨水屏型号：**7.3寸 E6**
    - 拖拽或选择图片
    - 切换到"处理"面板
@@ -344,6 +344,17 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
    - 点击 **“发布”**
    - 图片会保存到云端，设备下次唤醒后自动拉取并刷新
    - 发布成功后，主画布会回填后端处理后的 6 色预览；设备实际显示应以这张预览为准
+
+### 7. 会议牌 Web 使用流程
+
+登录后，左侧导航按以下顺序组织：
+
+1. **设备**：添加、查看和编辑当前账号的设备。按住设备列表的任一条记录即可拖动排序；松开后会保存该账号的完整设备顺序。搜索有内容时会关闭排序，先清除搜索条件再排序。
+2. **模板设计**：编辑会议名牌的内置或已保存模板。保存模板列表先加载轻量摘要；选择某个已保存模板后才会读取它的完整画布、背景和 Logo 数据，避免模板较多或图片较大时进入页面变慢。
+3. **名单下发**：导入姓名、职位、公司等名单，选择模板和目标设备后生成并下发会议名牌内容。
+4. **设置**：切换界面主题、查看当前登录用户名和退出登录。
+
+设备列表、模板和名单数据均按登录用户名隔离。模板设计页不直接批量发布：单台内容从设备页进入编辑，批量下发在“名单下发”页完成。
 
 ## Flash存储说明
 
@@ -504,8 +515,12 @@ powershell -ExecutionPolicy Bypass -File .\tools\build_firmware.ps1 -KeepMirror
 - ✅ 设备绑定管理
 - ✅ 图片发布到云端持久化（设备离线可用）
 - ✅ 设备唤醒后 HTTP 拉取更新（流式写入 SPIFFS + 行缓冲刷屏）
-- ✅ 本地 UI 双页共用静态帧缓冲（满屏 WiFi 配网 + 居中设备码，适配 ESP32-C3 无 PSRAM）
+- ✅ 本地 UI 双页共用按需分配的 800×144 条带缓冲（满屏 WiFi 配网 + 设备码，适配 ESP32-C3 无 PSRAM）
 - ✅ 多用户支持
+- ✅ 当前账号内的设备拖动排序与持久化
+- ✅ 会议名牌模板按需加载与名单下发
+- ✅ 设置页主题、当前用户信息和退出登录
+- ✅ 浏览器标签图标（`cloud_server/frontend/favicon.ico`）
 - ✅ 三种图像处理算法（Floyd-Steinberg抖动、梯度边界混合、灰阶颜色映射）
 - ✅ 算法选择界面和实时预览
 - ✅ Deep-sleep + 按键/定时唤醒（低功耗）

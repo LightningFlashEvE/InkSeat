@@ -10,6 +10,8 @@ COPY settings.html ./
 COPY login.html ./
 COPY change-password.html ./
 COPY control.html ./
+COPY favicon.ico ./
+COPY favicon.svg ./
 COPY app.js ./
 COPY devices.js ./
 COPY nameplates.js ./

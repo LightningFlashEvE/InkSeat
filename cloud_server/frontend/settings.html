@@ -7,7 +7,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>设置</title>
-    <link rel="icon" href="data:;base64,=">
+    <link rel="icon" href="favicon.ico?v=20260821templatelazy2" sizes="any">
     <script>
         (function () {
             try {
@@ -32,32 +32,32 @@
             background: #eef5f7 !important;
         }
     </style>
-    <script src="theme.js?v=20260821devicesort7"></script>
-    <link rel="stylesheet" href="ui.css?v=20260821devicesort7">
+    <script src="theme.js?v=20260821templatelazy2"></script>
+    <link rel="stylesheet" href="ui.css?v=20260821templatelazy2">
 </head>
 <body class="settings-page meeting-device-page">
     <div class="meeting-page">
         <section class="meeting-shell settings-shell">
             <aside class="meeting-sidebar" aria-label="主导航">
-                <a class="meeting-brand" href="index.html?v=20260821devicesort7" aria-label="会议牌管理">
+                <a class="meeting-brand" href="index.html?v=20260821templatelazy2" aria-label="会议牌管理">
                     <span class="meeting-brand-mark" aria-hidden="true"></span>
                     <span>会议牌管理</span>
                 </a>
 
                 <nav class="meeting-nav">
-                    <a class="meeting-nav-item" href="index.html?v=20260821devicesort7">
+                    <a class="meeting-nav-item" href="index.html?v=20260821templatelazy2">
                         <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
                         <span>设备</span>
                     </a>
-                    <a class="meeting-nav-item" href="nameplates.html?v=20260821devicesort7">
-                        <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
-                        <span>名单下发</span>
-                    </a>
-                    <a class="meeting-nav-item" href="control.html?v=20260821devicesort7">
+                    <a class="meeting-nav-item" href="control.html?v=20260821templatelazy2">
                         <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
                         <span>模板设计</span>
                     </a>
-                    <a class="meeting-nav-item active" href="settings.html?v=20260821devicesort7" aria-current="page">
+                    <a class="meeting-nav-item" href="nameplates.html?v=20260821templatelazy2">
+                        <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
+                        <span>名单下发</span>
+                    </a>
+                    <a class="meeting-nav-item active" href="settings.html?v=20260821templatelazy2" aria-current="page">
                         <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
                         <span>设置</span>
                     </a>
@@ -69,17 +69,18 @@
                     <div class="meeting-status-bar" id="statusBar" role="status" aria-live="polite">就绪</div>
                 </header>
 
-                <header class="settings-hero meeting-glass">
-                    <div>
-                        <div class="settings-kicker">Settings</div>
-                        <h1>设置</h1>
-                        <p>管理本机界面偏好。</p>
+                <section class="settings-card settings-account-card meeting-glass" aria-label="当前登录用户">
+                    <div class="settings-account-row">
+                        <div class="settings-account-info">
+                            <span class="settings-account-avatar" aria-hidden="true" id="accountAvatar">用</span>
+                            <div>
+                                <span class="settings-account-label">用户名</span>
+                                <strong id="accountUsername">正在加载…</strong>
+                            </div>
+                        </div>
+                        <button class="settings-logout-btn" type="button" onclick="logout()">退出登录</button>
                     </div>
-                    <div class="settings-theme-state">
-                        <span>当前主题</span>
-                        <strong data-theme-current>明亮</strong>
-                    </div>
-                </header>
+                </section>
 
                 <section class="settings-card meeting-glass" aria-labelledby="themeTitle">
                     <div class="settings-card-head">
@@ -122,11 +123,16 @@
         </section>
     </div>
 
-    <script src="auth.js?v=20260821devicesort7"></script>
+    <script src="auth.js?v=20260821templatelazy2"></script>
     <script>
         (async () => {
             try {
-                await requireAuth();
+                const user = await requireAuth();
+                if (user) {
+                    const username = user.username || '未知用户';
+                    document.getElementById('accountUsername').textContent = username;
+                    document.getElementById('accountAvatar').textContent = username.slice(0, 1).toUpperCase();
+                }
             } catch (error) {
                 const status = document.getElementById('statusBar');
                 if (status) status.textContent = error?.message || '认证服务暂不可用，请稍后重试';

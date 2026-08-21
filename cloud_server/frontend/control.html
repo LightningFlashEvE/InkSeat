@@ -7,7 +7,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>模板设计</title>
-    <link rel='icon' href='data:;base64,='>
+    <link rel='icon' href='favicon.ico?v=20260821templatelazy2' sizes='any'>
     <script>
         (function () {
             try {
@@ -805,32 +805,32 @@
             }
         }
     </style>
-    <script src="theme.js?v=20260821devicesort7"></script>
-    <link rel="stylesheet" href="ui.css?v=20260821devicesort7">
+    <script src="theme.js?v=20260821templatelazy2"></script>
+    <link rel="stylesheet" href="ui.css?v=20260821templatelazy2">
 </head>
 <body class="control-page meeting-device-page">
     <div class="meeting-page">
         <section class="meeting-shell control-shell">
             <aside class="meeting-sidebar" aria-label="主导航">
-                <a class="meeting-brand" href="index.html?v=20260821devicesort7" aria-label="会议牌管理">
+                <a class="meeting-brand" href="index.html?v=20260821templatelazy2" aria-label="会议牌管理">
                     <span class="meeting-brand-mark" aria-hidden="true"></span>
                     <span>会议牌管理</span>
                 </a>
 
                 <nav class="meeting-nav">
-                    <a class="meeting-nav-item" id="deviceNavLink" href="index.html?v=20260821devicesort7">
+                    <a class="meeting-nav-item" id="deviceNavLink" href="index.html?v=20260821templatelazy2">
                         <span class="meeting-nav-icon i-device" aria-hidden="true"></span>
                         <span>设备</span>
                     </a>
-                    <a class="meeting-nav-item" href="nameplates.html?v=20260821devicesort7">
-                        <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
-                        <span>名单下发</span>
-                    </a>
-                    <a class="meeting-nav-item active" id="templateDesignNavLink" href="control.html?v=20260821devicesort7" aria-current="page">
+                    <a class="meeting-nav-item active" id="templateDesignNavLink" href="control.html?v=20260821templatelazy2" aria-current="page">
                         <span class="meeting-nav-icon i-doc" aria-hidden="true"></span>
                         <span>模板设计</span>
                     </a>
-                    <a class="meeting-nav-item" href="settings.html?v=20260821devicesort7">
+                    <a class="meeting-nav-item" href="nameplates.html?v=20260821templatelazy2">
+                        <span class="meeting-nav-icon i-user" aria-hidden="true"></span>
+                        <span>名单下发</span>
+                    </a>
+                    <a class="meeting-nav-item" href="settings.html?v=20260821templatelazy2">
                         <span class="meeting-nav-icon i-gear" aria-hidden="true"></span>
                         <span>设置</span>
                     </a>
@@ -892,6 +892,14 @@
                     </div>
                     <canvas id="mainCanvas" width="800" height="480"
                         aria-label="画布预览；双击姓名、职位或公司名称可直接编辑"></canvas>
+                    <div class="template-canvas-loading" id="templateCanvasLoading" role="status" aria-live="polite" hidden>
+                        <div class="template-canvas-loading-spinner" aria-hidden="true"></div>
+                        <strong id="templateCanvasLoadingLabel">正在加载模板</strong>
+                        <span>正在读取并绘制保存的设计内容</span>
+                        <div class="template-canvas-loading-progress" aria-hidden="true">
+                            <i id="templateCanvasLoadingProgress"></i>
+                        </div>
+                    </div>
                 </div>
                 <div class="device-status canvas-status-badge" aria-label="当前画布状态">
                     <div class="status-item">
@@ -920,7 +928,7 @@
                             <h4>当前设备</h4>
                             <p>修改设备名称不会影响设备编号、绑定关系或屏幕版本。</p>
                         </div>
-                        <a href="index.html?v=20260821devicesort7">返回设备列表</a>
+                        <a href="index.html?v=20260821templatelazy2">返回设备列表</a>
                     </div>
                     <div class="form-group">
                         <label for="deviceEditorNameInput">设备名称</label>
@@ -1194,7 +1202,7 @@
                         <div class="form-group nameplate-logo-control">
                             <label for="nameplateLogoInput">Logo</label>
                             <div class="nameplate-logo-current">
-                                <img id="nameplateLogoPreview" src="assets/nameplate/pheno-logo-black.png?v=20260821devicesort7" alt="默认 Pheno Logo">
+                                <img id="nameplateLogoPreview" src="assets/nameplate/pheno-logo-black.png?v=20260821templatelazy2" alt="默认 Pheno Logo">
                                 <div>
                                     <strong id="nameplateLogoStatus">默认 Pheno Logo</strong>
                                     <span>PNG、JPG 或 WebP，最大 5MB</span>
@@ -1442,8 +1450,8 @@
     <input type="hidden" id="height" value="480">
 
     <script src="vendor/qrcode.min.js"></script>
-    <script src="auth.js?v=20260821devicesort7"></script>
-    <script src="app.js?v=20260821devicesort7"></script>
-    <script src="editor.js?v=20260821devicesort7"></script>
+    <script src="auth.js?v=20260821templatelazy2"></script>
+    <script src="app.js?v=20260821templatelazy2"></script>
+    <script src="editor.js?v=20260821templatelazy2"></script>
 </body>
 </html>

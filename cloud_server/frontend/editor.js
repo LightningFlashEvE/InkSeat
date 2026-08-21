@@ -17,6 +17,8 @@ var currentPageId = null;
 var currentTemplateId = 'nameplate';
 var activeSavedNameplateTemplateId = '';
 var savedNameplateTemplates = [];
+var loadingSavedNameplateTemplateId = '';
+var savedNameplateTemplateLoadToken = 0;
 var imageCropper = null;
 var imageFilePond = null;
 var filePondPluginsRegistered = false;
@@ -46,7 +48,7 @@ var customNameplateAssetCache = new Map();
 var customNameplateDirty = false;
 var applyingNameplateTemplateConfig = false;
 const EPD_CROP_ASPECT_RATIO = 800 / 480;
-const CONTROL_LAZY_ASSET_VERSION = '20260821devicesort7';
+const CONTROL_LAZY_ASSET_VERSION = '20260821templatelazy2';
 const NAMEPLATE_TEMPLATE_ID = 'nameplate';
 const NAMEPLATE_LOGO_MAX_SOURCE_BYTES = 5 * 1024 * 1024;
 const NAMEPLATE_LOGO_MAX_DATA_BYTES = 512 * 1024;
@@ -1040,13 +1042,14 @@ async function initEditorDataAndControls() {
         updateImageStageVisibility();
         initCanvasEvents();  // 绑定画布事件
 
-        await loadTemplates();
-        ensureNameplateOnlyMode({ silent: true, skipRender: true });
+        const initializationTasks = [loadTemplates()];
         if (isDeviceEditorMode()) {
-            await loadCurrentDeviceEditorState();
+            initializationTasks.push(loadCurrentDeviceEditorState());
         } else {
-            await loadSavedNameplateTemplates({ applyFirst: true, silent: true });
+            initializationTasks.push(loadSavedNameplateTemplates({ applyFirst: true, silent: true }));
         }
+        await Promise.all(initializationTasks);
+        ensureNameplateOnlyMode({ silent: true, skipRender: true });
         if (!isDeviceEditorMode()) {
             await loadPages();
         }
@@ -1534,10 +1537,36 @@ function normalizeSavedNameplateTemplate(template) {
     return {
         templateId: template?.templateId || '',
         name: template?.name || '会议名牌模板',
-        templateConfig: template?.templateConfig || {},
+        templateConfig: template?.templateConfig || template?.templateSummary || {},
+        detailsLoaded: Boolean(template && Object.prototype.hasOwnProperty.call(template, 'templateConfig')),
         createdAt: template?.createdAt || '',
         updatedAt: template?.updatedAt || ''
     };
+}
+
+function setTemplateCanvasLoading(visible, label = '正在加载模板', progress = 16) {
+    const overlay = document.getElementById('templateCanvasLoading');
+    if (!overlay) return;
+    const labelElement = document.getElementById('templateCanvasLoadingLabel');
+    const progressElement = document.getElementById('templateCanvasLoadingProgress');
+    if (labelElement) labelElement.textContent = label;
+    if (progressElement) progressElement.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+    overlay.hidden = !visible;
+}
+
+function hideTemplateCanvasLoadingAfterPaint(loadToken) {
+    const raf = typeof window.requestAnimationFrame === 'function'
+        ? window.requestAnimationFrame.bind(window)
+        : (callback) => window.setTimeout(callback, 0);
+    raf(() => raf(() => {
+        if (loadToken !== savedNameplateTemplateLoadToken) return;
+        setTemplateCanvasLoading(true, '模板已加载', 100);
+        window.setTimeout(() => {
+            if (loadToken === savedNameplateTemplateLoadToken) {
+                setTemplateCanvasLoading(false);
+            }
+        }, 160);
+    }));
 }
 
 async function loadSavedNameplateTemplates(options = {}) {
@@ -1559,10 +1588,10 @@ async function loadSavedNameplateTemplates(options = {}) {
         renderSavedNameplateTemplateList();
 
         if (options.applyFirst && !activeSavedNameplateTemplateId) {
-            const firstTemplateId = savedNameplateTemplates[0]?.templateId
-                || BUILTIN_NAMEPLATE_TEMPLATES[0]?.templateId;
+            // 首次进入只应用内置模板；保存模板的完整配置在用户点击后才拉取。
+            const firstTemplateId = BUILTIN_NAMEPLATE_TEMPLATES[0]?.templateId;
             if (firstTemplateId) {
-                selectSavedNameplateTemplate(firstTemplateId, { silent: options.silent });
+                await selectSavedNameplateTemplate(firstTemplateId, { silent: options.silent });
             }
         }
     } catch (error) {
@@ -1593,21 +1622,22 @@ function renderSavedNameplateTemplateList(errorMessage = '') {
         const meta = config.layoutMode === 'custom'
             ? [
                 '自定义画布',
-                `${Array.isArray(config.elements) ? config.elements.length : 0} 个元素`,
-                config.backgroundImageDataUrl ? '图片背景' : '纯色背景',
+                config.hasBackgroundImage ? '图片背景' : '纯色背景',
             ].join(' / ')
             : [
                 config.title || '无职务',
                 config.subtitle || '默认公司',
-                config.logoHidden ? '无 Logo' : config.logoDataUrl ? '自定义 Logo' : '默认 Logo',
+                config.logoHidden ? '无 Logo' : config.hasCustomLogo ? '自定义 Logo' : '默认 Logo',
             ].join(' / ');
-        const badge = template.builtin ? '<em>内置</em>' : '<em>已保存</em>';
+        const loading = template.templateId === loadingSavedNameplateTemplateId;
+        const badge = loading ? '<em>加载中…</em>' : template.builtin ? '<em>内置</em>' : '<em>已保存</em>';
         const deleteButton = template.builtin
             ? ''
             : `<button type="button" onclick="event.stopPropagation(); deleteSavedNameplateTemplate('${templateIdForHandler}')">删除</button>`;
         return `
-            <div class="saved-template-row${active}" role="button" tabindex="0"
+            <div class="saved-template-row${active}${loading ? ' is-loading' : ''}" role="button" tabindex="0"
                 aria-pressed="${template.templateId === activeSavedNameplateTemplateId ? 'true' : 'false'}"
+                aria-busy="${loading ? 'true' : 'false'}"
                 onclick="selectSavedNameplateTemplate('${templateIdForHandler}')"
                 onkeydown="if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); selectSavedNameplateTemplate('${templateIdForHandler}'); }">
                 <div>
@@ -1628,7 +1658,7 @@ function renderSavedNameplateTemplateList(errorMessage = '') {
     list.innerHTML = rows.join('');
 }
 
-function selectSavedNameplateTemplate(templateId, options = {}) {
+async function selectSavedNameplateTemplate(templateId, options = {}) {
     const template = [...BUILTIN_NAMEPLATE_TEMPLATES, ...savedNameplateTemplates]
         .find(item => item.templateId === templateId);
     if (!template) return false;
@@ -1636,13 +1666,51 @@ function selectSavedNameplateTemplate(templateId, options = {}) {
         return false;
     }
 
-    activeSavedNameplateTemplateId = template.templateId;
+    const loadToken = ++savedNameplateTemplateLoadToken;
+    let resolvedTemplate = template;
+    if (!template.builtin && !template.detailsLoaded) {
+        loadingSavedNameplateTemplateId = template.templateId;
+        setTemplateCanvasLoading(true, '正在读取模板内容…', 16);
+        renderSavedNameplateTemplateList();
+        try {
+            const response = await authFetch(`${API_BASE}/api/nameplate/templates/${encodeURIComponent(template.templateId)}`, {
+                headers: typeof getAuthHeaders === 'function' ? getAuthHeaders() : {}
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || !result.success || !result.template) {
+                throw new Error(result.error || '模板详情加载失败');
+            }
+            if (loadToken !== savedNameplateTemplateLoadToken) return false;
+
+            resolvedTemplate = normalizeSavedNameplateTemplate(result.template);
+            setTemplateCanvasLoading(true, '正在绘制模板…', 72);
+            const index = savedNameplateTemplates.findIndex(item => item.templateId === resolvedTemplate.templateId);
+            if (index >= 0) savedNameplateTemplates[index] = resolvedTemplate;
+        } catch (error) {
+            if (loadToken === savedNameplateTemplateLoadToken) {
+                log('加载模板详情失败: ' + error.message, 'error');
+                setTemplateCanvasLoading(false);
+            }
+            return false;
+        } finally {
+            if (loadingSavedNameplateTemplateId === template.templateId) {
+                loadingSavedNameplateTemplateId = '';
+                renderSavedNameplateTemplateList();
+            }
+        }
+    }
+    if (loadToken !== savedNameplateTemplateLoadToken) return false;
+
+    activeSavedNameplateTemplateId = resolvedTemplate.templateId;
     const nameInput = document.getElementById('nameplateTemplateNameInput');
-    if (nameInput) nameInput.value = template.name || '会议名牌模板';
-    applyNameplateTemplateConfig(template.templateConfig, { render: options.render !== false });
+    if (nameInput) nameInput.value = resolvedTemplate.name || '会议名牌模板';
+    applyNameplateTemplateConfig(resolvedTemplate.templateConfig, { render: options.render !== false });
     renderSavedNameplateTemplateList();
     if (!options.silent) {
-        log(`已载入模板：${template.name}`, 'success');
+        log(`已载入模板：${resolvedTemplate.name}`, 'success');
+    }
+    if (!resolvedTemplate.builtin) {
+        hideTemplateCanvasLoadingAfterPaint(loadToken);
     }
     return true;
 }
