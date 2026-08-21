@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
+  <title id="title">设备唤醒与更新流程</title>
+  <desc id="desc">展示设备从深度睡眠、唤醒、查询云端、按需更新再回到睡眠的流程</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#fbfcff"/><stop offset="1" stop-color="#f3faf7"/></linearGradient>
+    <marker id="arrow" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto"><path d="M0,0 L11,5.5 L0,11 Z" fill="#5b7794"/></marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif; fill: #17324d; }
+      .eyebrow { font-size: 15px; letter-spacing: 2px; font-weight: 700; fill: #66829a; }
+      .title { font-size: 30px; font-weight: 700; }
+      .step { font-size: 19px; font-weight: 700; }
+      .sub { font-size: 14px; fill: #5c7891; }
+      .label { font-size: 14px; font-weight: 700; fill: #5b7794; }
+    </style>
+  </defs>
+  <rect width="1200" height="500" rx="28" fill="url(#bg)"/>
+  <text x="64" y="66" class="eyebrow">LOW-POWER · WAKE CYCLE</text>
+  <text x="64" y="108" class="title">一次唤醒，只做必要的工作</text>
+
+  <g stroke="#dce8ee" stroke-width="2" fill="#fff">
+    <rect x="64" y="188" width="184" height="122" rx="20"/>
+    <rect x="302" y="188" width="184" height="122" rx="20"/>
+    <rect x="540" y="188" width="184" height="122" rx="20"/>
+    <rect x="778" y="188" width="184" height="122" rx="20"/>
+    <rect x="1016" y="188" width="120" height="122" rx="20"/>
+  </g>
+  <g>
+    <circle cx="96" cy="218" r="15" fill="#eef1f7"/><text x="91" y="224" font-size="17" font-weight="700">1</text>
+    <text x="96" y="260" class="step">Deep-sleep</text><text x="96" y="286" class="sub">µA 级待机</text>
+    <circle cx="334" cy="218" r="15" fill="#e8f3ff"/><text x="329" y="224" font-size="17" font-weight="700">2</text>
+    <text x="334" y="260" class="step">唤醒</text><text x="334" y="286" class="sub">按键或定时器</text>
+    <circle cx="572" cy="218" r="15" fill="#e8f7f0"/><text x="567" y="224" font-size="17" font-weight="700">3</text>
+    <text x="572" y="260" class="step">查询状态</text><text x="572" y="286" class="sub">获取版本与休眠间隔</text>
+    <circle cx="810" cy="218" r="15" fill="#fff3dc"/><text x="805" y="224" font-size="17" font-weight="700">4</text>
+    <text x="810" y="260" class="step">按需刷新</text><text x="810" y="286" class="sub">下载、校验、刷屏</text>
+    <circle cx="1048" cy="218" r="15" fill="#f3ecff"/><text x="1043" y="224" font-size="17" font-weight="700">5</text>
+    <text x="1048" y="260" class="step">回睡</text><text x="1048" y="286" class="sub">保存结果</text>
+  </g>
+  <g stroke="#5b7794" stroke-width="3" fill="none" marker-end="url(#arrow)">
+    <path d="M250 249 H290"/><path d="M488 249 H528"/><path d="M726 249 H766"/><path d="M964 249 H1004"/>
+  </g>
+  <path d="M1076 324 C1076 402 156 402 156 324" fill="none" stroke="#83a995" stroke-width="3" stroke-dasharray="8 8" marker-end="url(#arrow)"/>
+  <text x="455" y="437" class="label">没有新版本时跳过下载；刷新成功后才写入本地版本</text>
+  <rect x="85" y="142" width="170" height="28" rx="14" fill="#eef1f7"/><text x="101" y="162" class="label">屏幕断电仍保留画面</text>
+  <rect x="767" y="142" width="204" height="28" rx="14" fill="#fff3dc"/><text x="783" y="162" class="label">仅在版本变化时耗时刷屏</text>
+</svg>
